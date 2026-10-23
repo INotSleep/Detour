@@ -296,7 +296,7 @@ enum Need {
     Level(String, Level),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Applied {
     hash: String,
     author: String,
@@ -305,7 +305,7 @@ struct Applied {
     needs: Vec<Need>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct State {
     pub name: String,
     pub members: BTreeMap<String, Member>,
@@ -377,7 +377,7 @@ pub struct Verified {
 }
 
 /// Checks everything in the folder against itself and against the heads this client remembers.
-pub fn verify_all(scan: Scan, known: &BTreeMap<String, Head>) -> Verified {
+pub fn verify_all(scan: Scan, known: &BTreeMap<String, Head>, verifier: &mut log::Verifier) -> Verified {
     let mut problems = Vec::new();
     let mut entries: Vec<Entry> = Vec::new();
     let mut heads = BTreeMap::new();
@@ -396,7 +396,7 @@ pub fn verify_all(scan: Scan, known: &BTreeMap<String, Head>) -> Verified {
                 problems.push(Problem::Missing { device: device.clone(), author: who, seq: expected_seq });
                 break;
             }
-            let e = match log::verify(&bytes) {
+            let e = match verifier.verify(&bytes) {
                 Ok(e) => e,
                 Err(why) => {
                     problems.push(Problem::Rejected { device: device.clone(), author: who, seq, reason: why });
@@ -421,7 +421,7 @@ pub fn verify_all(scan: Scan, known: &BTreeMap<String, Head>) -> Verified {
     // Stray files. A valid entry stored under another name is a second version if it differs.
     for x in scan.extras {
         if let (Some(device), Some(bytes)) = (&x.device, &x.bytes)
-            && let Ok(e) = log::verify(bytes)
+            && let Ok(e) = verifier.verify(bytes)
             && &e.body.device == device
         {
             match index.get(device).and_then(|m| m.get(&e.body.seq)) {
@@ -470,16 +470,68 @@ pub fn verify_all(scan: Scan, known: &BTreeMap<String, Head>) -> Verified {
 /// Keys from drops, cached per entry hash: opening a drop costs an X25519 operation.
 pub type DropCache = HashMap<String, Vec<Key>>;
 
-/// Rebuilds state. `root` is the trusted creator key id.
-pub fn replay(v: &Verified, root: &str, me: &Identity, drops: &mut DropCache) -> State {
+/// What a replay went through, to go on from when only new entries come in.
+#[derive(Clone, Default)]
+pub struct Replayed {
+    /// Hashes of the entries replayed, in replay order.
+    order: Vec<String>,
+    excluded: HashSet<String>,
+    /// How many of `state.problems` came from verification; the rest came from replay.
+    verify_problems: usize,
+}
+
+/// Rebuilds state from every entry. `root` is the trusted creator key id.
+pub fn replay(v: &Verified, root: &str, me: &Identity, drops: &mut DropCache) -> (State, Replayed) {
     let mut excluded = HashSet::new();
     loop {
         let st = replay_once(v, root, me, drops, &excluded);
         if st.exclude.is_subset(&excluded) {
-            return st;
+            return (st, Replayed { order: v.entries.iter().map(|e| e.hash.clone()).collect(), excluded, verify_problems: v.problems.len() });
         }
         excluded.extend(st.exclude);
     }
+}
+
+/// Goes on from an earlier replay when the storage only added entries placed after
+/// the ones replayed before. Anything else replays everything: entries placed among
+/// older ones, keys that may open entries unreadable so far, and a change that
+/// makes earlier entries count differently.
+pub fn replay_from(prev: Option<(State, &Replayed)>, v: &Verified, root: &str, me: &Identity, drops: &mut DropCache) -> (State, Replayed) {
+    let Some((mut st, prev)) = prev else { return replay(v, root, me, drops) };
+    let n = prev.order.len();
+    if v.entries.len() < n || !v.entries[..n].iter().map(|e| &e.hash).eq(prev.order.iter()) {
+        return replay(v, root, me, drops);
+    }
+    let new = &v.entries[n..];
+    let mut fresh_keys = false;
+    for e in new {
+        for k in keys_in(e, me, drops) {
+            fresh_keys |= st.keys.insert(log::key_id(&k), k).is_none();
+        }
+    }
+    if fresh_keys && st.unreadable > 0 {
+        return replay(v, root, me, drops);
+    }
+    st.heads = v.heads.clone();
+    st.devices = v.devices.clone();
+    let from_replay = st.problems.split_off(prev.verify_problems.min(st.problems.len()));
+    st.problems = v.problems.clone();
+    st.problems.extend(from_replay);
+    for e in new {
+        apply_entry(&mut st, e, root, &prev.excluded);
+    }
+    if !st.exclude.is_subset(&prev.excluded) {
+        return replay(v, root, me, drops);
+    }
+    (st, Replayed { order: v.entries.iter().map(|e| e.hash.clone()).collect(), excluded: prev.excluded.clone(), verify_problems: v.problems.len() })
+}
+
+/// Keys an entry hands to this reader (opening a drop is cached per entry).
+fn keys_in(e: &Entry, me: &Identity, drops: &mut DropCache) -> Vec<Key> {
+    drops
+        .entry(e.hash.clone())
+        .or_insert_with(|| e.body.parts.iter().filter_map(|p| if let Part::Drop { ct } = p { log::open_drop(ct, me) } else { None }).flatten().collect())
+        .clone()
 }
 
 fn replay_once(v: &Verified, root: &str, me: &Identity, drops: &mut DropCache, excluded: &HashSet<String>) -> State {
@@ -488,19 +540,23 @@ fn replay_once(v: &Verified, root: &str, me: &Identity, drops: &mut DropCache, e
     // Keys handed to us are usable for reading whoever sent them; which key a
     // writer must use is decided by the announcements replayed below.
     for e in &v.entries {
-        let keys = drops.entry(e.hash.clone()).or_insert_with(|| {
-            e.body.parts.iter().filter_map(|p| if let Part::Drop { ct } = p { log::open_drop(ct, me) } else { None }).flatten().collect()
-        });
-        for k in keys.iter() {
-            st.keys.insert(log::key_id(k), *k);
+        for k in keys_in(e, me, drops) {
+            st.keys.insert(log::key_id(&k), k);
         }
     }
-
     for e in &v.entries {
+        apply_entry(&mut st, e, root, excluded);
+    }
+    st
+}
+
+/// Applies one entry's changes, each checked against its author's rights at this point.
+fn apply_entry(st: &mut State, e: &Entry, root: &str, excluded: &HashSet<String>) {
+    {
         let b = &e.body;
         if excluded.contains(&e.hash) {
             st.problems.push(Problem::Rejected { device: b.device.clone(), author: b.author.clone(), seq: b.seq, reason: "written after losing access".into() });
-            continue;
+            return;
         }
         st.latest = st.latest.max(b.hlc);
         st.last_at.insert(b.device.clone(), b.hlc);
@@ -514,25 +570,25 @@ fn replay_once(v: &Verified, root: &str, me: &Identity, drops: &mut DropCache, e
             };
             let reject = |st: &mut State, why: &str| st.problems.push(Problem::Rejected { device: b.device.clone(), author: b.author.clone(), seq: b.seq, reason: why.into() });
             let Some(plain) = log::open_data(&key, kid, ct) else {
-                reject(&mut st, "undecryptable");
+                reject(st, "undecryptable");
                 continue;
             };
             let Ok(payload) = serde_json::from_slice::<Payload>(&plain) else {
-                reject(&mut st, "unreadable changes");
+                reject(st, "unreadable changes");
                 continue;
             };
             match payload {
                 Payload::Team { ops } => {
                     for op in ops {
-                        if let Err(why) = apply_team(&mut st, op, &version, &mut ctx) {
-                            reject(&mut st, why);
+                        if let Err(why) = apply_team(st, op, &version, &mut ctx) {
+                            reject(st, why);
                         }
                     }
                 }
                 Payload::Record { record, section, ops } => {
                     for op in ops {
-                        if let Err(why) = apply_record(&mut st, &record, section, op, &version, &mut ctx) {
-                            reject(&mut st, why);
+                        if let Err(why) = apply_record(st, &record, section, op, &version, &mut ctx) {
+                            reject(st, why);
                         }
                     }
                 }
@@ -542,7 +598,6 @@ fn replay_once(v: &Verified, root: &str, me: &Identity, drops: &mut DropCache, e
             st.applied.push(Applied { hash: e.hash.clone(), author: b.author.clone(), device: b.device.clone(), seq: b.seq, needs: ctx.needs });
         }
     }
-    st
 }
 
 struct Ctx {

@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useState } from "react";
-import { ChevronRight, Copy, Ellipsis, IdCard, LogIn, LogOut, Plus, RefreshCw, ShieldAlert, ShieldQuestion, TriangleAlert, UserMinus, UserPlus, Users, UserX } from "lucide-react";
+import { ChevronRight, Copy, Ellipsis, Fingerprint, IdCard, LogIn, LogOut, Plus, RefreshCw, ShieldAlert, ShieldQuestion, TriangleAlert, UserMinus, UserPlus, Users, UserX } from "lucide-react";
 import { api, errorText, isCoreError, type CoreError, type PendingTeam } from "../lib/api";
 import { copyText, formatAgo, plural, sleep, useStore } from "../lib/store";
 import { atLeast, canManage, removeVault } from "../lib/teams";
@@ -75,6 +75,7 @@ function TeamPage({ vault }: { vault: Vault }) {
   const [tab, setTab] = useState<"members" | "access">("members");
   const [adding, setAdding] = useState(false);
   const [removing, setRemoving] = useState<Member | null>(null);
+  const [showFingerprint, setShowFingerprint] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [showProblems, setShowProblems] = useState(false);
@@ -162,7 +163,10 @@ function TeamPage({ vault }: { vault: Vault }) {
         {manage && <Button variant="primary" icon={UserPlus} onClick={() => setAdding(true)}>Добавить участника</Button>}
         <Menu
           trigger={(toggle, open) => <IconButton icon={Ellipsis} label="Ещё" className={open ? "pressed" : ""} onClick={toggle} />}
-          items={[{ label: "Убрать с этого устройства", icon: LogOut, danger: true, onSelect: () => setLeaving(true) }]}
+          items={[
+            ...(vault.stateFingerprint ? [{ label: "Отпечаток состояния", icon: Fingerprint, onSelect: () => setShowFingerprint(true) }] : []),
+            { label: everywhere ? "Убрать со всех устройств" : "Убрать с этого устройства", icon: LogOut, danger: true, onSelect: () => setLeaving(true) },
+          ]}
         />
       </PageHeader>
 
@@ -350,6 +354,7 @@ function TeamPage({ vault }: { vault: Vault }) {
           onClose={() => setRemoving(null)}
         />
       )}
+      {showFingerprint && vault.stateFingerprint && <FingerprintDialog code={vault.stateFingerprint} onClose={() => setShowFingerprint(false)} />}
       {leaving && (
         <ConfirmDialog
           title={`Убрать «${vault.name}» ${everywhere ? "со всех ваших устройств" : "с этого устройства"}?`}
@@ -665,5 +670,27 @@ function PendingTeamCard({ team, onChanged }: { team: PendingTeam; onChanged: ()
         />
       )}
     </div>
+  );
+}
+
+/** The team's state fingerprint, to read out and compare with other members after both synced. */
+function FingerprintDialog({ code, onClose }: { code: string; onClose: () => void }) {
+  const { toast } = useStore();
+  return (
+    <Modal
+      title="Отпечаток состояния"
+      width={400}
+      onClose={onClose}
+      onSubmit={onClose}
+      footer={
+        <>
+          <Button type="button" icon={Copy} onClick={async () => toast((await copyText(code)) ? { text: "Отпечаток скопирован", tone: "success" } : { text: "Не удалось скопировать", tone: "error" })}>Копировать</Button>
+          <Button type="submit" variant="primary">Готово</Button>
+        </>
+      }
+    >
+      <div className="pair-code mono">{code}</div>
+      <div className="muted small center">Совпадает у всех, кто синхронизировался</div>
+    </Modal>
   );
 }

@@ -634,3 +634,85 @@ fn heads_include_hashes_so_a_swapped_entry_shows() {
     let c = open(&t, &carol, "carol-pc");
     assert!(has_problem(&c, |p| matches!(p, Problem::Forked { device, .. } if device == "alice-pc")));
 }
+
+/// The state a vault reached by reading again and again equals one read from scratch.
+fn same_as_fresh(t: &Team, v: &TeamVault, who: &Identity, device: &str) {
+    let info = TeamVault::inspect(&t.path).unwrap();
+    let fresh = TeamVault::open(&t.path, &info.root, who, device, v.known_heads().clone()).unwrap();
+    let a = serde_json::to_value(v.view()).unwrap();
+    let b = serde_json::to_value(fresh.view()).unwrap();
+    assert_eq!(a, b, "reading on from before differs from reading everything");
+}
+
+#[test]
+fn reading_on_from_before_equals_reading_everything() {
+    let (t, mut alice) = new_team();
+    let (bob_id, mut bob) = join(&t, &mut alice, "Bob", Role::Member, Level::Edit);
+    let (carol_id, mut carol) = join(&t, &mut alice, "Carol", Role::Admin, Level::Edit);
+    let check = |alice: &mut TeamVault, bob: &mut TeamVault, carol: &mut TeamVault| {
+        for v in [&mut *alice, &mut *bob, &mut *carol] {
+            v.reload().unwrap();
+        }
+        same_as_fresh(&t, alice, &t.alice, "alice-pc");
+        same_as_fresh(&t, bob, &bob_id, "Bob-pc");
+        same_as_fresh(&t, carol, &carol_id, "Carol-pc");
+    };
+
+    alice.put(hosts(vec![with_password(host("h1", "web"), "pw1"), host("h2", "db")])).unwrap();
+    set(&mut alice, "h1", &bob_id, Level::Edit);
+    set(&mut alice, "h2", &bob_id, Level::Edit);
+    check(&mut alice, &mut bob, &mut carol);
+    // Edits on several devices, some concurrent.
+    let mut d = update_from(&bob.view().data);
+    d.hosts[0].label = "web-bob".into();
+    bob.put(d).unwrap();
+    let mut d = update_from(&carol.view().data);
+    d.hosts[0].label = "web-carol".into();
+    carol.put(d).unwrap();
+    check(&mut alice, &mut bob, &mut carol);
+    // Access taken away: Bob's edits written after he lost it must not count, read on or from scratch.
+    set(&mut alice, "h2", &bob_id, Level::View);
+    let mut d = update_from(&bob.view().data);
+    d.hosts[1].label = "db-late".into();
+    let _ = bob.put(d);
+    check(&mut alice, &mut bob, &mut carol);
+    // A member removed, keys rotated, more edits.
+    alice.remove_member(&bob_id.public().key_id()).unwrap();
+    carol.reload().unwrap();
+    let mut d = update_from(&carol.view().data);
+    d.hosts.push(host("h3", "cache"));
+    carol.put(d).unwrap();
+    check(&mut alice, &mut bob, &mut carol);
+}
+
+#[test]
+fn reading_again_checks_only_new_entries() {
+    let (t, mut alice) = new_team();
+    let mut other = open(&t, &t.alice, "alice-laptop");
+    for i in 0..20 {
+        alice.put(hosts((0..=i).map(|j| host(&format!("h{j}"), &format!("host-{j}"))).collect())).unwrap();
+    }
+    other.reload().unwrap();
+    let before = other.signatures_checked();
+    alice.put(hosts(vec![host("h0", "only")])).unwrap();
+    other.reload().unwrap();
+    assert_eq!(other.signatures_checked() - before, 1, "one new entry, one signature");
+    assert_eq!(other.view().data.hosts.len(), 1);
+}
+
+#[test]
+fn members_who_read_the_same_see_the_same_state_fingerprint() {
+    let (t, mut alice) = new_team();
+    let (_bob, mut bob) = join(&t, &mut alice, "Bob", Role::Member, Level::View);
+    alice.put(hosts(vec![host("h1", "web")])).unwrap();
+    bob.reload().unwrap();
+    alice.reload().unwrap();
+    let fp = alice.view().state_fingerprint;
+    assert_eq!(fp.len(), 14);
+    assert_eq!(bob.view().state_fingerprint, fp);
+    // One more entry Bob has not read yet: the fingerprints part until he reads it.
+    alice.put(hosts(vec![host("h1", "web-2")])).unwrap();
+    assert_ne!(alice.view().state_fingerprint, bob.view().state_fingerprint);
+    bob.reload().unwrap();
+    assert_eq!(alice.view().state_fingerprint, bob.view().state_fingerprint);
+}

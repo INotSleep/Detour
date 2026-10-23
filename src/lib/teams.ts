@@ -47,6 +47,7 @@ function teamVault(view: TeamView): Vault {
     myRole: view.myRole ?? undefined,
     me: view.members.find((m) => m.isYou)?.id,
     problems: view.problems,
+    stateFingerprint: view.stateFingerprint,
   };
 }
 

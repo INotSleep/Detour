@@ -140,3 +140,35 @@ fn recovery_key_from_creation_restores_access() {
     assert_eq!(view.id, team.id);
     assert_eq!(view.my_role, Some(Role::Owner));
 }
+
+#[test]
+fn a_team_opens_from_this_devices_cache_without_checking_everything_again() {
+    let dir = temp_dir("cache");
+    let mut s = Store::open(&dir);
+    s.create("m").unwrap();
+    let path = temp_dir("cache-team").join("t").display().to_string();
+    let team = s.create_team(&path, "Acme", "Me", &Store::new_recovery_key()).unwrap();
+    for i in 0..10 {
+        s.team_put(&team.id, VaultUpdate { hosts: (0..=i).map(|j| host(&format!("h{j}"))).collect(), keys: vec![], snippets: vec![], tunnels: vec![] }).unwrap();
+    }
+    s.lock();
+    s.unlock("m").unwrap();
+    assert_eq!(s.team_signatures_checked(&team.id), 0, "every entry was verified on this device before");
+    assert_eq!(s.team_view(&team.id).unwrap().data.hosts.len(), 10);
+    // The cache is sealed to this device: no key ids or hashes in the clear.
+    let raw = std::fs::read(dir.join("cache").join(format!("{}.age", team.id))).unwrap();
+    assert!(!String::from_utf8_lossy(&raw).contains("verified"));
+
+    // A changed file is a new file: it is checked again (and here, rejected).
+    let ops = std::path::Path::new(&path).join("ops");
+    let device = std::fs::read_dir(&ops).unwrap().next().unwrap().unwrap().path();
+    let first = device.join("00000002.json");
+    let mut bytes = std::fs::read(&first).unwrap();
+    let i = bytes.len() / 2;
+    bytes[i] = if bytes[i] == b'A' { b'B' } else { b'A' };
+    std::fs::write(&first, bytes).unwrap();
+    s.lock();
+    s.unlock("m").unwrap();
+    assert!(s.team_signatures_checked(&team.id) >= 1);
+    assert!(s.team_view(&team.id).unwrap().problems.iter().any(|p| matches!(p.problem, Problem::Rejected { .. })));
+}

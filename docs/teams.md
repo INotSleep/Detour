@@ -95,7 +95,13 @@ Every client checks the whole storage on every read:
 4. **No rollback.** The client remembers, in the personal vault, the head of every device it has read. Storage showing an older head or a different entry at a known position is reported.
 5. **Acknowledgements.** A client that has read new entries from others and wrote nothing for a day writes an empty, signed acknowledgement, so others' entries get referenced and can't be dropped unnoticed.
 
-Honest limit: with a single untrusted storage and no other channel, the storage can show a member a consistent *old* state and withhold only the newest entries nobody has referenced yet (a proven bound for systems without a trusted server). What it can't do is hide anything someone has acknowledged, roll a client back, or show two members different histories without that showing up as soon as one of them reads an entry from the other. Comparing a short state fingerprint between members, or a second storage, closes the rest (planned).
+Honest limit: with a single untrusted storage and no other channel, the storage can show a member a consistent *old* state and withhold only the newest entries nobody has referenced yet (a proven bound for systems without a trusted server). What it can't do is hide anything someone has acknowledged, roll a client back, or show two members different histories without that showing up as soon as one of them reads an entry from the other.
+
+**State fingerprint.** Every member can show a short digest of the head of every device they have read (team menu, State fingerprint). Members who synced compare it over another channel: equal fingerprints mean the storage gave them one history.
+
+## Reading fast
+
+Reading a vault again (every sync, every 20 seconds) checks only new files: entries already verified are known by their file hash, and replay goes on from the state reached before when the new entries are all placed after the old ones. Anything else (an entry placed among older ones, keys that may open entries unreadable so far, or a restriction that changes how earlier entries count) replays everything. Between runs, each device keeps a cache sealed to its own key: hashes of verified entries and the keys their drops gave it, so opening a vault with years of history does not check every signature or open every drop again. A changed file has another hash and is checked again.
 
 ## Authorization on replay
 
@@ -180,6 +186,5 @@ A device that is already in teams keeps its own identity and can't join another 
 - Done: personal vault sync between one person's devices, pairing codes, recovery key.
 - Signing in with GitHub (device flow).
 - Rotation on hosts after removal.
-- Snapshots (every open replays all entries now: fine for thousands of changes, not for years).
-- State fingerprint comparison between members.
+- Done: reading only what is new, and a per-device cache for opening fast; state fingerprint.
 - SSH certificate authority.

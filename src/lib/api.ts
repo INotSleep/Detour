@@ -173,6 +173,8 @@ export interface TeamView {
   problems: Problem[];
   /** Team kept in Git: how mirroring it goes. */
   remote: { url: string; pending: boolean; error: CoreError | null; syncedAt: number | null } | null;
+  /** The same for every member who read the same entries. */
+  stateFingerprint: string;
 }
 
 /** How to reach a team's Git repository: over SSH a personal key or ssh-agent, over HTTPS a token. */

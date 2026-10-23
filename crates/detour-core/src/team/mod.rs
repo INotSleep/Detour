@@ -28,8 +28,22 @@ pub struct TeamVault {
     me: Identity,
     state: State,
     drops: DropCache,
+    /// Entries verified before: reading the vault again only checks new ones.
+    verifier: log::Verifier,
+    /// What the current state was replayed from, to go on from it.
+    replayed: Option<state::Replayed>,
     /// Heads this person had read, merged with the storage after every read.
     known: BTreeMap<String, Head>,
+}
+
+/// What a device keeps, encrypted with its own key, to open a vault fast next time:
+/// the entries it verified (by file hash) and the keys their drops gave it.
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamCache {
+    pub verified: Vec<String>,
+    /// Entry hash -> keys (base64).
+    pub drops: BTreeMap<String, Vec<String>>,
 }
 
 /// What a joining member is asked to confirm before trusting a vault.
@@ -116,6 +130,9 @@ pub struct TeamView {
     pub problems: Vec<ProblemView>,
     /// For a team in a Git repository: how mirroring it goes. Filled in by the store.
     pub remote: Option<RemoteView>,
+    /// A short digest of every entry this member has read, the same for everyone who read the same:
+    /// compared out of band, it shows the storage gave two members one history.
+    pub state_fingerprint: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -237,7 +254,7 @@ impl TeamVault {
         let meta = VaultMeta { format: log::FORMAT, id: new_id(), root: me.public().detour_id(), personal };
         folder.write_meta(&meta)?;
 
-        let mut v = Self { folder, meta, device: device.to_string(), me: me.clone(), state: State::default(), drops: DropCache::new(), known: BTreeMap::new() };
+        let mut v = Self { folder, meta, device: device.to_string(), me: me.clone(), state: State::default(), drops: DropCache::new(), verifier: Default::default(), replayed: None, known: BTreeMap::new() };
         let key = log::new_key();
         let mut d = Draft { new_team_key: Some(key), ..Default::default() };
         d.team.push(TeamOp::Epoch { epoch: 1, kid: log::key_id(&key), holders: members.iter().map(|m| m.id.clone()).collect() });
@@ -251,6 +268,11 @@ impl TeamVault {
 
     /// Opens a vault whose creator key `root` the user trusts. `known` are the heads read before.
     pub fn open(path: impl AsRef<Path>, root: &str, me: &Identity, device: &str, known: BTreeMap<String, Head>) -> Result<Self> {
+        Self::open_cached(path, root, me, device, known, TeamCache::default())
+    }
+
+    /// Opens a vault with what this device kept from reading it before.
+    pub fn open_cached(path: impl AsRef<Path>, root: &str, me: &Identity, device: &str, known: BTreeMap<String, Head>, cache: TeamCache) -> Result<Self> {
         let folder = Folder::new(&path);
         if !folder.exists() {
             return Err(Error::Unavailable { path: path.as_ref().display().to_string() });
@@ -259,7 +281,11 @@ impl TeamVault {
         if meta.root != root {
             return Err(Error::RootChanged);
         }
-        let mut v = Self { folder, meta, device: device.to_string(), me: me.clone(), state: State::default(), drops: DropCache::new(), known };
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD;
+        let drops: DropCache = cache.drops.into_iter().map(|(h, keys)| (h, keys.iter().filter_map(|k| b64.decode(k).ok()?.try_into().ok()).collect())).collect();
+        let verifier = log::Verifier::with_trusted(cache.verified);
+        let mut v = Self { folder, meta, device: device.to_string(), me: me.clone(), state: State::default(), drops, verifier, replayed: None, known };
         v.reload()?;
         Ok(v)
     }
@@ -280,6 +306,40 @@ impl TeamVault {
         self.folder.path()
     }
 
+    /// What to keep for opening this vault fast next time.
+    pub fn cache(&self) -> TeamCache {
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD;
+        TeamCache {
+            verified: self.verifier.verified().cloned().collect(),
+            drops: self.drops.iter().map(|(h, keys)| (h.clone(), keys.iter().map(|k| b64.encode(k)).collect())).collect(),
+        }
+    }
+
+    /// How many entries were read: the cache is worth writing again when it grows.
+    pub fn entries_read(&self) -> usize {
+        self.drops.len()
+    }
+
+    /// Signatures checked since this vault was opened (a test can see reading again checks only new entries).
+    pub fn signatures_checked(&self) -> usize {
+        self.verifier.checked
+    }
+
+    /// `XXXX-XXXX-XXXX`: a digest of the head (sequence and file hash) of every device.
+    pub fn state_fingerprint(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        for (device, head) in &self.state.heads {
+            h.update(format!("{device} {} {}
+", head.seq, head.hash));
+        }
+        const ABC: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+        let digest = h.finalize();
+        let chars: String = digest.iter().take(12).map(|b| ABC[(b % 32) as usize] as char).collect();
+        format!("{}-{}-{}", &chars[..4], &chars[4..8], &chars[8..])
+    }
+
     /// Heads of every device this person has read, to keep in the personal vault.
     pub fn known_heads(&self) -> &BTreeMap<String, Head> {
         &self.known
@@ -291,8 +351,12 @@ impl TeamVault {
             return Err(Error::Unavailable { path: self.folder.path().display().to_string() });
         }
         let root = PublicIdentity::parse(&self.meta.root)?.key_id();
-        let verified = state::verify_all(self.folder.scan()?, &self.known);
-        self.state = state::replay(&verified, &root, &self.me, &mut self.drops);
+        let verified = state::verify_all(self.folder.scan()?, &self.known, &mut self.verifier);
+        let before = self.replayed.take();
+        let prev = before.as_ref().map(|r| (std::mem::take(&mut self.state), r));
+        let (state, replayed) = state::replay_from(prev, &verified, &root, &self.me, &mut self.drops);
+        self.state = state;
+        self.replayed = Some(replayed);
         // Never forget a head: a storage showing less later is a rollback.
         for (d, h) in &self.state.heads {
             if self.known.get(d).is_none_or(|k| k.seq < h.seq) {
@@ -591,6 +655,7 @@ impl TeamVault {
             activity,
             problems,
             remote: None,
+            state_fingerprint: self.state_fingerprint(),
         }
     }
 

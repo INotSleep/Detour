@@ -176,6 +176,46 @@ pub fn file_hash(file: &[u8]) -> String {
     B64.encode(Sha256::digest(file))
 }
 
+/// Remembers entries already verified, so reading the vault again only checks
+/// what is new. Files are known by their hash: changed bytes are a new file.
+#[derive(Default)]
+pub struct Verifier {
+    entries: std::collections::HashMap<String, Entry>,
+    /// Hashes verified in an earlier run (from this device's own encrypted cache):
+    /// such a file is parsed without checking its signature again.
+    trusted: std::collections::HashSet<String>,
+    /// Signatures checked since this verifier was made, for tests.
+    pub checked: usize,
+}
+
+impl Verifier {
+    pub fn with_trusted(trusted: impl IntoIterator<Item = String>) -> Self {
+        Self { trusted: trusted.into_iter().collect(), ..Default::default() }
+    }
+
+    pub fn verify(&mut self, file: &[u8]) -> std::result::Result<Entry, String> {
+        let hash = file_hash(file);
+        if let Some(e) = self.entries.get(&hash) {
+            return Ok(e.clone());
+        }
+        let e = if self.trusted.contains(&hash) {
+            let env: Envelope = serde_json::from_slice(file).map_err(|_| "unreadable".to_string())?;
+            let body_bytes = B64.decode(&env.body).map_err(|_| "unreadable body")?;
+            Entry { body: serde_json::from_slice(&body_bytes).map_err(|_| "unreadable body")?, hash: hash.clone() }
+        } else {
+            self.checked += 1;
+            verify(file)?
+        };
+        self.entries.insert(hash, e.clone());
+        Ok(e)
+    }
+
+    /// Hashes of every entry verified so far, to trust next time.
+    pub fn verified(&self) -> impl Iterator<Item = &String> {
+        self.entries.keys()
+    }
+}
+
 /* ---------- folder transport ---------- */
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

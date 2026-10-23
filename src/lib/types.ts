@@ -35,6 +35,8 @@ export interface Vault {
   problems?: Problem[];
   /** Git team: local changes the repository doesn't have yet. */
   pending?: boolean;
+  /** Team only: digest of the entries read, compared with other members. */
+  stateFingerprint?: string;
   /** Git team: why the repository could not be reached last time. */
   remoteError?: import("./api").CoreError;
 }

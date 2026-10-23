@@ -20,7 +20,7 @@ use crate::personal::{self, SyncRecord};
 use crate::team::log::Head;
 use crate::team::state::{Coll, Level, Role};
 use crate::team::git::{GitRemote, HttpRemote, HttpUrl, Mirror, Remote, SshUrl};
-use crate::team::{AccessChange, ProblemView, RemoteView, TeamVault, TeamView, VaultInfo};
+use crate::team::{AccessChange, ProblemView, RemoteView, TeamCache, TeamVault, TeamView, VaultInfo};
 use crate::{Error, Result, SecretKind, keys, ssh};
 
 /// The personal vault's id in every vault-addressed call.
@@ -49,6 +49,8 @@ pub struct Store {
     personal: Option<TeamVault>,
     /// Teams from other devices that could not be joined here, with why (a serialized `Error`).
     link_errors: BTreeMap<String, serde_json::Value>,
+    /// Entries read per vault when its cache was last written.
+    cached: HashMap<String, usize>,
     /// How syncing the personal vault last went: failure (a serialized `Error`) and last success.
     sync_state: (Option<serde_json::Value>, Option<Millis>),
 }
@@ -117,6 +119,7 @@ impl Store {
             personal: None,
             sync_state: (None, None),
             link_errors: BTreeMap::new(),
+            cached: HashMap::new(),
         }
     }
 
@@ -418,13 +421,52 @@ impl Store {
         self.state.as_ref().and_then(|s| s.vault.team_heads.get(team).cloned()).unwrap_or_default()
     }
 
+    /* ---------- what this device keeps to open vaults fast ---------- */
+
+    fn cache_path(&self, id: &str) -> PathBuf {
+        self.dir.join("cache").join(format!("{id}.age"))
+    }
+
+    /// A vault's cache, sealed to this device's key; empty if there is none or it can't be read.
+    fn load_cache(&self, id: &str) -> TeamCache {
+        let (Ok(s), Ok(sealed)) = (self.unlocked(), std::fs::read(self.cache_path(id))) else { return TeamCache::default() };
+        age::decrypt(&s.identity, &sealed).ok().and_then(|plain| serde_json::from_slice(&plain).ok()).unwrap_or_default()
+    }
+
+    /// Writes a vault's cache when it read more entries since the last write.
+    fn save_cache(&mut self, id: &str, t: &TeamVault) {
+        let read = t.entries_read();
+        if self.cached.get(id) == Some(&read) {
+            return;
+        }
+        let Ok(s) = self.unlocked() else { return };
+        let Ok(plain) = serde_json::to_vec(&t.cache()) else { return };
+        if let Ok(sealed) = age::encrypt(&s.identity.to_public(), &plain)
+            && write_atomic(&self.cache_path(id), &sealed).is_ok()
+        {
+            self.cached.insert(id.to_string(), read);
+        }
+    }
+
+    /// Signatures a team checked since it was opened (for tests of the cache).
+    #[doc(hidden)]
+    pub fn team_signatures_checked(&self, id: &str) -> usize {
+        self.teams.get(id).map_or(0, |t| t.signatures_checked())
+    }
+
+    fn drop_cache(&mut self, id: &str) {
+        self.cached.remove(id);
+        let _ = std::fs::remove_file(self.cache_path(id));
+    }
+
     fn open_teams(&mut self) {
         let Ok((me, device)) = self.member() else { return };
         let refs = self.state.as_ref().map(|s| s.vault.teams.clone()).unwrap_or_default();
         for r in refs {
-            match TeamVault::open(&r.path, &r.root, &me, &device, self.known_heads(&r.id)) {
+            match TeamVault::open_cached(&r.path, &r.root, &me, &device, self.known_heads(&r.id), self.load_cache(&r.id)) {
                 Ok(t) => {
                     self.team_errors.remove(&r.id);
+                    self.save_cache(&r.id, &t);
                     self.teams.insert(r.id.clone(), t);
                 }
                 Err(e) => {
@@ -485,6 +527,10 @@ impl Store {
 
     /// Remembers what was read from a team, then returns its view.
     fn after_team(&mut self, id: &str) -> Result<TeamView> {
+        if let Some(t) = self.teams.remove(id) {
+            self.save_cache(id, &t);
+            self.teams.insert(id.to_string(), t);
+        }
         let heads = self.team(id)?.known_heads().clone();
         let v = self.vault_mut()?;
         if v.team_heads.get(id) != Some(&heads) {
@@ -561,6 +607,7 @@ impl Store {
         self.teams.remove(id);
         self.team_errors.remove(id);
         self.git_status.remove(id);
+        self.drop_cache(id);
         // A Git team's local copy is only a cache of the repository.
         for r in gone.iter().filter(|r| r.remote.is_some()) {
             let _ = std::fs::remove_dir_all(mirror_of(r).files().parent().unwrap_or(Path::new(&r.path)));
@@ -830,9 +877,12 @@ impl Store {
 
     fn open_sync(&mut self) {
         let Some(r) = self.sync_ref() else { return };
-        let opened = self.member().and_then(|(me, device)| TeamVault::open(&r.path, &r.root, &me, &device, self.known_heads(&r.id)));
+        let opened = self.member().and_then(|(me, device)| TeamVault::open_cached(&r.path, &r.root, &me, &device, self.known_heads(&r.id), self.load_cache(&r.id)));
         match opened {
-            Ok(t) => self.personal = Some(t),
+            Ok(t) => {
+                self.save_cache(&r.id, &t);
+                self.personal = Some(t);
+            }
             Err(e) => self.sync_state.0 = serde_json::to_value(&e).ok(),
         }
     }
@@ -860,6 +910,10 @@ impl Store {
         s.vault.sync_base = synced;
         if let Some(r) = &s.vault.sync {
             s.vault.team_heads.insert(r.id.clone(), sv.known_heads().clone());
+        }
+        if let (Some(t), Some(id)) = (self.personal.take(), self.sync_ref().map(|r| r.id)) {
+            self.save_cache(&id, &t);
+            self.personal = Some(t);
         }
         // Left on another device: leave here too.
         for id in gone {
@@ -996,6 +1050,7 @@ impl Store {
         v.team_heads.remove(&r.id);
         self.personal = None;
         self.sync_state = (None, None);
+        self.drop_cache(&r.id);
         self.write_vault()?;
         if r.remote.is_some() {
             let _ = std::fs::remove_dir_all(mirror_of(&r).files().parent().unwrap_or(Path::new(&r.path)));
