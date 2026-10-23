@@ -5,6 +5,7 @@ import type { Vault } from "../lib/types";
 import { VaultAvatar, syncStatusText } from "./common";
 import { Kbd } from "./ui";
 import { CreateTeamDialog, JoinTeamDialog } from "./TeamDialogs";
+import { syncErrorText } from "./SyncSettings";
 
 const nav: { id: Section; label: string; icon: typeof Server }[] = [
   { id: "hosts", label: "Хосты", icon: Server },
@@ -69,7 +70,7 @@ export function Sidebar({ homeActive }: { homeActive: boolean }) {
 }
 
 function VaultSwitcher() {
-  const { ws, vault, setVault, navigate } = useStore();
+  const { ws, vault, setVault, navigate, sync } = useStore();
   const [open, setOpen] = useState(false);
   const [dialog, setDialog] = useState<"create" | "join" | null>(null);
   const ref = useRef<HTMLDivElement>(null);
@@ -101,6 +102,12 @@ function VaultSwitcher() {
             <span className={`vault-sync ${vault.removed || vault.remoteError ? "conflict" : vault.pending ? "syncing" : vault.syncStatus}`}>
               <span className="dot" />
               {vault.syncStatus === "syncing" || vault.syncStatus === "offline" ? syncStatusText[vault.syncStatus] : vault.removed ? "Вы удалены" : vault.joined === false ? "Ждёт добавления" : vault.remoteError ? "Нет связи с репозиторием" : vault.pending ? "Не отправлено" : formatAgo(vault.lastSync)}
+            </span>
+          )}
+          {vault.kind === "personal" && sync?.enabled && (
+            <span className={`vault-sync ${sync.error ? "conflict" : sync.pending ? "syncing" : "synced"}`}>
+              <span className="dot" />
+              {sync.error ? syncErrorText(sync) : sync.pending ? "Не отправлено" : formatAgo(sync.syncedAt ?? undefined)}
             </span>
           )}
         </span>

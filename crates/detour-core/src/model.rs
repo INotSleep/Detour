@@ -249,6 +249,12 @@ pub struct VaultData {
     /// Per team, the head of every device this person has read: storage can't roll them back.
     #[serde(default)]
     pub team_heads: std::collections::BTreeMap<String, std::collections::BTreeMap<String, crate::team::log::Head>>,
+    /// Where this personal vault syncs with this person's other devices, if it does.
+    #[serde(default)]
+    pub sync: Option<TeamRef>,
+    /// The synced records as of the last sync: what this device changed since is measured against it.
+    #[serde(default)]
+    pub sync_base: std::collections::BTreeMap<String, crate::personal::SyncRecord>,
 }
 
 /// A team vault this person has joined.

@@ -5,6 +5,7 @@ import { uid, useStore } from "../lib/store";
 import { atLeast, writable } from "../lib/teams";
 import type { Snippet } from "../lib/types";
 import { Button, Empty, Field, IconButton, Menu, Modal, PageHeader, PasswordInput, Segmented } from "./ui";
+import { SyncSettings } from "./SyncSettings";
 
 /* ---------- snippets ---------- */
 
@@ -147,6 +148,8 @@ export function SettingsView() {
           </select>
         </div>
       </section>
+
+      <SyncSettings />
 
       {api.real && (
       <section className="settings-group">

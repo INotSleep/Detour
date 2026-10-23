@@ -11,6 +11,7 @@ import { fakeKeyMaterial, parsePrivateKey } from "./keys";
 import { mockSecrets } from "./mockData";
 import { mockFiles } from "./mockFiles";
 import type { ActivityItem, Coll, Conflict, Host, Level, OwnLogin, Problem, Role, Snippet, SshKey, Tunnel } from "./types";
+import { demoSync } from "./mockSync";
 
 export interface CoreInfo {
   coreVersion: string;
@@ -30,6 +31,7 @@ export type CoreError =
   | { kind: "connect" | "io" | "internal"; message: string }
   | { kind: "invalidId"; reason: string }
   | { kind: "forbidden" | "notATeamVault" | "folderNotEmpty" | "rootChanged" | "alreadyMember" }
+  | { kind: "notASyncVault" | "invalidCode" | "codeExpired" | "syncHasTeams" }
   | { kind: "git"; message: string }
   | { kind: "portBusy" | "forwardRefused"; port: number }
   | { kind: "unavailable"; path: string }
@@ -66,6 +68,10 @@ export function errorText(e: unknown): string {
     case "folderNotEmpty": return "Папка не пустая";
     case "rootChanged": return "Создатель хранилища изменился";
     case "alreadyMember": return "Уже в команде";
+    case "notASyncVault": return "Здесь нет синхронизированного vault";
+    case "invalidCode": return "Неверный код";
+    case "codeExpired": return "Код истёк, создайте новый на другом устройстве";
+    case "syncHasTeams": return "На этом устройстве есть команды: сначала выйдите из них";
     case "unavailable": return `Хранилище недоступно: ${e.path}`;
     case "git": return gitReason(e.message);
     case "portBusy": return `Порт ${e.port} занят другой программой`;
@@ -199,6 +205,27 @@ export interface FileEntry {
   modified: number | null;
   permissions: number | null;
 }
+
+/** Where the personal vault syncs and how that goes (detour_core::store::SyncStatus). */
+export interface SyncInfo {
+  enabled: boolean;
+  /** The folder, or the repository's URL. */
+  location: string | null;
+  git: boolean;
+  pending: boolean;
+  error: CoreError | null;
+  syncedAt: number | null;
+  problems: Problem[];
+}
+
+/** A one-time code another device of this person joins with. */
+export interface Pairing {
+  code: string;
+  expiresAt: number;
+}
+
+/** Where to sync: a folder, or a repository. */
+export type SyncPlace = { path: string } | GitLogin;
 
 /** A local file picked to upload. */
 export interface LocalFile {
@@ -470,6 +497,29 @@ export const api = {
   tunnelStop: (t: Tunnel): Promise<void> => invoke("tunnel_stop", { vaultId: t.vaultId, tunnelId: t.id }),
   /** Running and failed tunnels, keyed `<vault>/<tunnel>`. */
   tunnelsStatus: (): Promise<{ key: string; state: "on" | "error"; connections: number; error: CoreError | null }[]> => invoke("tunnels_status"),
+
+  /* personal vault sync */
+
+  syncStatus: (): Promise<SyncInfo> => (real ? invoke("sync_status") : demoSync.status()),
+  /** Syncs now; `changed` means the personal vault should be read again. */
+  syncNow: (trustFingerprint?: string): Promise<{ changed: boolean; status: SyncInfo }> =>
+    real ? invoke("sync_now", { trustFingerprint: trustFingerprint ?? null }) : demoSync.now(),
+  syncEnable: (place: SyncPlace, trustFingerprint?: string): Promise<SyncInfo> => {
+    if (!real) return demoSync.enable(place);
+    if ("path" in place) return invoke("sync_enable_folder", { path: place.path });
+    return invoke("sync_enable_git", { url: place.url, auth: place.auth, token: place.token ?? null, trustFingerprint: trustFingerprint ?? null });
+  },
+  /** Joins the vault this person syncs on other devices, with a pairing code or the recovery key. */
+  syncJoin: (place: SyncPlace, code: string, trustFingerprint?: string): Promise<SyncInfo> => {
+    if (!real) return demoSync.join(place, code);
+    if ("path" in place) return invoke("sync_join_folder", { path: place.path, code });
+    return invoke("sync_join_git", { url: place.url, auth: place.auth, token: place.token ?? null, code, trustFingerprint: trustFingerprint ?? null });
+  },
+  syncAddDevice: (): Promise<Pairing> => (real ? invoke("sync_add_device") : demoSync.addDevice()),
+  syncRecoveryKey: (): Promise<string> => (real ? invoke("sync_recovery_key") : demoSync.recoveryKey()),
+  syncDisable: (): Promise<void> => (real ? invoke("sync_disable") : demoSync.disable()),
+  syncReplaceServerKey: (fingerprint: string): Promise<{ changed: boolean; status: SyncInfo }> => invoke("sync_replace_server_key", { fingerprint }),
+  syncSetToken: (token: string): Promise<{ changed: boolean; status: SyncInfo }> => invoke("sync_set_token", { token }),
 
   /* files (SFTP) */
 

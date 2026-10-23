@@ -185,6 +185,9 @@ pub struct VaultMeta {
     pub id: String,
     /// Detour ID of the creator: the root of trust a joining member confirms.
     pub root: String,
+    /// One person's vault synced between their devices, not a team.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub personal: bool,
 }
 
 /// A file in the vault folder that is not an entry at its own path.
@@ -267,7 +270,8 @@ impl Folder {
             let name = item.file_name().to_string_lossy().to_string();
             let is_dir = item.file_type()?.is_dir();
             match (name.as_str(), is_dir) {
-                ("vault.json", false) | ("ops", true) => {}
+                // Device pairing offers live in `pair`: sealed, short-lived, not entries.
+                ("vault.json", false) | ("ops", true) | ("pair", true) => {}
                 _ if is_dir && is_debris_dir(&name) => {}
                 _ => self.extra(&mut scan, &item.path(), is_debris(&name), None)?,
             }

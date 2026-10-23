@@ -517,6 +517,41 @@ mod stores {
     }
 
     #[tokio::test]
+    async fn a_personal_vault_syncs_through_a_repository() {
+        if !super::git_available() {
+            return;
+        }
+        let (repo, _) = super::bare_repo();
+        let (port, _) = super::over_http::start(repo.parent().unwrap().to_path_buf(), "tok").await;
+        let remote = GitRemote { url: format!("http://127.0.0.1:{port}/vault.git"), auth: Auth::Agent, token: Some("tok".into()) };
+
+        let (laptop, _) = store("laptop");
+        laptop.lock().unwrap().put(VaultUpdate { hosts: vec![super::host("h1", "in-git")], keys: vec![], snippets: vec![], tunnels: vec![] }).unwrap();
+        sync::enable_git_sync(&laptop, remote.clone(), None).await.unwrap();
+        let st = laptop.lock().unwrap().sync_status().unwrap();
+        assert!(st.enabled && st.git && !st.pending && st.error.is_none(), "{st:?}");
+        assert!(matches!(sync::enable_git_sync(&store("other").0, remote.clone(), None).await, Err(Error::FolderNotEmpty)));
+
+        let code = sync::add_device(&laptop).await.unwrap();
+        let (desktop, _) = store("desktop");
+        sync::join_git_sync(&desktop, remote.clone(), code.code, None).await.unwrap();
+        let hosts = desktop.lock().unwrap().view().unwrap().hosts;
+        assert!(hosts.iter().any(|h| h.label == "in-git"), "{hosts:?}");
+
+        // An edit on the desktop goes out after it, and comes in on the laptop's next sync.
+        let mut v = desktop.lock().unwrap().view().unwrap();
+        v.hosts.push(super::host("h2", "second"));
+        desktop.lock().unwrap().put(VaultUpdate { hosts: v.hosts, keys: v.keys, snippets: v.snippets, tunnels: v.tunnels }).unwrap();
+        assert!(desktop.lock().unwrap().sync_status().unwrap().pending);
+        sync::push_personal(&desktop).await.unwrap();
+        assert!(sync::sync_personal(&laptop, None).await.unwrap());
+        assert_eq!(laptop.lock().unwrap().view().unwrap().hosts.len(), 2);
+        // The desktop's key travelled too (the laptop's was deleted before syncing).
+        assert_eq!(laptop.lock().unwrap().view().unwrap().keys.len(), 1);
+        super::git(&repo, &["fsck", "--full", "--strict"]);
+    }
+
+    #[tokio::test]
     async fn two_stores_share_a_team_through_a_repository() {
         if !super::git_available() {
             return;

@@ -6,7 +6,8 @@ use std::sync::{Arc, Mutex};
 
 use detour_core::model::{Auth, KeyAlgorithm, KeyView, OwnLoginView, VaultView};
 use detour_core::ssh::{self, SessionEvent, SessionHandle};
-use detour_core::store::{MyId, Store, TeamEntry, VaultUpdate};
+use detour_core::personal::Pairing;
+use detour_core::store::{MyId, PERSONAL, Store, SyncStatus, TeamEntry, VaultUpdate};
 use detour_core::team::state::{Coll, Level, Role};
 use detour_core::sync;
 use detour_core::sftp::{self, FileEntry, Files};
@@ -29,12 +30,13 @@ fn poisoned<T>(_: T) -> Error {
     Error::Internal { message: "state lock poisoned".into() }
 }
 
-/// After a successful edit of a team kept in Git, sends it to the repository in the background.
+/// After a successful edit of a vault kept in Git (a team, or the personal vault
+/// synced through a repository), sends it to the repository in the background.
 fn pushed<T>(app: &App, vault_id: &str, result: Result<T>) -> Result<T> {
-    if result.is_ok() && vault_id != detour_core::store::PERSONAL {
+    if result.is_ok() {
         let (store, id) = (app.store.clone(), vault_id.to_string());
         tauri::async_runtime::spawn(async move {
-            let _ = sync::push_team(&store, &id).await;
+            let _ = if id == PERSONAL { sync::push_personal(&store).await } else { sync::push_team(&store, &id).await };
         });
     }
     result
@@ -194,7 +196,92 @@ fn vault_get(app: State<App>) -> Result<VaultView> {
 
 #[tauri::command]
 fn vault_put(app: State<App>, update: VaultUpdate) -> Result<VaultView> {
-    app.store.lock().map_err(poisoned)?.put(update)
+    let r = app.store.lock().map_err(poisoned)?.put(update);
+    pushed(&app, PERSONAL, r)
+}
+
+/* ---------- personal vault sync ---------- */
+
+/// A sync's outcome: whether records changed here (the UI then re-reads the vault) and the status.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Synced {
+    changed: bool,
+    status: SyncStatus,
+}
+
+fn synced(app: &App, changed: bool) -> Result<Synced> {
+    Ok(Synced { changed, status: app.store.lock().map_err(poisoned)?.sync_status()? })
+}
+
+fn sync_status_now(app: &App) -> Result<SyncStatus> {
+    app.store.lock().map_err(poisoned)?.sync_status()
+}
+
+#[tauri::command]
+fn sync_status(app: State<App>) -> Result<SyncStatus> {
+    sync_status_now(&app)
+}
+
+/// Syncs the personal vault now; `trust_fingerprint` answers a repository server's new key.
+#[tauri::command]
+async fn sync_now(app: State<'_, App>, trust_fingerprint: Option<String>) -> Result<Synced> {
+    let changed = sync::sync_personal(&app.store, trust_fingerprint).await?;
+    synced(&app, changed)
+}
+
+#[tauri::command]
+fn sync_enable_folder(app: State<App>, path: String) -> Result<SyncStatus> {
+    app.store.lock().map_err(poisoned)?.sync_enable(&path, None)?;
+    sync_status_now(&app)
+}
+
+#[tauri::command]
+async fn sync_enable_git(app: State<'_, App>, url: String, auth: Auth, token: Option<String>, trust_fingerprint: Option<String>) -> Result<SyncStatus> {
+    sync::enable_git_sync(&app.store, git_remote(url, auth, token), trust_fingerprint).await?;
+    sync_status_now(&app)
+}
+
+/// Joins this person's synced vault with a pairing code or the recovery key.
+#[tauri::command]
+async fn sync_join_folder(app: State<'_, App>, path: String, code: String) -> Result<SyncStatus> {
+    sync::join_folder_sync(&app.store, path, code).await?;
+    sync_status_now(&app)
+}
+
+#[tauri::command]
+async fn sync_join_git(app: State<'_, App>, url: String, auth: Auth, token: Option<String>, code: String, trust_fingerprint: Option<String>) -> Result<SyncStatus> {
+    sync::join_git_sync(&app.store, git_remote(url, auth, token), code, trust_fingerprint).await?;
+    sync_status_now(&app)
+}
+
+/// A one-time code for another device of this person.
+#[tauri::command]
+async fn sync_add_device(app: State<'_, App>) -> Result<Pairing> {
+    sync::add_device(&app.store).await
+}
+
+#[tauri::command]
+fn sync_recovery_key(app: State<App>) -> Result<String> {
+    app.store.lock().map_err(poisoned)?.sync_recovery_key()
+}
+
+#[tauri::command]
+fn sync_disable(app: State<App>) -> Result<()> {
+    app.store.lock().map_err(poisoned)?.sync_disable()
+}
+
+#[tauri::command]
+async fn sync_replace_server_key(app: State<'_, App>, fingerprint: String) -> Result<Synced> {
+    let changed = sync::replace_sync_server_key(&app.store, fingerprint).await?;
+    synced(&app, changed)
+}
+
+#[tauri::command]
+async fn sync_set_token(app: State<'_, App>, token: String) -> Result<Synced> {
+    app.store.lock().map_err(poisoned)?.sync_set_token(&token)?;
+    let changed = sync::sync_personal(&app.store, None).await?;
+    synced(&app, changed)
 }
 
 #[tauri::command]
@@ -371,7 +458,9 @@ async fn team_access_set(app: State<'_, App>, id: String, changes: Vec<AccessCha
 
 #[tauri::command]
 fn team_own_login_set(app: State<App>, id: String, host_id: String, login: Option<OwnLoginView>) -> Result<TeamView> {
-    app.store.lock().map_err(poisoned)?.team_own_login_set(&id, &host_id, login)
+    // Own logins live in the personal vault.
+    let r = app.store.lock().map_err(poisoned)?.team_own_login_set(&id, &host_id, login);
+    pushed(&app, PERSONAL, r)
 }
 
 #[tauri::command]
@@ -522,6 +611,17 @@ pub fn builder<R: tauri::Runtime>(builder: tauri::Builder<R>, data_dir: std::pat
             vault_change_master_password,
             vault_get,
             vault_put,
+            sync_status,
+            sync_now,
+            sync_enable_folder,
+            sync_enable_git,
+            sync_join_folder,
+            sync_join_git,
+            sync_add_device,
+            sync_recovery_key,
+            sync_disable,
+            sync_replace_server_key,
+            sync_set_token,
             host_set_password,
             host_forget_key,
             host_password,

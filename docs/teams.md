@@ -1,6 +1,6 @@
 # Teams: design
 
-Status: format 2 (per-record access enforced by encryption, storage integrity checks) and the folder and Git transports are implemented in `crates/detour-core/src/team`; rotation on hosts, snapshots and SSH certificates are planned.
+Status: format 2 (per-record access enforced by encryption, storage integrity checks), the folder and Git transports and personal vault sync are implemented in `crates/detour-core/src/team` and `personal.rs`; rotation on hosts, snapshots and SSH certificates are planned.
 
 ## Goals
 
@@ -19,7 +19,7 @@ What cryptography can't do, and Detour doesn't pretend to:
 
 ## Identities: Detour ID
 
-Every member has one identity, kept in their personal vault:
+Every member has one identity, kept in their personal vault and shared by all of their devices (see "Personal vault sync"):
 
 - X25519 key (age) for encryption,
 - Ed25519 key for signatures.
@@ -157,12 +157,25 @@ Not yet: signing in with GitHub (device flow through a registered GitHub App) in
 
 ## Personal vault sync
 
-The personal vault becomes a team of one person with several devices, using the same format and transports.
+One person's devices share their personal vault through a folder or a Git repository, in the same format, with the same transports and the same integrity checks as a team. The synced vault has a single member: the person's identity, which every one of their devices holds. `vault.json` marks it as personal, so it can't be joined as a team and a team can't be joined as one.
+
+What syncs: hosts with their passwords, keys with private parts and passphrases, snippets, tunnels, pinned server keys and own logins for team hosts. What stays on each device: login times, the list of joined teams (each device joins a team's storage itself; it is the same member), team read positions, the sync settings and the device's master password. Pinned server keys and own logins have no ids of their own; their record ids are keyed with the identity, so the storage can't guess endpoints from them.
+
+Each device keeps its own vault file. A sync is a three-way merge against the records as of the last sync: what this device changed since then is written to the synced vault field by field, then the synced records become this device's records. Concurrent edits of different fields both survive; the same field resolves to the later change.
+
+A folder is synced on every save and every 20 seconds; a repository is pulled and pushed every 20 seconds and pushed after every edit.
+
+**Adding a device.** An existing device writes the identity to `pair/<locator>-<expiry>.age`, sealed with age's scrypt recipient under a one-time code `XXXX-XXXX-XXXX-XXXX` (Crockford base32: 20 bits name the file, 60 bits are the secret). The new device opens it with the code, checks that the identity is the vault's creator, and from then on is that person. The storage never sees the code; it can't open the offer without brute-forcing 60 bits through scrypt, and it can't plant an offer of its own: it doesn't know the code. Offers expire after an hour and any device deletes expired ones. Codes are typed between one's own devices, so no other channel is involved.
+
+**Recovery.** The identity's recovery key, shown when sync is turned on and any time later, works in place of a code, so the vault opens on a new device when no other device is left.
+
+A device that is already in teams keeps its own identity and can't join another person's synced vault: its teams know it by that identity.
 
 ## Plan
 
 - Done: format 2 with per-record access, key drops, cutoffs, integrity checks, folder transport, recovery key.
 - Done: Git transport over SSH (one kept connection) and HTTPS (token).
+- Done: personal vault sync between one person's devices, pairing codes, recovery key.
 - Signing in with GitHub (device flow).
 - Rotation on hosts after removal.
 - Snapshots (every open replays all entries now: fine for thousands of changes, not for years).

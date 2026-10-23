@@ -8,6 +8,7 @@
 pub mod identity;
 pub mod keys;
 pub mod model;
+pub mod personal;
 pub mod sftp;
 pub mod ssh;
 pub mod store;
@@ -69,6 +70,17 @@ pub enum Error {
     Forbidden,
     #[error("this folder has no team vault")]
     NotATeamVault,
+    /// The folder or repository holds no synced personal vault.
+    #[error("this folder has no synced personal vault")]
+    NotASyncVault,
+    /// A device pairing code that matches nothing in the vault.
+    #[error("wrong pairing code")]
+    InvalidCode,
+    #[error("the pairing code has expired")]
+    CodeExpired,
+    /// This device's identity is in use by teams, so it can't take another person's.
+    #[error("leave your teams on this device first")]
+    SyncHasTeams,
     #[error("the folder is not empty")]
     FolderNotEmpty,
     #[error("{path} is not available")]

@@ -143,14 +143,14 @@ fn denied() -> Error {
     Error::Forbidden
 }
 
-fn fields_of<T: Serialize>(t: &T, skip: &[&str]) -> BTreeMap<String, Value> {
+pub(crate) fn fields_of<T: Serialize>(t: &T, skip: &[&str]) -> BTreeMap<String, Value> {
     match serde_json::to_value(t) {
         Ok(Value::Object(m)) => m.into_iter().filter(|(k, _)| k != "id" && !skip.contains(&k.as_str())).collect(),
         _ => BTreeMap::new(),
     }
 }
 
-fn from_fields<T: DeserializeOwned>(id: &str, fields: BTreeMap<String, Value>) -> Option<T> {
+pub(crate) fn from_fields<T: DeserializeOwned>(id: &str, fields: BTreeMap<String, Value>) -> Option<T> {
     let mut m: serde_json::Map<String, Value> = fields.into_iter().collect();
     m.insert("id".into(), Value::String(id.to_string()));
     serde_json::from_value(Value::Object(m)).ok()
@@ -159,6 +159,14 @@ fn from_fields<T: DeserializeOwned>(id: &str, fields: BTreeMap<String, Value>) -
 /// Splits a record's fields into what goes under the meta key and under the secret key.
 fn split(coll: Coll, fields: BTreeMap<String, Value>) -> (BTreeMap<String, Value>, BTreeMap<String, Value>) {
     fields.into_iter().partition(|(k, _)| !coll.is_secret_field(k))
+}
+
+/// A change to one record, written as it is: see `TeamVault::apply`.
+#[derive(Debug, Clone)]
+pub enum Change {
+    /// Creates the record, or sets the fields that differ from what the vault holds.
+    Put { coll: Coll, id: String, fields: BTreeMap<String, Value> },
+    Delete { id: String },
 }
 
 /// Everything one entry will carry, assembled before it is encrypted and signed.
@@ -197,24 +205,39 @@ impl Draft {
 }
 
 impl TeamVault {
-    /// Reads `vault.json` of a folder the user wants to join.
+    /// Reads `vault.json` of a folder the user wants to join as a team.
     pub fn inspect(path: impl AsRef<Path>) -> Result<VaultInfo> {
-        let meta = Folder::new(path).read_meta()?.ok_or(Error::NotATeamVault)?;
+        let meta = Folder::new(path).read_meta()?.filter(|m| !m.personal).ok_or(Error::NotATeamVault)?;
         let root = PublicIdentity::parse(&meta.root)?;
         Ok(VaultInfo { id: meta.id, root: meta.root, root_fingerprint: root.fingerprint() })
     }
 
+    /// Reads `vault.json` of a folder holding someone's personal vault.
+    pub fn inspect_personal(path: impl AsRef<Path>) -> Result<VaultMeta> {
+        Folder::new(path).read_meta()?.filter(|m| m.personal).ok_or(Error::NotASyncVault)
+    }
+
     /// Creates a new team vault in an empty folder. `recovery` becomes a second owner.
     pub fn create(path: impl AsRef<Path>, name: &str, me: &Identity, my_name: &str, device: &str, recovery: &Identity) -> Result<Self> {
+        let members = vec![member(me, my_name, Role::Owner, false), member(recovery, "Recovery key", Role::Owner, true)];
+        Self::create_with(path, name, me, device, members, false)
+    }
+
+    /// Creates the vault one person's devices sync their personal vault through.
+    /// Every device of that person uses the same identity, the vault's only member.
+    pub fn create_personal(path: impl AsRef<Path>, me: &Identity, device: &str) -> Result<Self> {
+        Self::create_with(path, "", me, device, vec![member(me, "", Role::Owner, false)], true)
+    }
+
+    fn create_with(path: impl AsRef<Path>, name: &str, me: &Identity, device: &str, members: Vec<Member>, personal: bool) -> Result<Self> {
         let folder = Folder::new(&path);
         if folder.exists() && std::fs::read_dir(folder.path())?.next().is_some() {
             return Err(if folder.path().join("vault.json").exists() { Error::AlreadyInitialized } else { Error::FolderNotEmpty });
         }
-        let meta = VaultMeta { format: log::FORMAT, id: new_id(), root: me.public().detour_id() };
+        let meta = VaultMeta { format: log::FORMAT, id: new_id(), root: me.public().detour_id(), personal };
         folder.write_meta(&meta)?;
 
         let mut v = Self { folder, meta, device: device.to_string(), me: me.clone(), state: State::default(), drops: DropCache::new(), known: BTreeMap::new() };
-        let members = vec![member(me, my_name, Role::Owner, false), member(recovery, "Recovery key", Role::Owner, true)];
         let key = log::new_key();
         let mut d = Draft { new_team_key: Some(key), ..Default::default() };
         d.team.push(TeamOp::Epoch { epoch: 1, kid: log::key_id(&key), holders: members.iter().map(|m| m.id.clone()).collect() });
@@ -457,6 +480,16 @@ impl TeamVault {
         Ok(self.host(id).ok_or(Error::NotFound { what: "host".into() })?.password)
     }
 
+    /// Every record this member can see that is not deleted: collection and current values.
+    pub fn all_records(&self) -> BTreeMap<String, (Coll, BTreeMap<String, Value>)> {
+        self.state
+            .records
+            .iter()
+            .filter(|(id, r)| !r.is_deleted() && self.visible(id, r))
+            .filter_map(|(id, r)| Some((id.clone(), (r.coll?, r.values()))))
+            .collect()
+    }
+
     pub fn data(&self) -> VaultView {
         VaultView {
             hosts: self.records::<Host>(Coll::Host).iter().map(HostView::from).collect(),
@@ -680,6 +713,46 @@ impl TeamVault {
             return Ok(());
         }
         self.write(d)
+    }
+
+    /// Writes changes as they are, in one entry. Returns false if there was nothing to write.
+    pub fn apply(&mut self, changes: Vec<Change>) -> Result<bool> {
+        self.require_role(Role::Member)?;
+        let mut d = Draft::default();
+        for c in changes {
+            match c {
+                Change::Put { coll, id, fields } => {
+                    let Some(r) = self.state.records.get(&id).filter(|r| r.coll.is_some()) else {
+                        self.create_record(&mut d, coll, &id, fields);
+                        continue;
+                    };
+                    // A record deleted meanwhile comes back whole; otherwise only what differs is written.
+                    let now = r.values();
+                    let changed: BTreeMap<String, Value> = if r.is_deleted() { fields } else { fields.into_iter().filter(|(k, v)| now.get(k) != Some(v)).collect() };
+                    if changed.is_empty() {
+                        continue;
+                    }
+                    self.require_level(&id, Level::Edit)?;
+                    let (meta, secret) = split(coll, changed);
+                    if !meta.is_empty() {
+                        d.rec(&id, Section::Meta, RecordOp::Set { coll, fields: meta });
+                    }
+                    if !secret.is_empty() {
+                        d.rec(&id, Section::Secret, RecordOp::Set { coll, fields: secret });
+                    }
+                }
+                Change::Delete { id } => {
+                    if self.state.records.get(&id).is_some_and(|r| r.coll.is_some() && !r.is_deleted()) {
+                        self.delete_record(&mut d, &id)?;
+                    }
+                }
+            }
+        }
+        if d.is_empty() {
+            return Ok(false);
+        }
+        self.write(d)?;
+        Ok(true)
     }
 
     /// Commits after rotating keys that people who lost access still hold.

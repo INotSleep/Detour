@@ -20,11 +20,11 @@ export function useMyId() {
   return id;
 }
 
-function FolderField({ value, onChange, label = "Папка" }: { value: string; onChange: (v: string) => void; label?: string }) {
+export function FolderField({ value, onChange, label = "Папка", placeholder = "D:\\Sync\\team-vault" }: { value: string; onChange: (v: string) => void; label?: string; placeholder?: string }) {
   return (
     <Field label={label}>
       <div className="input-group">
-        <input className="input mono" value={value} onChange={(e) => onChange(e.target.value)} placeholder={"D:\\Sync\\team-vault"} spellCheck={false} />
+        <input className="input mono" value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} spellCheck={false} />
         {api.real && (
           <Button type="button" icon={FolderOpen} onClick={async () => { const p = await api.pickFolder(); if (p) onChange(p); }}>
             Выбрать
@@ -37,7 +37,7 @@ function FolderField({ value, onChange, label = "Папка" }: { value: string;
 
 /* ---------- where a team vault lives: a folder or a Git repository ---------- */
 
-interface Storage {
+export interface Storage {
   kind: "folder" | "git";
   path: string;
   url: string;
@@ -47,7 +47,7 @@ interface Storage {
   token: string;
 }
 
-function useStorage(): [Storage, (patch: Partial<Storage>) => void] {
+export function useStorage(): [Storage, (patch: Partial<Storage>) => void] {
   const { ws } = useStore();
   const firstKey = ws.keys.find((k) => k.vaultId === "personal")?.id ?? "agent";
   const [s, setS] = useState<Storage>({ kind: "folder", path: "", url: "", login: firstKey, token: "" });
@@ -55,13 +55,13 @@ function useStorage(): [Storage, (patch: Partial<Storage>) => void] {
 }
 
 const isHttps = (url: string) => /^https?:\/\//i.test(url.trim());
-const gitLogin = (s: Storage): GitLogin =>
+export const gitLogin = (s: Storage): GitLogin =>
   isHttps(s.url)
     ? { url: s.url.trim(), auth: { type: "password" }, token: s.token.trim() }
     : { url: s.url.trim(), auth: s.login === "agent" ? { type: "agent" } : { type: "key", keyId: s.login } };
-const storageReady = (s: Storage) => (s.kind === "folder" ? !!s.path.trim() : !!s.url.trim() && (!isHttps(s.url) || !!s.token.trim()));
+export const storageReady = (s: Storage) => (s.kind === "folder" ? !!s.path.trim() : !!s.url.trim() && (!isHttps(s.url) || !!s.token.trim()));
 
-function StorageFields({ value, set, folderLabel }: { value: Storage; set: (p: Partial<Storage>) => void; folderLabel: string }) {
+export function StorageFields({ value, set, folderLabel, folderPlaceholder }: { value: Storage; set: (p: Partial<Storage>) => void; folderLabel: string; folderPlaceholder?: string }) {
   const { ws, toast } = useStore();
   const keys = ws.keys.filter((k) => k.vaultId === "personal");
   const key = keys.find((k) => k.id === value.login);
@@ -71,7 +71,7 @@ function StorageFields({ value, set, folderLabel }: { value: Storage; set: (p: P
         <Segmented value={value.kind} onChange={(kind) => set({ kind })} options={[{ value: "folder", label: "Папка" }, { value: "git", label: "Git-репозиторий" }]} />
       </Field>
       {value.kind === "folder" ? (
-        <FolderField value={value.path} onChange={(path) => set({ path })} label={folderLabel} />
+        <FolderField value={value.path} onChange={(path) => set({ path })} label={folderLabel} placeholder={folderPlaceholder} />
       ) : (
         <>
           <Field label="Адрес репозитория">
@@ -103,7 +103,7 @@ function StorageFields({ value, set, folderLabel }: { value: Storage; set: (p: P
 }
 
 /** The server key of a repository seen for the first time. */
-function ServerKeyCard({ url, fingerprint }: { url: string; fingerprint: string }) {
+export function ServerKeyCard({ url, fingerprint }: { url: string; fingerprint: string }) {
   const host = url.replace(/^ssh:\/\//, "").replace(/^[^@]*@/, "").split(/[:/]/)[0];
   return (
     <div className="trust-card">
@@ -118,7 +118,7 @@ function ServerKeyCard({ url, fingerprint }: { url: string; fingerprint: string 
 }
 
 /** A new server key from an error, if that is what it is. */
-const unknownServerKey = (e: unknown) => (isCoreError(e) && e.kind === "hostKeyUnknown" ? e.fingerprint : null);
+export const unknownServerKey = (e: unknown) => (isCoreError(e) && e.kind === "hostKeyUnknown" ? e.fingerprint : null);
 
 /* ---------- my Detour ID ---------- */
 

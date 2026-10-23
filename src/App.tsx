@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeftRight, Code, FolderOpen, KeyRound, Plus, Server, Settings as SettingsIcon, Users, X } from "lucide-react";
-import { api, errorText, fromView, type CoreInfo, type TeamView, type VaultView } from "./lib/api";
+import { api, errorText, fromView, type CoreInfo, type SyncInfo, type TeamView, type VaultView } from "./lib/api";
 import { applyTeamEntries, applyTeamView, dataOf, writable } from "./lib/teams";
 import { mockWorkspace } from "./lib/mockData";
 import { StoreContext, uid, type Section, type Store } from "./lib/store";
@@ -74,6 +74,7 @@ export default function App() {
   const [palette, setPalette] = useState(false);
   const [conflictVaultId, setConflictVaultId] = useState<string | null>(null);
   const [settings, setSettingsState] = useState<Settings>(defaultSettings);
+  const [sync, setSync] = useState<SyncInfo | null>(null);
   const toaster = useToaster();
 
   useEffect(() => {
@@ -127,6 +128,55 @@ export default function App() {
   }, []);
   applyViewRef.current = applyView;
 
+  /** Takes the personal vault from the core again, unless local edits are still on their way. */
+  const refreshPersonal = useCallback(async () => {
+    const view = await api.vaultGet();
+    const base = wsRef.current;
+    if (!base) return;
+    const saved = lastSaved.current.get("personal");
+    if (saved !== undefined && saved !== JSON.stringify(dataOf(base, "personal"))) return;
+    const data = fromView(view);
+    const others = <T extends { vaultId: string }>(xs: T[]) => xs.filter((x) => x.vaultId !== "personal");
+    // A tunnel's switch and connections belong to this session, not to the vault.
+    const running = new Map(base.tunnels.map((t) => [t.id, t]));
+    const next: Workspace = {
+      ...base,
+      hosts: [...data.hosts, ...others(base.hosts)],
+      keys: [...data.keys, ...others(base.keys)],
+      snippets: [...data.snippets, ...others(base.snippets)],
+      tunnels: [...data.tunnels.map((t) => ({ ...t, state: running.get(t.id)?.state ?? t.state, connections: running.get(t.id)?.connections, error: running.get(t.id)?.error })), ...others(base.tunnels)],
+    };
+    lastSaved.current.set("personal", JSON.stringify(dataOf(next, "personal")));
+    wsRef.current = next;
+    setWs((cur) => (cur === base ? next : cur));
+  }, []);
+
+  // The personal vault's sync: its state, and a sync every 20 seconds while it is on.
+  useEffect(() => {
+    if (phase === "ready") api.syncStatus().then(setSync).catch(() => {});
+  }, [phase]);
+  const syncOn = sync?.enabled ?? false;
+  useEffect(() => {
+    if (!api.real || phase !== "ready" || !syncOn) return;
+    const run = () =>
+      api
+        .syncNow()
+        .then((r) => {
+          setSync(r.status);
+          if (r.changed) void refreshPersonal();
+        })
+        .catch(() => {});
+    void run();
+    const timer = setInterval(run, 20_000);
+    return () => clearInterval(timer);
+  }, [phase, syncOn, refreshPersonal]);
+  // After an edit the core merges and sends it; look at the outcome once it had time to go out.
+  const syncCheck = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const afterPersonalEdit = useCallback(() => {
+    clearTimeout(syncCheck.current);
+    syncCheck.current = setTimeout(() => api.syncStatus().then(setSync).catch(() => {}), 1500);
+  }, []);
+
   // Persist edits of every writable vault to detour-core.
   useEffect(() => {
     if (!api.real || !ws || phase !== "ready") return;
@@ -145,6 +195,7 @@ export default function App() {
         api
           .vaultPut(data)
           .then(() => {
+            if (syncOn) afterPersonalEdit();
             // A typed password is now in the vault: drop it from UI memory without another save.
             const base = wsRef.current;
             if (!base || !data.hosts.some((h) => h.newPassword)) return;
@@ -158,7 +209,7 @@ export default function App() {
         api.teamPut(v.id, data).then(applyView).catch(fail);
       }
     }
-  }, [ws, phase, toaster.push, applyView]);
+  }, [ws, phase, toaster.push, applyView, syncOn, afterPersonalEdit]);
 
   // Tunnels run in the core: keep switches, connection counts and failures in step with it.
   const tunnelsActive = ws?.tunnels.some((t) => t.state === "on" || t.state === "starting") ?? false;
@@ -285,8 +336,11 @@ export default function App() {
       resolveConflicts: (id) => setConflictVaultId(id ?? vaultId),
       lock,
       applyTeamView: applyView,
+      sync,
+      setSync,
+      refreshPersonal,
     };
-  }, [ws, vaultId, section, settings, coreInfo, connect, openFiles, toaster.push, lock, applyView]);
+  }, [ws, vaultId, section, settings, coreInfo, connect, openFiles, toaster.push, lock, applyView, sync, refreshPersonal]);
 
   if (phase === "loading") return null;
   if (!store) return <LockScreen mode={phase === "setup" ? "setup" : "unlock"} onUnlocked={(v) => void unlocked(v)} />;

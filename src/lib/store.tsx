@@ -1,6 +1,6 @@
 import { createContext, useContext } from "react";
 import type { Settings, Vault, Workspace } from "./types";
-import type { CoreInfo, TeamView } from "./api";
+import type { CoreInfo, SyncInfo, TeamView } from "./api";
 
 export type Section = "hosts" | "keys" | "snippets" | "tunnels" | "team" | "settings";
 
@@ -33,6 +33,11 @@ export interface Store {
   lock: () => Promise<void>;
   /** Puts a team's state returned by detour-core into the workspace. */
   applyTeamView: (view: TeamView) => void;
+  /** How the personal vault syncs with this person's other devices; null until known. */
+  sync: SyncInfo | null;
+  setSync: (s: SyncInfo) => void;
+  /** Reads the personal vault again, after sync brought changes. */
+  refreshPersonal: () => Promise<void>;
 }
 
 export const StoreContext = createContext<Store | null>(null);

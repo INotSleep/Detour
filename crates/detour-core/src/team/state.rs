@@ -28,11 +28,15 @@ pub enum Coll {
     Key,
     Snippet,
     Tunnel,
+    /// A pinned server key (personal vaults only).
+    KnownHost,
+    /// A member's own login for a team host (personal vaults only).
+    OwnLogin,
 }
 
 impl Coll {
     pub fn has_secret(self) -> bool {
-        matches!(self, Coll::Host | Coll::Key)
+        matches!(self, Coll::Host | Coll::Key | Coll::OwnLogin)
     }
 
     /// Fields kept under the record's secret key.
@@ -40,6 +44,7 @@ impl Coll {
         match self {
             Coll::Host => &["password"],
             Coll::Key => &["privateKey", "passphrase"],
+            Coll::OwnLogin => &["password"],
             _ => &[],
         }
     }
@@ -49,7 +54,12 @@ impl Coll {
     }
 
     fn name_field(self) -> &'static str {
-        if self == Coll::Host { "label" } else { "name" }
+        match self {
+            Coll::Host => "label",
+            Coll::KnownHost => "endpoint",
+            Coll::OwnLogin => "user",
+            _ => "name",
+        }
     }
 }
 

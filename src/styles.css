@@ -899,3 +899,17 @@ select.input { cursor: pointer; padding-right: 28px; appearance: none; backgroun
   background: color-mix(in srgb, var(--bg) 82%, var(--accent));
   color: var(--accent); font-weight: 600; pointer-events: none; animation: fade 0.1s var(--ease);
 }
+
+/* ============ personal vault sync ============ */
+
+.sync-card { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.sync-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.sync-location { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.warn-text { color: var(--warn); }
+.center { text-align: center; }
+.settings-group .banner.problems { margin: 10px 0 4px; }
+.pair-code {
+  padding: 18px 12px; border-radius: var(--r-lg); background: var(--input); border: 1px dashed var(--line-strong);
+  text-align: center; font-size: 22px; font-weight: 600; letter-spacing: 2px; color: var(--text); user-select: all;
+}
+.pair-code.loading { color: var(--muted); animation: pulse 1s ease-in-out infinite; }

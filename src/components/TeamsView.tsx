@@ -47,7 +47,7 @@ export function remoteErrorText(e: CoreError): string {
   }
 }
 
-function problemText(p: Problem): string {
+export function problemText(p: Problem): string {
   const who = p.kind === "unknownFile" ? "" : p.authorName || `устройство ${p.device.slice(0, 8)}`;
   switch (p.kind) {
     case "rejected": return `Отклонено изменение: ${who}`;
@@ -362,7 +362,7 @@ function TeamPage({ vault }: { vault: Vault }) {
 }
 
 /** A new HTTPS token for a team's repository. */
-function TokenDialog({ vault, onClose }: { vault: Vault; onClose: () => void }) {
+export function TokenDialog({ vault, onClose }: { vault: Vault; onClose: () => void }) {
   const { toast, applyTeamView } = useStore();
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);

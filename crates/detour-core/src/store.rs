@@ -16,10 +16,11 @@ use age::secrecy::{ExposeSecret, SecretString};
 
 use crate::identity::{Identity, PublicIdentity};
 use crate::model::*;
+use crate::personal::{self, SyncRecord};
 use crate::team::log::Head;
 use crate::team::state::{Coll, Level, Role};
 use crate::team::git::{GitRemote, HttpRemote, HttpUrl, Mirror, Remote, SshUrl};
-use crate::team::{AccessChange, RemoteView, TeamVault, TeamView, VaultInfo};
+use crate::team::{AccessChange, ProblemView, RemoteView, TeamVault, TeamView, VaultInfo};
 use crate::{Error, Result, SecretKind, keys, ssh};
 
 /// The personal vault's id in every vault-addressed call.
@@ -44,6 +45,26 @@ pub struct Store {
     team_errors: BTreeMap<String, String>,
     /// Git teams: the last failure reaching the repository (a serialized `Error`) and the last success.
     git_status: BTreeMap<String, (Option<serde_json::Value>, Option<Millis>)>,
+    /// The synced copy of the personal vault, when sync is on and its storage could be opened.
+    personal: Option<TeamVault>,
+    /// How syncing the personal vault last went: failure (a serialized `Error`) and last success.
+    sync_state: (Option<serde_json::Value>, Option<Millis>),
+}
+
+/// Where the personal vault syncs and how that goes, for the UI.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncStatus {
+    pub enabled: bool,
+    /// The folder, or the repository's URL.
+    pub location: Option<String>,
+    pub git: bool,
+    /// Changes the repository doesn't have yet.
+    pub pending: bool,
+    /// Why the last sync failed (a serialized `Error`).
+    pub error: Option<serde_json::Value>,
+    pub synced_at: Option<Millis>,
+    pub problems: Vec<ProblemView>,
 }
 
 /// A joined team as the UI lists it: its contents when available, otherwise why not.
@@ -83,7 +104,17 @@ impl Store {
     }
 
     pub fn open(dir: impl AsRef<Path>) -> Self {
-        Self { dir: dir.as_ref().to_path_buf(), state: None, trash_keys: HashMap::new(), trash_passwords: HashMap::new(), teams: BTreeMap::new(), team_errors: BTreeMap::new(), git_status: BTreeMap::new() }
+        Self {
+            dir: dir.as_ref().to_path_buf(),
+            state: None,
+            trash_keys: HashMap::new(),
+            trash_passwords: HashMap::new(),
+            teams: BTreeMap::new(),
+            team_errors: BTreeMap::new(),
+            git_status: BTreeMap::new(),
+            personal: None,
+            sync_state: (None, None),
+        }
     }
 
     pub fn is_initialized(&self) -> bool {
@@ -128,6 +159,7 @@ impl Store {
             self.save()?;
         }
         self.open_teams();
+        self.open_sync();
         Ok(())
     }
 
@@ -139,6 +171,8 @@ impl Store {
         self.teams.clear();
         self.team_errors.clear();
         self.git_status.clear();
+        self.personal = None;
+        self.sync_state = (None, None);
         ssh::close_pooled();
     }
 
@@ -166,7 +200,19 @@ impl Store {
         Ok(&mut self.state.as_mut().ok_or(Error::Locked)?.vault)
     }
 
-    fn save(&self) -> Result<()> {
+    /// Writes the vault file; with sync on, what changed goes to the synced copy first.
+    fn save(&mut self) -> Result<()> {
+        if self.personal.is_some() && self.has_unsynced() {
+            let merged = self.merge_personal().map(|_| ());
+            // A repository is reached later, in the background; a folder is reached now.
+            if merged.is_err() || !self.sync_is_git() {
+                self.note_sync(&merged);
+            }
+        }
+        self.write_vault()
+    }
+
+    fn write_vault(&self) -> Result<()> {
         let s = self.unlocked()?;
         let json = serde_json::to_vec(&s.vault)?;
         let sealed = age::encrypt(&s.identity.to_public(), &json).map_err(|e| Error::Internal { message: e.to_string() })?;
@@ -732,6 +778,221 @@ impl Store {
         let ep = endpoint(&host);
         self.vault_mut()?.known_hosts.retain(|k| k.endpoint != ep);
         self.save()
+    }
+}
+
+/* ---------- syncing the personal vault between this person's devices ---------- */
+
+impl Store {
+    /// Where a synced personal vault kept in Git has its local copy.
+    pub fn sync_dir(&self) -> PathBuf {
+        self.dir.join("sync")
+    }
+
+    fn sync_ref(&self) -> Option<TeamRef> {
+        self.state.as_ref().and_then(|s| s.vault.sync.clone())
+    }
+
+    fn sync_is_git(&self) -> bool {
+        self.sync_ref().is_some_and(|r| r.remote.is_some())
+    }
+
+    fn open_sync(&mut self) {
+        let Some(r) = self.sync_ref() else { return };
+        let opened = self.member().and_then(|(me, device)| TeamVault::open(&r.path, &r.root, &me, &device, self.known_heads(&r.id)));
+        match opened {
+            Ok(t) => self.personal = Some(t),
+            Err(e) => self.sync_state.0 = serde_json::to_value(&e).ok(),
+        }
+    }
+
+    /// Records changed here since the last sync.
+    fn has_unsynced(&self) -> bool {
+        let (Ok(s), Ok((me, _))) = (self.unlocked(), self.member()) else { return false };
+        personal::records_of(&s.vault, &me) != s.vault.sync_base
+    }
+
+    /// Writes what this device changed to the synced copy, then takes the synced
+    /// records as this device's own. Returns true if changes came from elsewhere.
+    fn merge_personal(&mut self) -> Result<bool> {
+        let me = self.member()?.0;
+        let sv = self.personal.as_mut().ok_or_else(|| not_found("sync"))?;
+        let s = self.state.as_mut().ok_or(Error::Locked)?;
+        sv.reload()?;
+        let local = personal::records_of(&s.vault, &me);
+        sv.apply(personal::changes(&s.vault.sync_base, &local))?;
+        // Acknowledgements are best effort.
+        let _ = sv.maintain();
+        let synced: BTreeMap<String, SyncRecord> = sv.all_records().into_iter().map(|(id, (coll, fields))| (id, SyncRecord { coll, fields })).collect();
+        let came_in = synced != local;
+        personal::adopt(&mut s.vault, &synced);
+        s.vault.sync_base = synced;
+        if let Some(r) = &s.vault.sync {
+            s.vault.team_heads.insert(r.id.clone(), sv.known_heads().clone());
+        }
+        self.write_vault()?;
+        Ok(came_in)
+    }
+
+    /// Remembers how the last sync went.
+    pub fn note_sync(&mut self, outcome: &Result<()>) {
+        match outcome {
+            Ok(()) => self.sync_state = (None, Some(now_ms())),
+            Err(e) => self.sync_state.0 = serde_json::to_value(e).ok(),
+        }
+    }
+
+    pub fn sync_status(&self) -> Result<SyncStatus> {
+        let r = self.unlocked()?.vault.sync.clone();
+        let (error, synced_at) = self.sync_state.clone();
+        Ok(SyncStatus {
+            enabled: r.is_some(),
+            location: r.as_ref().map(|r| r.remote.as_ref().map_or_else(|| r.path.clone(), |g| g.url.clone())),
+            git: r.as_ref().is_some_and(|r| r.remote.is_some()),
+            pending: r.as_ref().filter(|r| r.remote.is_some()).is_some_and(|r| mirror_of(r).pending().unwrap_or(false)),
+            error: if r.is_some() { error } else { None },
+            synced_at,
+            problems: self.personal.as_ref().map(|t| t.view().problems).unwrap_or_default(),
+        })
+    }
+
+    /// Re-reads the synced copy (opening it if it could not be opened before) and merges.
+    /// Returns true if this device's records changed.
+    pub fn sync_personal(&mut self) -> Result<bool> {
+        if self.sync_ref().is_none() {
+            return Err(not_found("sync"));
+        }
+        if self.personal.is_none() {
+            self.open_sync();
+        }
+        let merged = if self.personal.is_some() { self.merge_personal() } else { Err(self.sync_unavailable()) };
+        if merged.is_ok()
+            && let Some(r) = self.sync_ref()
+        {
+            personal::remove_expired(Path::new(&r.path));
+        }
+        match &merged {
+            // A repository counts as reached only once it was pulled and pushed.
+            Ok(_) if self.sync_is_git() => {}
+            Ok(_) => self.note_sync(&Ok(())),
+            Err(e) => self.sync_state.0 = serde_json::to_value(e).ok(),
+        }
+        merged
+    }
+
+    fn sync_unavailable(&self) -> Error {
+        self.sync_ref().map_or_else(|| not_found("sync"), |r| Error::Unavailable { path: r.path })
+    }
+
+    /// Starts syncing through an empty folder (or a new repository's local copy).
+    pub fn sync_enable(&mut self, path: &str, remote: Option<GitRemote>) -> Result<()> {
+        if self.unlocked()?.vault.sync.is_some() {
+            return Err(Error::AlreadyInitialized);
+        }
+        let (me, device) = self.member()?;
+        let t = TeamVault::create_personal(path, &me, &device)?;
+        self.attach(t, remote)
+    }
+
+    /// Creates a synced copy in `files` (a staging copy of a repository), keeping nothing open.
+    pub fn sync_create_files(&self, files: &Path) -> Result<()> {
+        let (me, device) = self.member()?;
+        TeamVault::create_personal(files, &me, &device)?;
+        Ok(())
+    }
+
+    /// Starts syncing with a vault this person's other devices use. `identity`
+    /// came from a pairing code or the recovery key and is the vault's creator.
+    /// This device's records join the ones already there.
+    pub fn sync_join(&mut self, path: &str, identity: &Identity, remote: Option<GitRemote>) -> Result<()> {
+        let v = &self.unlocked()?.vault;
+        if v.sync.is_some() {
+            return Err(Error::AlreadyInitialized);
+        }
+        let current = v.member_identity.as_ref().map(Identity::from_stored).transpose()?;
+        // Teams know this device by its identity: taking another one would lock it out of them.
+        if current.is_none_or(|c| c.public() != identity.public()) && !v.teams.is_empty() {
+            return Err(Error::SyncHasTeams);
+        }
+        let device = v.device_id.clone().ok_or(Error::Locked)?;
+        let meta = TeamVault::inspect_personal(path)?;
+        let t = TeamVault::open(path, &meta.root, identity, &device, self.known_heads(&meta.id))?;
+        self.vault_mut()?.member_identity = Some(identity.to_stored());
+        self.attach(t, remote)
+    }
+
+    /// Starts syncing with a vault this device just created elsewhere (a repository's staging copy).
+    pub fn sync_open(&mut self, path: &str, remote: GitRemote) -> Result<()> {
+        let me = self.member()?.0;
+        self.sync_join(path, &me, Some(remote))
+    }
+
+    fn attach(&mut self, t: TeamVault, remote: Option<GitRemote>) -> Result<()> {
+        let r = TeamRef { id: t.id().to_string(), path: t.path().display().to_string(), root: t.root().to_string(), remote };
+        let v = self.vault_mut()?;
+        v.sync = Some(r);
+        v.sync_base.clear();
+        self.personal = Some(t);
+        let merged = self.merge_personal().map(|_| ());
+        let reached = merged.is_ok();
+        self.note_sync(&merged);
+        if !reached {
+            self.write_vault()?;
+        }
+        merged
+    }
+
+    /// The folder, vault id and identity a pairing offer is made from.
+    pub fn sync_offer_parts(&self) -> Result<(PathBuf, String, Identity)> {
+        let r = self.sync_ref().ok_or_else(|| not_found("sync"))?;
+        Ok((PathBuf::from(&r.path), r.id, self.member()?.0))
+    }
+
+    /// This person's identity as a recovery key: joins a synced vault without another device.
+    pub fn sync_recovery_key(&self) -> Result<String> {
+        Ok(self.member()?.0.to_recovery_key())
+    }
+
+    /// Stops syncing on this device. Its records stay; the synced copy is untouched.
+    pub fn sync_disable(&mut self) -> Result<()> {
+        let v = self.vault_mut()?;
+        let Some(r) = v.sync.take() else { return Ok(()) };
+        v.sync_base.clear();
+        v.team_heads.remove(&r.id);
+        self.personal = None;
+        self.sync_state = (None, None);
+        self.write_vault()?;
+        if r.remote.is_some() {
+            let _ = std::fs::remove_dir_all(mirror_of(&r).files().parent().unwrap_or(Path::new(&r.path)));
+        }
+        Ok(())
+    }
+
+    /// The local copy and remote of a synced vault kept in Git; `None` for a folder.
+    pub fn sync_git_job(&self, trust_fingerprint: Option<String>) -> Result<Option<(Mirror, Remote)>> {
+        let r = self.sync_ref().ok_or_else(|| not_found("sync"))?;
+        match &r.remote {
+            None => Ok(None),
+            Some(remote) => Ok(Some((mirror_of(&r), self.git_remote(remote, trust_fingerprint)?))),
+        }
+    }
+
+    /// Forgets the pinned key of the sync repository's server, so a new one can be trusted.
+    pub fn sync_forget_host_key(&mut self) -> Result<()> {
+        let remote = self.sync_ref().and_then(|r| r.remote).ok_or_else(|| not_found("repository"))?;
+        let url = SshUrl::parse(&remote.url)?;
+        let ep = format!("{}:{}", url.host, url.port);
+        self.vault_mut()?.known_hosts.retain(|k| k.endpoint != ep);
+        ssh::close_pooled();
+        self.save()
+    }
+
+    /// Replaces the HTTPS token of the sync repository.
+    pub fn sync_set_token(&mut self, token: &str) -> Result<()> {
+        let v = self.vault_mut()?;
+        let remote = v.sync.as_mut().and_then(|r| r.remote.as_mut()).filter(|r| r.is_https()).ok_or_else(|| not_found("repository"))?;
+        remote.token = Some(token.trim().to_string()).filter(|t| !t.is_empty());
+        self.write_vault()
     }
 }
 

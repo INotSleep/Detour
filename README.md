@@ -5,7 +5,7 @@ a team shares hosts, keys and snippets through storage it already owns
 (a private Git repo or a shared folder). Everything is end-to-end encrypted
 to each member's key, and every change is signed. No accounts, no Detour cloud.
 
-> Status: early. The personal vault, keys, SSH sessions, tunnels, SFTP file browsing and team vaults over a shared folder or a Git repository (SSH or HTTPS) work; CI builds are next.
+> Status: early. The personal vault (synced between your devices), keys, SSH sessions, tunnels, SFTP file browsing and team vaults over a shared folder or a Git repository (SSH or HTTPS) work; CI builds are next.
 
 ## Layout
 
@@ -46,4 +46,5 @@ A team vault is a folder of signed, per-device, append-only logs, encrypted end 
 - [x] Team vaults over Git (SSH or HTTPS with a token), with Detour's own Git client
 - [x] Tunnels: local (`-L`), remote (`-R`) and SOCKS5 (`-D`) port forwarding over a kept SSH connection
 - [x] SFTP: browse, upload and download with progress and cancel, rename, delete; no half-written files on failure
+- [x] Personal vault sync between your devices through a folder or a Git repository, new devices added with a one-time code
 - [ ] CI builds for macOS, Windows, Linux
