@@ -640,6 +640,8 @@ impl TeamVault {
             // Also look at deleted records, so undoing a delete keeps the password.
             let kept = self.any_record::<Host>(&v.id).and_then(|h| h.password);
             let password = v.new_password.clone().filter(|p| !p.is_empty()).or(kept);
+            let kept_proxy = self.any_record::<Host>(&v.id).and_then(|h| h.proxy_password);
+            let proxy_password = v.new_proxy_password.clone().filter(|p| !p.is_empty()).or(kept_proxy);
             let host = Host {
                 id: v.id.clone(),
                 group: v.group.clone(),
@@ -651,16 +653,21 @@ impl TeamVault {
                 tags: v.tags.clone(),
                 last_connected: None,
                 password: if v.auth == Auth::Password { password } else { None },
+                proxy_password: if v.proxy.as_ref().and_then(Proxy::user).is_some() { proxy_password } else { None },
+                proxy: v.proxy.clone(),
             };
             let mut new = fields_of(&host, &["lastConnected"]);
-            // Members without the secret don't know the password: never overwrite it blindly.
+            // Members without the secret don't know the passwords: never overwrite them blindly.
             if self.level(&v.id) < Level::Secret && self.state.records.contains_key(&v.id) {
                 new.remove("password");
+                new.remove("proxyPassword");
             }
             let old_fields = old.map(|h| {
                 let mut f = fields_of(h, &["lastConnected"]);
-                if !new.contains_key("password") {
-                    f.remove("password");
+                for secret in ["password", "proxyPassword"] {
+                    if !new.contains_key(secret) {
+                        f.remove(secret);
+                    }
                 }
                 f
             });

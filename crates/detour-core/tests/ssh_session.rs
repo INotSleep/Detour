@@ -122,6 +122,8 @@ fn host(port: u16, auth: Auth) -> Host {
         tags: vec![],
         last_connected: None,
         password: None,
+        proxy: None,
+        proxy_password: None,
     }
 }
 
@@ -136,7 +138,7 @@ fn pinned(f: &Fixture) -> KnownHost {
 }
 
 fn req(host: Host, known: Option<KnownHost>) -> ConnectRequest {
-    ConnectRequest { host, key: None, secret: None, known, trust_fingerprint: None }
+    ConnectRequest { host, key: None, secret: None, known, trust_fingerprint: None, route: Default::default() }
 }
 
 async fn read_until(events: &mut tokio::sync::mpsc::UnboundedReceiver<SessionEvent>, needle: &str) -> String {
@@ -161,7 +163,7 @@ async fn first_connect_asks_to_trust_then_pins_and_runs_shell() {
     h.password = Some("pw".into());
 
     let fp = match ssh::connect(req(h.clone(), None), 80, 24).await {
-        Err(Error::HostKeyUnknown { fingerprint }) => fingerprint,
+        Err(Error::HostKeyUnknown { fingerprint, .. }) => fingerprint,
         other => panic!("expected HostKeyUnknown, got {:?}", other.err()),
     };
     assert_eq!(fp, pinned(&f).fingerprint);
@@ -169,7 +171,7 @@ async fn first_connect_asks_to_trust_then_pins_and_runs_shell() {
     let mut r = req(h, None);
     r.trust_fingerprint = Some(fp.clone());
     let mut c = ssh::connect(r, 100, 30).await.unwrap();
-    assert_eq!(c.new_known_host.as_ref().unwrap().fingerprint, fp);
+    assert_eq!(c.new_keys[0].fingerprint, fp);
     read_until(&mut c.events, "ready$ ").await;
     assert_eq!(f.seen.lock().unwrap().pty, Some((100, 30)));
 
@@ -202,7 +204,7 @@ async fn changed_host_key_is_refused() {
     known.fingerprint = other.public_key().fingerprint(Default::default()).to_string();
 
     match ssh::connect(req(host(f.port, Auth::Password), Some(known.clone())), 80, 24).await {
-        Err(Error::HostKeyChanged { expected, actual }) => {
+        Err(Error::HostKeyChanged { expected, actual, .. }) => {
             assert_eq!(expected, known.fingerprint);
             assert_eq!(actual, pinned(&f).fingerprint);
         }
@@ -228,7 +230,7 @@ async fn password_prompt_wrong_and_right() {
     let mut r = req(h, known);
     r.secret = Some("pw".into());
     let mut c = ssh::connect(r, 80, 24).await.unwrap();
-    assert!(c.new_known_host.is_none());
+    assert!(c.new_keys.is_empty());
     read_until(&mut c.events, "ready$ ").await;
 }
 
@@ -238,7 +240,7 @@ async fn key_with_passphrase_prompt_wrong_and_right() {
     let allowed = PublicKey::from_openssh(&entry.public_key).unwrap();
     let f = start_server(Some(allowed)).await;
     let h = host(f.port, Auth::Key { key_id: entry.id.clone() });
-    let mk = |secret: Option<&str>| ConnectRequest { host: h.clone(), key: Some(entry.clone()), secret: secret.map(str::to_string), known: Some(pinned(&f)), trust_fingerprint: None };
+    let mk = |secret: Option<&str>| ConnectRequest { host: h.clone(), key: Some(entry.clone()), secret: secret.map(str::to_string), known: Some(pinned(&f)), trust_fingerprint: None, route: Default::default() };
 
     assert!(matches!(ssh::connect(mk(None), 80, 24).await, Err(Error::NeedSecret { secret: SecretKind::Passphrase, .. })));
     assert!(matches!(ssh::connect(mk(Some("nope")), 80, 24).await, Err(Error::AuthFailed { secret: Some(SecretKind::Passphrase) })));
@@ -250,7 +252,7 @@ async fn key_with_passphrase_prompt_wrong_and_right() {
 async fn key_not_accepted_by_server_fails_cleanly() {
     let entry = keys::generate("k", KeyAlgorithm::Ed25519, None, false).unwrap();
     let f = start_server(None).await;
-    let r = ConnectRequest { host: host(f.port, Auth::Key { key_id: entry.id.clone() }), key: Some(entry), secret: None, known: Some(pinned(&f)), trust_fingerprint: None };
+    let r = ConnectRequest { host: host(f.port, Auth::Key { key_id: entry.id.clone() }), key: Some(entry), secret: None, known: Some(pinned(&f)), trust_fingerprint: None, route: Default::default() };
     assert!(matches!(ssh::connect(r, 80, 24).await, Err(Error::AuthFailed { secret: None })));
 }
 

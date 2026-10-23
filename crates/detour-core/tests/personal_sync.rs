@@ -24,7 +24,7 @@ fn device(tag: &str) -> Mutex<Store> {
 }
 
 fn host(id: &str, label: &str, auth: Auth) -> HostView {
-    HostView { id: id.into(), group: String::new(), label: label.into(), address: "10.0.0.7".into(), port: 22, user: "opsuser".into(), auth, tags: vec![], last_connected: None, has_password: false, new_password: None, own: None }
+    HostView { id: id.into(), group: String::new(), label: label.into(), address: "10.0.0.7".into(), port: 22, user: "opsuser".into(), auth, tags: vec![], last_connected: None, has_password: false, new_password: None, own: None, proxy: None, has_proxy_password: false, new_proxy_password: None }
 }
 
 /// The UI's edit: the current view with `f` applied.
@@ -66,7 +66,7 @@ async fn a_new_device_joins_with_a_code_and_both_merge() {
     // The desktop already had a host of its own and a pinned server key.
     let desktop = device("desktop");
     edit(&desktop, |u| u.hosts.push(host("h2", "web", Auth::Agent)));
-    desktop.lock().unwrap().record_connection("h2", Some(KnownHost { endpoint: "10.0.0.7:22".into(), key: "ssh-ed25519 AAAA".into(), fingerprint: "SHA256:x".into(), added_at: 1 })).unwrap();
+    desktop.lock().unwrap().record_connection("h2", vec![KnownHost { endpoint: "10.0.0.7:22".into(), key: "ssh-ed25519 AAAA".into(), fingerprint: "SHA256:x".into(), added_at: 1 }]).unwrap();
     assert_ne!(desktop.lock().unwrap().my_id().unwrap().detour_id, my_id);
 
     sync::join_folder_sync(&desktop, folder.clone(), code.code.to_lowercase().replace('-', " ")).await.unwrap();

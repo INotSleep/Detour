@@ -26,18 +26,18 @@ async fn main() {
     };
 
     let entry = keys::import("smoke", &std::fs::read_to_string(key_path).expect("key file"), None, false).expect("key");
-    let host = Host { id: "smoke".into(), group: String::new(), label: address.clone(), address, port, user: user.into(), auth: Auth::Key { key_id: entry.id.clone() }, tags: vec![], last_connected: None, password: None };
-    let mk = |trust: Option<String>| ConnectRequest { host: host.clone(), key: Some(entry.clone()), secret: None, known: None, trust_fingerprint: trust };
+    let host = Host { id: "smoke".into(), group: String::new(), label: address.clone(), address, port, user: user.into(), auth: Auth::Key { key_id: entry.id.clone() }, tags: vec![], last_connected: None, password: None, proxy: None, proxy_password: None };
+    let mk = |trust: Option<String>| ConnectRequest { host: host.clone(), key: Some(entry.clone()), secret: None, known: None, trust_fingerprint: trust, route: Default::default() };
 
     let fp = match ssh::connect(mk(None), 120, 30).await {
-        Err(Error::HostKeyUnknown { fingerprint }) => fingerprint,
+        Err(Error::HostKeyUnknown { fingerprint, .. }) => fingerprint,
         Err(e) => panic!("connect: {e} ({e:?})"),
         Ok(_) => unreachable!("an unpinned host must ask for trust first"),
     };
     println!("host key: {fp}");
 
     let mut c = ssh::connect(mk(Some(fp)), 120, 30).await.unwrap_or_else(|e| panic!("connect: {e} ({e:?})"));
-    println!("connected, pinned: {}", c.new_known_host.is_some());
+    println!("connected, pinned: {}", !c.new_keys.is_empty());
     c.handle.input(format!("{command}; exit\r").into_bytes());
 
     let mut out = Vec::new();

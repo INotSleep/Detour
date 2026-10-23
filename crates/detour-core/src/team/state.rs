@@ -42,7 +42,7 @@ impl Coll {
     /// Fields kept under the record's secret key.
     pub fn secret_fields(self) -> &'static [&'static str] {
         match self {
-            Coll::Host => &["password"],
+            Coll::Host => &["password", "proxyPassword"],
             Coll::Key => &["privateKey", "passphrase"],
             Coll::OwnLogin => &["password"],
             _ => &[],

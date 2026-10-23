@@ -24,7 +24,7 @@ fn temp_dir() -> PathBuf {
 }
 
 fn host(id: &str, label: &str) -> HostView {
-    HostView { id: id.into(), group: "g".into(), label: label.into(), address: "10.0.0.1".into(), port: 22, user: "root".into(), auth: Auth::Password, tags: vec![], last_connected: None, has_password: false, new_password: None, own: None }
+    HostView { id: id.into(), group: "g".into(), label: label.into(), address: "10.0.0.1".into(), port: 22, user: "root".into(), auth: Auth::Password, tags: vec![], last_connected: None, has_password: false, new_password: None, own: None, proxy: None, has_proxy_password: false, new_proxy_password: None }
 }
 
 fn with_password(mut h: HostView, pw: &str) -> HostView {

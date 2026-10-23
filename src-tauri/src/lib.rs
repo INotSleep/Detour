@@ -529,8 +529,8 @@ async fn session_open(app: State<'_, App>, args: OpenArgs, on_event: Channel<Inv
     let request = app.store.lock().map_err(poisoned)?.connect_request_in(&args.vault_id, &args.host_id, args.secret, args.trust_fingerprint)?;
     let connected = ssh::connect(request, args.cols, args.rows).await?;
 
-    let pinned_fingerprint = connected.new_known_host.as_ref().map(|k| k.fingerprint.clone());
-    app.store.lock().map_err(poisoned)?.record_connection_in(&args.vault_id, &args.host_id, connected.new_known_host)?;
+    let pinned_fingerprint = connected.pinned_fingerprint.clone();
+    app.store.lock().map_err(poisoned)?.record_connection_in(&args.vault_id, &args.host_id, connected.new_keys)?;
 
     let session_id = uuid_like();
     app.sessions.lock().map_err(poisoned)?.insert(session_id.clone(), connected.handle);

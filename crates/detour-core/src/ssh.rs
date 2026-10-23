@@ -27,9 +27,37 @@ pub struct ConnectRequest {
     /// Password or passphrase the user just typed, if any.
     pub secret: Option<String>,
     pub known: Option<KnownHost>,
-    /// Fingerprint the user agreed to trust for a host seen for the first time.
+    /// Fingerprints the user agreed to trust for hosts seen for the first time,
+    /// comma separated: this host's and those of hosts on the way.
     pub trust_fingerprint: Option<String>,
+    pub route: Route,
 }
+
+/// How the connection to a host is made.
+#[derive(Clone, Default)]
+pub enum Route {
+    #[default]
+    Direct,
+    /// A channel of an SSH connection to another host (`ssh -J`).
+    Jump(Box<ConnectRequest>),
+    Socks5 { address: String, port: u16, user: String, password: Option<String> },
+    Http { address: String, port: u16, user: String, password: Option<String> },
+}
+
+impl Route {
+    /// Tells kept connections apart by the way they were made.
+    fn key(&self) -> String {
+        match self {
+            Route::Direct => String::new(),
+            Route::Jump(j) => format!("|via {}", pool_key(j)),
+            Route::Socks5 { address, port, user, .. } => format!("|socks5 {user}@{address}:{port}"),
+            Route::Http { address, port, user, .. } => format!("|http {user}@{address}:{port}"),
+        }
+    }
+}
+
+/// Server keys trusted for the first time during a login, to pin.
+pub type NewKeys = Vec<KnownHost>;
 
 #[derive(Debug)]
 pub enum SessionEvent {
@@ -64,8 +92,10 @@ impl SessionHandle {
 pub struct Connected {
     pub handle: SessionHandle,
     pub events: mpsc::UnboundedReceiver<SessionEvent>,
-    /// Set when the server key was trusted for the first time and should be pinned.
-    pub new_known_host: Option<KnownHost>,
+    /// Server keys trusted for the first time, to pin.
+    pub new_keys: NewKeys,
+    /// The fingerprint of this host's own key, if it is among them.
+    pub pinned_fingerprint: Option<String>,
 }
 
 struct Client {
@@ -102,7 +132,7 @@ impl client::Handler for Client {
         *self.seen.lock().unwrap() = Some(key.clone());
         Ok(match &self.pinned {
             Some(pinned) => pinned.key_data() == key.key_data(),
-            None => self.trust_fingerprint.as_deref() == Some(fingerprint(&key).as_str()),
+            None => self.trust_fingerprint.as_deref().is_some_and(|t| t.split(',').any(|f| f == fingerprint(&key))),
         })
     }
 
@@ -135,8 +165,22 @@ fn connect_error(e: impl std::fmt::Display) -> Error {
     Error::Connect { message: e.to_string() }
 }
 
-/// Connects, checks the host key and authenticates.
-async fn open(req: &ConnectRequest) -> Result<(client::Handle<Client>, Option<KnownHost>, Forwards)> {
+/// Marks an error from the host a connection goes through as about that host.
+fn via(e: Error, id: &str) -> Error {
+    let id = Some(id.to_string());
+    match e {
+        Error::HostKeyUnknown { fingerprint, via: None } => Error::HostKeyUnknown { fingerprint, via: id },
+        Error::HostKeyChanged { expected, actual, via: None } => Error::HostKeyChanged { expected, actual, via: id },
+        Error::NeedSecret { .. } | Error::AuthFailed { secret: Some(_) } => Error::JumpNeedsLogin { via: id.unwrap_or_default() },
+        other => other,
+    }
+}
+
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Connects (through a jump host or proxy if the route says so), checks the host key and authenticates.
+/// Returns the connection, keys to pin, remote forwards, and a jump host's connection to keep open.
+async fn open(req: &ConnectRequest) -> Result<(client::Handle<Client>, NewKeys, Forwards, Option<Session>)> {
     let host = &req.host;
     let pinned = match &req.known {
         Some(k) => Some(PublicKey::from_openssh(&k.key).map_err(|e| Error::Internal { message: format!("pinned key: {e}") })?),
@@ -152,36 +196,64 @@ async fn open(req: &ConnectRequest) -> Result<(client::Handle<Client>, Option<Kn
         ..Default::default()
     });
 
-    let addr = (host.address.as_str(), host.port);
-    let connecting = tokio::time::timeout(Duration::from_secs(15), client::connect(config, addr, handler));
-    let mut session = match connecting.await {
-        Err(_) => return Err(Error::Unreachable { endpoint: endpoint(host) }),
-        Ok(Ok(s)) => s,
-        Ok(Err(russh::Error::UnknownKey)) => {
+    let mut new_keys = NewKeys::new();
+    let mut keep = None;
+    let unreachable = || Error::Unreachable { endpoint: endpoint(host) };
+    let connected = match &req.route {
+        Route::Direct => {
+            let addr = (host.address.as_str(), host.port);
+            tokio::time::timeout(CONNECT_TIMEOUT, client::connect(config, addr, handler)).await.map_err(|_| unreachable())?
+        }
+        Route::Jump(jump) => {
+            // The same answers to "trust this key?" hold on the way.
+            let mut jump = (**jump).clone();
+            jump.trust_fingerprint = req.trust_fingerprint.clone();
+            let (via_session, keys) = Box::pin(session(&jump)).await.map_err(|e| via(e, &jump.host.id))?;
+            // Its new key is pinned only if this login succeeds: until then, don't keep the
+            // connection for others, or the next attempt would reuse it and never report the key.
+            if !keys.is_empty() {
+                forget_pooled(&jump);
+            }
+            new_keys.extend(keys);
+            let from = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
+            let stream = via_session.connect_tcp(&host.address, host.port, from).await.map_err(|_| unreachable())?;
+            keep = Some(via_session);
+            tokio::time::timeout(CONNECT_TIMEOUT, client::connect_stream(config, stream, handler)).await.map_err(|_| unreachable())?
+        }
+        Route::Socks5 { address, port, user, password } | Route::Http { address, port, user, password } => {
+            let socks = matches!(req.route, Route::Socks5 { .. });
+            let tcp = async {
+                if socks {
+                    crate::proxy::socks5(address, *port, user, password.as_deref(), &host.address, host.port).await
+                } else {
+                    crate::proxy::http_connect(address, *port, user, password.as_deref(), &host.address, host.port).await
+                }
+            };
+            let tcp = tokio::time::timeout(CONNECT_TIMEOUT, tcp).await.map_err(|_| Error::Proxy { reason: "unreachable".into() })??;
+            tokio::time::timeout(CONNECT_TIMEOUT, client::connect_stream(config, tcp, handler)).await.map_err(|_| unreachable())?
+        }
+    };
+    let mut session = match connected {
+        Ok(s) => s,
+        Err(russh::Error::UnknownKey) => {
             let actual = seen.lock().unwrap().clone().ok_or_else(|| connect_error("server sent no host key"))?;
             return Err(match pinned {
-                Some(p) => Error::HostKeyChanged { expected: fingerprint(&p), actual: fingerprint(&actual) },
-                None => Error::HostKeyUnknown { fingerprint: fingerprint(&actual) },
+                Some(p) => Error::HostKeyChanged { expected: fingerprint(&p), actual: fingerprint(&actual), via: None },
+                None => Error::HostKeyUnknown { fingerprint: fingerprint(&actual), via: None },
             });
         }
-        Ok(Err(e)) => return Err(connect_error(e)),
+        Err(e) => return Err(connect_error(e)),
     };
 
-    let new_known_host = match (&req.known, seen.lock().unwrap().clone()) {
-        (None, Some(key)) => Some(KnownHost {
-            endpoint: endpoint(host),
-            key: key.to_openssh().map_err(connect_error)?,
-            fingerprint: fingerprint(&key),
-            added_at: now_ms(),
-        }),
-        _ => None,
-    };
+    if let (None, Some(key)) = (&req.known, seen.lock().unwrap().clone()) {
+        new_keys.push(KnownHost { endpoint: endpoint(host), key: key.to_openssh().map_err(connect_error)?, fingerprint: fingerprint(&key), added_at: now_ms() });
+    }
 
     if let Err(e) = authenticate(&mut session, req).await {
         let _ = session.disconnect(Disconnect::ByApplication, "", "en").await;
         return Err(e);
     }
-    Ok((session, new_known_host, forwards))
+    Ok((session, new_keys, forwards, keep))
 }
 
 /// A connection kept open for more commands (Git sync runs every few seconds, tunnels share it).
@@ -191,6 +263,8 @@ pub struct Session(Arc<SessionInner>);
 struct SessionInner {
     handle: client::Handle<Client>,
     forwards: Forwards,
+    /// The connection to a jump host this one goes through.
+    _via: Option<Session>,
 }
 
 impl Session {
@@ -248,7 +322,7 @@ fn pool_key(req: &ConnectRequest) -> String {
     };
     // A different pinned server key means a different server: never reuse.
     let pinned = req.known.as_ref().map(|k| k.fingerprint.as_str()).unwrap_or_default();
-    format!("{}@{}|{login}|{pinned}", h.user, endpoint(h))
+    format!("{}@{}|{login}|{pinned}{}", h.user, endpoint(h), req.route.key())
 }
 
 fn pooled(key: &str) -> Option<Session> {
@@ -284,28 +358,28 @@ async fn run(session: &Session, command: &str) -> Result<russh::ChannelStream<cl
 }
 
 /// A kept connection for this target and login, or a new one (then also kept).
-pub async fn session(req: &ConnectRequest) -> Result<(Session, Option<KnownHost>)> {
+pub async fn session(req: &ConnectRequest) -> Result<(Session, NewKeys)> {
     let key = pool_key(req);
     if let Some(session) = pooled(&key) {
-        return Ok((session, None));
+        return Ok((session, NewKeys::new()));
     }
-    let (handle, new_known_host, forwards) = open(req).await?;
-    let session = Session(Arc::new(SessionInner { handle, forwards }));
+    let (handle, new_keys, forwards, via) = open(req).await?;
+    let session = Session(Arc::new(SessionInner { handle, forwards, _via: via }));
     POOL.lock().unwrap_or_else(|e| e.into_inner()).insert(key, Pooled { session: session.clone(), used: Instant::now() });
-    Ok((session, new_known_host))
+    Ok((session, new_keys))
 }
 
 /// Runs a command, over a kept connection when there is one.
 pub async fn exec(req: &ConnectRequest, command: &str) -> Result<Exec> {
-    let (session, new_known_host) = session(req).await?;
+    let (session, new_keys) = session(req).await?;
     match run(&session, command).await {
-        Ok(stream) => Ok(Exec { stream, new_known_host, session }),
+        Ok(stream) => Ok(Exec { stream, new_known_host: new_keys.into_iter().last(), session }),
         // A kept connection the server dropped in the meantime: connect again.
-        Err(_) if new_known_host.is_none() => {
+        Err(_) if new_keys.is_empty() => {
             POOL.lock().unwrap_or_else(|e| e.into_inner()).remove(&pool_key(req));
-            let (session, new_known_host) = self::session(req).await?;
+            let (session, new_keys) = self::session(req).await?;
             let stream = run(&session, command).await?;
-            Ok(Exec { stream, new_known_host, session })
+            Ok(Exec { stream, new_known_host: new_keys.into_iter().last(), session })
         }
         Err(e) => Err(e),
     }
@@ -318,7 +392,7 @@ pub fn pooled_count_for(req: &ConnectRequest) -> usize {
 }
 
 pub async fn connect(req: ConnectRequest, cols: u32, rows: u32) -> Result<Connected> {
-    let (session, new_known_host, _) = open(&req).await?;
+    let (session, new_keys, _, via) = open(&req).await?;
     let channel = session.channel_open_session().await.map_err(connect_error)?;
     channel.request_pty(false, "xterm-256color", cols, rows, 0, 0, &[]).await.map_err(connect_error)?;
     channel.request_shell(false).await.map_err(connect_error)?;
@@ -346,9 +420,11 @@ pub async fn connect(req: ConnectRequest, cols: u32, rows: u32) -> Result<Connec
         }
         let _ = ev_tx.send(SessionEvent::Closed { exit_status });
         let _ = session.disconnect(Disconnect::ByApplication, "", "en").await;
+        drop(via);
     });
 
-    Ok(Connected { handle: SessionHandle { tx: cmd_tx }, events: ev_rx, new_known_host })
+    let pinned_fingerprint = new_keys.iter().find(|k| k.endpoint == endpoint(&req.host)).map(|k| k.fingerprint.clone());
+    Ok(Connected { handle: SessionHandle { tx: cmd_tx }, events: ev_rx, new_keys, pinned_fingerprint })
 }
 
 async fn authenticate(session: &mut client::Handle<Client>, req: &ConnectRequest) -> Result<()> {

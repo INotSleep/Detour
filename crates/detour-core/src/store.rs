@@ -243,9 +243,12 @@ impl Store {
                 let old = old_hosts.remove(&v.id);
                 // Login time is recorded by the core, never edited by a UI.
                 let last_connected = old.as_ref().and_then(|h| h.last_connected);
+                let kept_proxy = v.new_proxy_password.filter(|p| !p.is_empty()).or_else(|| old.as_ref().and_then(|h| h.proxy_password.clone()));
                 let kept = v.new_password.filter(|p| !p.is_empty()).or_else(|| old.and_then(|h| h.password)).or_else(|| trash_passwords.remove(&v.id));
                 Host {
                     password: if v.auth == Auth::Password { kept } else { None },
+                    proxy_password: if v.proxy.as_ref().and_then(Proxy::user).is_some() { kept_proxy } else { None },
+                    proxy: v.proxy,
                     last_connected,
                     id: v.id,
                     group: v.group,
@@ -327,21 +330,24 @@ impl Store {
 
     /// Everything a session needs to connect to a host, with secrets resolved.
     pub fn connect_request(&self, host_id: &str, secret: Option<String>, trust_fingerprint: Option<String>) -> Result<ssh::ConnectRequest> {
+        self.connect_request_in(PERSONAL, host_id, secret, trust_fingerprint)
+    }
+
+    /// A personal host's login, without the way to it.
+    fn personal_login(&self, host_id: &str) -> Result<(Host, Option<KeyEntry>)> {
         let v = &self.unlocked()?.vault;
         let host = v.hosts.iter().find(|h| h.id == host_id).ok_or_else(|| not_found("host"))?.clone();
         let key = match &host.auth {
             Auth::Key { key_id } => Some(v.keys.iter().find(|k| &k.id == key_id).ok_or_else(|| not_found("key"))?.clone()),
             _ => None,
         };
-        let endpoint = endpoint(&host);
-        let known = v.known_hosts.iter().find(|k| k.endpoint == endpoint).cloned();
-        Ok(ssh::ConnectRequest { host, key, secret, known, trust_fingerprint })
+        Ok((host, key))
     }
 
-    /// Records a successful login: pins a newly trusted host key and the time.
-    pub fn record_connection(&mut self, host_id: &str, new_known: Option<KnownHost>) -> Result<()> {
+    /// Records a successful login: pins newly trusted host keys and the time.
+    pub fn record_connection(&mut self, host_id: &str, new_keys: ssh::NewKeys) -> Result<()> {
         let vault = self.vault_mut()?;
-        if let Some(k) = new_known {
+        for k in new_keys {
             vault.known_hosts.retain(|x| x.endpoint != k.endpoint);
             vault.known_hosts.push(k);
         }
@@ -702,22 +708,35 @@ impl Store {
         Ok((host, key))
     }
 
+    /// Everything a connection to a host needs: its login, its pinned key, and the way
+    /// to it (a jump host of the same vault, with its own login, or a proxy).
     pub fn connect_request_in(&self, vault: &str, host_id: &str, secret: Option<String>, trust_fingerprint: Option<String>) -> Result<ssh::ConnectRequest> {
-        if vault == PERSONAL {
-            return self.connect_request(host_id, secret, trust_fingerprint);
-        }
-        let (host, key) = self.team_login(vault, host_id)?;
-        let ep = endpoint(&host);
-        let known = self.unlocked()?.vault.known_hosts.iter().find(|k| k.endpoint == ep).cloned();
-        Ok(ssh::ConnectRequest { host, key, secret, known, trust_fingerprint })
+        self.request_via(vault, host_id, secret, trust_fingerprint, &mut Vec::new())
     }
 
-    pub fn record_connection_in(&mut self, vault: &str, host_id: &str, new_known: Option<KnownHost>) -> Result<()> {
+    fn request_via(&self, vault: &str, host_id: &str, secret: Option<String>, trust_fingerprint: Option<String>, seen: &mut Vec<String>) -> Result<ssh::ConnectRequest> {
+        if seen.iter().any(|s| s == host_id) || seen.len() > 4 {
+            return Err(Error::JumpLoop);
+        }
+        seen.push(host_id.to_string());
+        let (host, key) = if vault == PERSONAL { self.personal_login(host_id)? } else { self.team_login(vault, host_id)? };
+        let ep = endpoint(&host);
+        let known = self.unlocked()?.vault.known_hosts.iter().find(|k| k.endpoint == ep).cloned();
+        let route = match host.proxy.clone() {
+            None => ssh::Route::Direct,
+            Some(Proxy::Jump { host_id: jump }) => ssh::Route::Jump(Box::new(self.request_via(vault, &jump, None, trust_fingerprint.clone(), seen)?)),
+            Some(Proxy::Socks5 { address, port, user }) => ssh::Route::Socks5 { address, port, user, password: host.proxy_password.clone() },
+            Some(Proxy::Http { address, port, user }) => ssh::Route::Http { address, port, user, password: host.proxy_password.clone() },
+        };
+        Ok(ssh::ConnectRequest { host, key, secret, known, trust_fingerprint, route })
+    }
+
+    pub fn record_connection_in(&mut self, vault: &str, host_id: &str, new_keys: ssh::NewKeys) -> Result<()> {
         if vault == PERSONAL {
-            return self.record_connection(host_id, new_known);
+            return self.record_connection(host_id, new_keys);
         }
         let v = self.vault_mut()?;
-        if let Some(k) = new_known {
+        for k in new_keys {
             v.known_hosts.retain(|x| x.endpoint != k.endpoint);
             v.known_hosts.push(k);
         }
@@ -1050,9 +1069,11 @@ impl Store {
             tags: vec![],
             last_connected: None,
             password: None,
+            proxy: None,
+            proxy_password: None,
         };
         let known = v.known_hosts.iter().find(|k| k.endpoint == endpoint(&host)).cloned();
-        Ok(Remote::Ssh { request: ssh::ConnectRequest { host, key, secret: None, known, trust_fingerprint }, path: url.path })
+        Ok(Remote::Ssh { request: ssh::ConnectRequest { host, key, secret: None, known, trust_fingerprint, route: ssh::Route::Direct }, path: url.path })
     }
 
     /// The local copy and remote of a Git team; `None` for a team in a folder.
@@ -1162,7 +1183,7 @@ mod tests {
     }
 
     fn host(id: &str, auth: Auth) -> HostView {
-        HostView { id: id.into(), group: "g".into(), label: id.into(), address: "127.0.0.1".into(), port: 22, user: "u".into(), auth, tags: vec![], last_connected: None, has_password: false, new_password: None, own: None }
+        HostView { id: id.into(), group: "g".into(), label: id.into(), address: "127.0.0.1".into(), port: 22, user: "u".into(), auth, tags: vec![], last_connected: None, has_password: false, new_password: None, own: None, proxy: None, has_proxy_password: false, new_proxy_password: None }
     }
 
     fn update(hosts: Vec<HostView>, keys: Vec<KeyView>) -> VaultUpdate {

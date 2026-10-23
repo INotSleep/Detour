@@ -26,8 +26,11 @@ export type CoreError =
   | { kind: "invalidKey"; reason: string }
   | { kind: "needSecret"; secret: SecretKind; prompt: string }
   | { kind: "authFailed"; secret: SecretKind | null }
-  | { kind: "hostKeyUnknown"; fingerprint: string }
-  | { kind: "hostKeyChanged"; expected: string; actual: string }
+  | { kind: "hostKeyUnknown"; fingerprint: string; via?: string }
+  | { kind: "hostKeyChanged"; expected: string; actual: string; via?: string }
+  | { kind: "jumpNeedsLogin"; via: string }
+  | { kind: "proxy"; reason: "unreachable" | "auth" | "refused" | "protocol" }
+  | { kind: "jumpLoop" }
   | { kind: "unreachable"; endpoint: string }
   | { kind: "connect" | "io" | "internal"; message: string }
   | { kind: "invalidId"; reason: string }
@@ -44,6 +47,9 @@ export type SecretKind = "password" | "passphrase";
 export function isCoreError(e: unknown): e is CoreError {
   return typeof e === "object" && e !== null && "kind" in e;
 }
+
+/** Fingerprints the user trusted during one login, for a host and the hosts on the way to it. */
+export const trustMore = (trusted: string | null | undefined, fingerprint: string) => (trusted ? `${trusted},${fingerprint}` : fingerprint);
 
 /** Human text for an error, for toasts and inline messages. */
 export function errorText(e: unknown): string {
@@ -79,6 +85,10 @@ export function errorText(e: unknown): string {
     case "forwardRefused": return `Сервер не разрешает открыть порт ${e.port}`;
     case "sftp": return e.message.endsWith("already exists") ? "Уже есть файл с таким именем" : e.message;
     case "cancelled": return "Отменено";
+    case "jumpNeedsLogin": return "Для промежуточного хоста нужен сохранённый пароль";
+    case "jumpLoop": return "Хосты подключаются друг через друга по кругу";
+    case "proxy":
+      return { unreachable: "Прокси не отвечает", auth: "Прокси не принял логин", refused: "Прокси не смог подключиться к хосту", protocol: "Прокси ответил непонятно" }[e.reason];
     case "connect": return e.message === "connection lost" ? "Соединение с сервером потеряно" : e.message;
     default: return e.message;
   }

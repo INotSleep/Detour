@@ -17,7 +17,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 
-use crate::model::{KnownHost, TunnelKind};
+use crate::model::TunnelKind;
 use crate::ssh::{self, ConnectRequest, RemoteForward, Session};
 use crate::{Error, Result};
 
@@ -131,7 +131,7 @@ impl Tunnels {
     }
 
     /// Opens a tunnel through the host `req` connects to. Returns a server key to pin, if new.
-    pub async fn start(&self, key: &str, spec: TunnelSpec, req: &ConnectRequest) -> Result<Option<KnownHost>> {
+    pub async fn start(&self, key: &str, spec: TunnelSpec, req: &ConnectRequest) -> Result<ssh::NewKeys> {
         self.stop(key);
         let target = match spec.kind {
             TunnelKind::Dynamic => None,

@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import {
   ArrowDown, ArrowUp, Check, ChevronDown, ChevronUp, Copy, Download, Ellipsis, File, FolderOpen, FolderPlus, FolderUp, Folder, House, KeyRound, Link2, Loader2, Pencil, RotateCw, ShieldAlert, ShieldQuestion, SquareTerminal, Trash2, Upload, X,
 } from "lucide-react";
-import { api, errorText, isCoreError, type FileEntry, type LocalFile, type SecretKind } from "../lib/api";
+import { api, errorText, isCoreError, trustMore, type FileEntry, type LocalFile, type SecretKind } from "../lib/api";
 import { copyText, plural, uid, useStore } from "../lib/store";
 import type { Host } from "../lib/types";
 import type { SessionStatus } from "../lib/fakeShell";
@@ -19,8 +19,8 @@ interface Props {
 type Phase =
   | { kind: "connecting" }
   | { kind: "secret"; secret: SecretKind; trust?: string; error?: string }
-  | { kind: "trust"; fingerprint: string }
-  | { kind: "changed"; expected: string; actual: string }
+  | { kind: "trust"; fingerprint: string; via?: string; trusted?: string }
+  | { kind: "changed"; expected: string; actual: string; via?: string; trusted?: string }
   | { kind: "failed"; error: string }
   | { kind: "ready"; id: string; home: string };
 
@@ -149,8 +149,8 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
       } catch (e) {
         if (isCoreError(e) && e.kind === "needSecret") return setPhase({ kind: "secret", secret: e.secret, trust: answer.trust });
         if (isCoreError(e) && e.kind === "authFailed" && answer.secret) return setPhase({ kind: "secret", secret: e.secret ?? "password", trust: answer.trust, error: errorText(e) });
-        if (isCoreError(e) && e.kind === "hostKeyUnknown") return setPhase({ kind: "trust", fingerprint: e.fingerprint });
-        if (isCoreError(e) && e.kind === "hostKeyChanged") return setPhase({ kind: "changed", expected: e.expected, actual: e.actual });
+        if (isCoreError(e) && e.kind === "hostKeyUnknown") return setPhase({ kind: "trust", fingerprint: e.fingerprint, via: e.via, trusted: answer.trust });
+        if (isCoreError(e) && e.kind === "hostKeyChanged") return setPhase({ kind: "changed", expected: e.expected, actual: e.actual, via: e.via, trusted: answer.trust });
         setPhase({ kind: "failed", error: errorText(e) });
       }
     },
@@ -786,7 +786,10 @@ function Gate({
 }) {
   const [value, setValue] = useState("");
   const [remember, setRemember] = useState(true);
-  const { toast } = useStore();
+  const { toast, ws } = useStore();
+  // A key on the way belongs to the jump host, not to this one.
+  const keyHost = (phase.kind === "trust" || phase.kind === "changed") && phase.via ? ws.hosts.find((h) => h.id === phase.via) : undefined;
+  const keyWhere = keyHost ? `${keyHost.label} · ${keyHost.address}:${keyHost.port}` : `${host.address}:${host.port}`;
   // A rejected password is typed again from scratch.
   useEffect(() => setValue(""), [phase]);
   const where = `${host.address}:${host.port}`;
@@ -848,14 +851,14 @@ function Gate({
         className="hostkey-card"
         onSubmit={(e) => {
           e.preventDefault();
-          connect({ trust: phase.fingerprint });
+          connect({ trust: trustMore(phase.trusted, phase.fingerprint) });
         }}
       >
         <div className="hostkey-head">
           <ShieldQuestion size={20} />
           <h2>Новый хост</h2>
         </div>
-        <div className="hostkey-host mono">{where}</div>
+        <div className="hostkey-host mono">{keyWhere}</div>
         <dl className="hostkey-fp">
           <dt>Отпечаток</dt>
           <dd className="mono">{phase.fingerprint}</dd>
@@ -874,7 +877,7 @@ function Gate({
         <ShieldAlert size={20} />
         <h2>Ключ хоста изменился</h2>
       </div>
-      <div className="hostkey-host mono">{where}</div>
+      <div className="hostkey-host mono">{keyWhere}</div>
       <dl className="hostkey-fp">
         <dt>Был</dt>
         <dd className="mono">{phase.expected}</dd>
@@ -887,8 +890,8 @@ function Gate({
           className="danger-text"
           onClick={async () => {
             try {
-              await api.hostForgetKey(host.vaultId, host.id);
-              connect({ trust: phase.actual });
+              await api.hostForgetKey(host.vaultId, phase.via ?? host.id);
+              connect({ trust: trustMore(phase.trusted, phase.actual) });
             } catch (e) {
               toast({ text: errorText(e), tone: "error" });
             }

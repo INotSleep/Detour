@@ -9,6 +9,7 @@ pub mod identity;
 pub mod keys;
 pub mod model;
 pub mod personal;
+pub mod proxy;
 pub mod sftp;
 pub mod ssh;
 pub mod store;
@@ -54,10 +55,29 @@ pub enum Error {
     NeedSecret { secret: SecretKind, prompt: String },
     #[error("authentication failed")]
     AuthFailed { secret: Option<SecretKind> },
+    /// `via`: the id of the host a connection goes through, when it is that host's key.
     #[error("unknown host key {fingerprint}")]
-    HostKeyUnknown { fingerprint: String },
+    HostKeyUnknown {
+        fingerprint: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        via: Option<String>,
+    },
     #[error("host key changed: expected {expected}, got {actual}")]
-    HostKeyChanged { expected: String, actual: String },
+    HostKeyChanged {
+        expected: String,
+        actual: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        via: Option<String>,
+    },
+    /// The host a connection goes through needs a password or passphrase saved for it.
+    #[error("the jump host needs a saved login")]
+    JumpNeedsLogin { via: String },
+    /// A SOCKS5 or HTTP proxy failed: `unreachable`, `auth`, `refused` (could not reach the host) or `protocol`.
+    #[error("proxy: {reason}")]
+    Proxy { reason: String },
+    /// Jump hosts that lead back to themselves, or too many of them.
+    #[error("jump hosts loop or nest too deep")]
+    JumpLoop,
     #[error("{endpoint} is not responding")]
     Unreachable { endpoint: String },
     #[error("no ssh-agent is running")]

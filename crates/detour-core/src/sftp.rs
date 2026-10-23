@@ -14,7 +14,6 @@ use serde::Serialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::watch;
 
-use crate::model::KnownHost;
 use crate::ssh::{self, ConnectRequest, Session};
 use crate::{Error, Result};
 
@@ -104,12 +103,12 @@ impl Files {
 
     /// Opens a file browser on the host `req` logs in to. Returns its id, the
     /// home directory, and a server key to pin if it was new.
-    pub async fn open(&self, req: &ConnectRequest) -> Result<(String, String, Option<KnownHost>)> {
+    pub async fn open(&self, req: &ConnectRequest) -> Result<(String, String, ssh::NewKeys)> {
         let (mut session, mut known) = ssh::session(req).await?;
         let stream = match session.subsystem("sftp").await {
             Ok(s) => s,
             // A kept connection the server closed in the meantime.
-            Err(_) if known.is_none() => {
+            Err(_) if known.is_empty() => {
                 ssh::forget_pooled(req);
                 (session, known) = ssh::session(req).await?;
                 session.subsystem("sftp").await?

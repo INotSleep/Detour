@@ -251,7 +251,7 @@ export function TerminalView({ host, active, initialCommand, onStatus, onExit, o
           onSplit={(dir) => onSplit?.(dir)}
         />
       )}
-      {question && <HostKeyCard host={host} question={question} />}
+      {question && <HostKeyCard host={ws.hosts.find((h) => h.id === question.via) ?? host} question={question} />}
     </div>
   );
 }
@@ -382,7 +382,7 @@ function HostKeyCard({ host, question }: { host: Host; question: Question }) {
           {changed ? <ShieldAlert size={20} /> : <ShieldQuestion size={20} />}
           <h2>{changed ? "Ключ хоста изменился" : "Новый хост"}</h2>
         </div>
-        <div className="hostkey-host mono">{host.address}:{host.port}</div>
+        <div className="hostkey-host mono">{question.via ? `${host.label} · ` : ""}{host.address}:{host.port}</div>
         {question.kind === "unknown" ? (
           <dl className="hostkey-fp">
             <dt>Отпечаток</dt>

@@ -3,13 +3,14 @@
 // host key decisions are delegated to the UI (an overlay with buttons).
 
 import type { Terminal } from "@xterm/xterm";
-import { api, errorText, isCoreError, type SecretKind } from "./api";
+import { api, errorText, isCoreError, trustMore, type SecretKind } from "./api";
 import type { SessionStatus } from "./fakeShell";
 import type { Host } from "./types";
 
 const C = { reset: "\x1b[0m", dim: "\x1b[2m", red: "\x1b[31m" };
 
-export type HostKeyQuestion = { kind: "unknown"; fingerprint: string } | { kind: "changed"; expected: string; actual: string };
+/** `via`: the id of the host on the way whose key it is. */
+export type HostKeyQuestion = ({ kind: "unknown"; fingerprint: string } | { kind: "changed"; expected: string; actual: string }) & { via?: string };
 /** `trust` for an unknown key, `replace` for a changed one, `cancel` otherwise. */
 export type HostKeyAnswer = "trust" | "replace" | "cancel";
 
@@ -87,7 +88,7 @@ export function runRealSession(term: Terminal, host: Host, opts: Options): () =>
       }
       if (opts.initialCommand && !commandSent) {
         commandSent = true;
-        void api.sessionInput(sessionId, `${opts.initialCommand}\r`);
+        void send(`${opts.initialCommand}\r`);
       }
     } catch (e) {
       if (disposed) return;
@@ -99,19 +100,19 @@ export function runRealSession(term: Terminal, host: Host, opts: Options): () =>
     if (!isCoreError(e)) return fail(errorText(e));
     switch (e.kind) {
       case "hostKeyUnknown": {
-        const answer = await opts.askHostKey({ kind: "unknown", fingerprint: e.fingerprint });
+        const answer = await opts.askHostKey({ kind: "unknown", fingerprint: e.fingerprint, via: e.via });
         if (disposed) return;
         if (answer !== "trust") return fail("Подключение отменено");
-        trust = e.fingerprint;
+        trust = trustMore(trust, e.fingerprint);
         return open();
       }
       case "hostKeyChanged": {
-        const answer = await opts.askHostKey({ kind: "changed", expected: e.expected, actual: e.actual });
+        const answer = await opts.askHostKey({ kind: "changed", expected: e.expected, actual: e.actual, via: e.via });
         if (disposed) return;
         if (answer !== "replace") return fail("Подключение отменено: ключ хоста изменился");
-        await api.hostForgetKey(host.vaultId, host.id);
+        await api.hostForgetKey(host.vaultId, e.via ?? host.id);
         // The user just saw the new key: trust it without asking again.
-        trust = e.actual;
+        trust = trustMore(trust, e.actual);
         return open();
       }
       case "needSecret":
@@ -133,9 +134,26 @@ export function runRealSession(term: Terminal, host: Host, opts: Options): () =>
     }
   };
 
+  // Keystrokes go out one call at a time, in order: separate calls could overtake each other.
+  // What is typed while a call is on its way goes with the next one.
+  let pending = "";
+  let sending = false;
+  async function send(d: string) {
+    pending += d;
+    if (sending) return;
+    sending = true;
+    while (pending && sessionId) {
+      const chunk = pending;
+      pending = "";
+      await api.sessionInput(sessionId, chunk).catch(() => {});
+    }
+    pending = "";
+    sending = false;
+  }
+
   const data = term.onData((d) => {
     if (mode === "live" && sessionId) {
-      void api.sessionInput(sessionId, d);
+      void send(d);
       return;
     }
     if (mode === "secret") {

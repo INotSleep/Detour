@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { ArrowLeftRight, ArrowRight, Copy, Ellipsis, Globe, Laptop, Loader2, Pencil, Plus, RotateCw, Server, ShieldQuestion, Trash2, type LucideIcon } from "lucide-react";
-import { api, errorText, isCoreError, type SecretKind } from "../lib/api";
+import { api, errorText, isCoreError, trustMore, type SecretKind } from "../lib/api";
 import { copyText, plural, sleep, uid, useStore } from "../lib/store";
 import type { Host, Tunnel } from "../lib/types";
 import { atLeast, writable } from "../lib/teams";
@@ -58,8 +58,8 @@ function endpoint(t: Tunnel) {
 /** What a tunnel's login asks the user for. */
 type Ask =
   | { kind: "secret"; tunnel: Tunnel; secret: SecretKind; text: string; trust?: string; error?: string }
-  | { kind: "trust"; tunnel: Tunnel; fingerprint: string; host: string }
-  | { kind: "changed"; tunnel: Tunnel; expected: string; actual: string; host: string };
+  | { kind: "trust"; tunnel: Tunnel; fingerprint: string; host: string; trusted?: string }
+  | { kind: "changed"; tunnel: Tunnel; expected: string; actual: string; host: string; keyHostId: string; trusted?: string };
 
 interface Answer {
   secret?: string;
@@ -132,11 +132,13 @@ export function TunnelsView() {
       }
       if (isCoreError(e) && e.kind === "hostKeyUnknown") {
         patch(t.id, { state: "off" });
-        return setAsk({ kind: "trust", tunnel: t, fingerprint: e.fingerprint, host: via ? `${via.address}:${via.port}` : "" });
+        const keyHost = e.via ? latest.current.hosts.find((h) => h.id === e.via) : via;
+        return setAsk({ kind: "trust", tunnel: t, fingerprint: e.fingerprint, host: keyHost ? `${keyHost.address}:${keyHost.port}` : "", trusted: answer.trust });
       }
       if (isCoreError(e) && e.kind === "hostKeyChanged") {
         patch(t.id, { state: "error", error: errorText(e) });
-        return setAsk({ kind: "changed", tunnel: t, expected: e.expected, actual: e.actual, host: via ? `${via.address}:${via.port}` : "" });
+        const keyHost = e.via ? latest.current.hosts.find((h) => h.id === e.via) : via;
+        return setAsk({ kind: "changed", tunnel: t, expected: e.expected, actual: e.actual, host: keyHost ? `${keyHost.address}:${keyHost.port}` : "", keyHostId: e.via ?? t.viaHostId, trusted: answer.trust });
       }
       patch(t.id, { state: "error", error: errorText(e) });
     }
@@ -246,7 +248,7 @@ export function TunnelsView() {
           onClose={() => setAsk(null)}
           onTrust={() => {
             setAsk(null);
-            void start(ask.tunnel, { trust: ask.fingerprint });
+            void start(ask.tunnel, { trust: trustMore(ask.trusted, ask.fingerprint) });
           }}
         />
       )}
@@ -258,8 +260,8 @@ export function TunnelsView() {
           onReplace={async () => {
             setAsk(null);
             try {
-              await api.hostForgetKey(ask.tunnel.vaultId, ask.tunnel.viaHostId);
-              void start(ask.tunnel, { trust: ask.actual });
+              await api.hostForgetKey(ask.tunnel.vaultId, ask.keyHostId);
+              void start(ask.tunnel, { trust: trustMore(ask.trusted, ask.actual) });
             } catch (e) {
               toast({ text: errorText(e), tone: "error" });
             }

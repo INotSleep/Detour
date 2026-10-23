@@ -215,8 +215,8 @@ export default function App() {
             if (syncOn) afterPersonalEdit();
             // A typed password is now in the vault: drop it from UI memory without another save.
             const base = wsRef.current;
-            if (!base || !data.hosts.some((h) => h.newPassword)) return;
-            const next = { ...base, hosts: base.hosts.map(({ newPassword: _p, ...h }) => h) };
+            if (!base || !data.hosts.some((h) => h.newPassword || h.newProxyPassword)) return;
+            const next = { ...base, hosts: base.hosts.map(({ newPassword: _p, newProxyPassword: _q, ...h }) => h) };
             lastSaved.current.set(v.id, JSON.stringify(dataOf(next, v.id)));
             wsRef.current = next;
             setWs((cur) => (cur === base ? next : cur));

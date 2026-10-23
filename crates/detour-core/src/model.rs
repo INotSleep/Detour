@@ -22,6 +22,28 @@ pub enum Auth {
     Agent,
 }
 
+/// How a host is reached when not directly.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum Proxy {
+    /// Through another host of the same vault (`ssh -J`).
+    Jump { host_id: String },
+    Socks5 {
+        address: String,
+        port: u16,
+        /// Empty for none; the password is the host's `proxy_password`.
+        #[serde(default)]
+        user: String,
+    },
+    /// An HTTP proxy that tunnels with `CONNECT`.
+    Http {
+        address: String,
+        port: u16,
+        #[serde(default)]
+        user: String,
+    },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Host {
@@ -39,6 +61,11 @@ pub struct Host {
     /// Saved password for `Auth::Password`; `None` = ask every time.
     #[serde(default)]
     pub password: Option<String>,
+    #[serde(default)]
+    pub proxy: Option<Proxy>,
+    /// Password for a SOCKS5 or HTTP proxy with a user.
+    #[serde(default)]
+    pub proxy_password: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,6 +90,13 @@ pub struct HostView {
     /// Team hosts: this person's own login, used instead of the shared one.
     #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
     pub own: Option<OwnLoginView>,
+    #[serde(default)]
+    pub proxy: Option<Proxy>,
+    #[serde(default)]
+    pub has_proxy_password: bool,
+    /// Incoming only: a proxy password typed in the UI to save with this edit.
+    #[serde(default, skip_serializing)]
+    pub new_proxy_password: Option<String>,
 }
 
 /// A member's own login for a team host, kept in their personal vault.
@@ -88,6 +122,16 @@ pub struct OwnLoginView {
     pub new_password: Option<String>,
 }
 
+impl Proxy {
+    /// The user a SOCKS5 or HTTP proxy is logged in to with, if any.
+    pub fn user(&self) -> Option<&str> {
+        match self {
+            Proxy::Socks5 { user, .. } | Proxy::Http { user, .. } if !user.is_empty() => Some(user),
+            _ => None,
+        }
+    }
+}
+
 impl From<&OwnLogin> for OwnLoginView {
     fn from(o: &OwnLogin) -> Self {
         Self { user: o.user.clone(), auth: o.auth.clone(), has_password: o.password.is_some(), new_password: None }
@@ -109,6 +153,9 @@ impl From<&Host> for HostView {
             has_password: h.password.is_some(),
             new_password: None,
             own: None,
+            proxy: h.proxy.clone(),
+            has_proxy_password: h.proxy_password.is_some(),
+            new_proxy_password: None,
         }
     }
 }
@@ -304,6 +351,8 @@ mod tests {
             tags: vec![],
             last_connected: None,
             password: Some("secret".into()),
+            proxy: None,
+            proxy_password: None,
         };
         let json = serde_json::to_string(&HostView::from(&host)).unwrap();
         assert!(!json.contains("secret"));

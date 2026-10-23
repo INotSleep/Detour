@@ -86,11 +86,22 @@ export interface Host {
   access?: Level;
   /** Team only: your own login, used instead of the shared one. */
   own?: OwnLogin;
+  /** How the host is reached when not directly. */
+  proxy?: Proxy | null;
+  /** A proxy password is saved in the vault. */
+  hasProxyPassword?: boolean;
+  /** Transient: a proxy password just typed in, sent with the next save. */
+  newProxyPassword?: string;
   /** mock: demo hosts only */
   os?: Os;
   /** mock: demo hosts only; real reachability is known only when connecting */
   online?: boolean;
 }
+
+/** detour_core::model::Proxy */
+export type Proxy =
+  | { type: "jump"; hostId: string }
+  | { type: "socks5" | "http"; address: string; port: number; user: string };
 
 /** A person's own login for a team host, kept in their personal vault. */
 export interface OwnLogin {

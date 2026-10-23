@@ -7,7 +7,7 @@ import { HostIcon, authLabel } from "./common";
 import { atLeast, writable } from "../lib/teams";
 import { OwnLoginSection, SavedPassword } from "./HostLogin";
 import { Button, Empty, IconButton, Menu, Modal, PageHeader } from "./ui";
-import { HostFields, applyDraft, draftErrors, draftFromHost, emptyDraft, useHostDraft } from "./HostForm";
+import { HostFields, applyDraft, draftFromHost, draftInvalid, emptyDraft, useHostDraft } from "./HostForm";
 
 export function HostsView() {
   const { ws, vault, update, toast, connect, openFiles, resolveConflicts } = useStore();
@@ -186,8 +186,8 @@ function HostPanel({ host, groups, onClose, onDelete, onCopy }: { host: Host; gr
   const initial = draftFromHost(host);
   const { draft, set, setDraft, touched, setTouched } = useHostDraft(initial);
   const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
-  const errors = draftErrors(draft);
-  const invalid = !!(errors.address || errors.port);
+  const invalid = draftInvalid(draft);
+  const jumpHosts = ws.hosts.filter((h) => h.vaultId === vault.id && h.id !== host.id);
 
   const save = () => {
     setTouched(true);
@@ -244,7 +244,7 @@ function HostPanel({ host, groups, onClose, onDelete, onCopy }: { host: Host; gr
         onKeyDown={(e) => e.key === "Escape" && dirty && (e.stopPropagation(), setDraft(initial))}
       >
         {canEdit ? (
-          <HostFields draft={draft} set={set} keys={keys} groups={groups} showErrors={touched} passwordSaved={host.hasPassword} onForgetPassword={forgetPassword} savedPassword={host.hasPassword ? <SavedPassword host={host} /> : null} />
+          <HostFields draft={draft} set={set} keys={keys} groups={groups} showErrors={touched} passwordSaved={host.hasPassword} onForgetPassword={forgetPassword} savedPassword={host.hasPassword ? <SavedPassword host={host} /> : null} jumpHosts={jumpHosts} proxyPasswordSaved={host.hasProxyPassword} />
         ) : (
           <HostDetails host={host} shared={shared} keyName={keys.find((k) => host.auth.type === "key" && k.id === host.auth.keyId)?.name} />
         )}
@@ -279,6 +279,9 @@ function HostPanel({ host, groups, onClose, onDelete, onCopy }: { host: Host; gr
 
 /** What a member who may not edit the host sees of it. */
 function HostDetails({ host, shared, keyName }: { host: Host; shared: boolean; keyName?: string }) {
+  const { ws } = useStore();
+  const p = host.proxy;
+  const via = p?.type === "jump" ? ws.hosts.find((h) => h.id === p.hostId)?.label ?? "?" : p ? `${p.type === "socks5" ? "SOCKS5" : "HTTP"} ${p.address}:${p.port}` : null;
   return (
     <dl className="meta details">
       <dt>Адрес</dt>
@@ -297,6 +300,12 @@ function HostDetails({ host, shared, keyName }: { host: Host; shared: boolean; k
           <dd><SavedPassword host={host} /></dd>
         </>
       )}
+      {via && (
+        <>
+          <dt>Через</dt>
+          <dd className="mono">{via}</dd>
+        </>
+      )}
       <dt>Группа</dt>
       <dd>{host.group}</dd>
       {host.tags.length > 0 && (
@@ -313,11 +322,11 @@ function NewHostDialog({ groups, onClose, onCreated }: { groups: string[]; onClo
   const { ws, vault, update, toast, connect } = useStore();
   const keys = ws.keys.filter((k) => k.vaultId === vault.id);
   const { draft, set, touched, setTouched } = useHostDraft(emptyDraft(keys, groups[0] ?? ""));
-  const errors = draftErrors(draft);
+  const jumpHosts = ws.hosts.filter((h) => h.vaultId === vault.id);
 
   const submit = () => {
     setTouched(true);
-    if (errors.address || errors.port) return;
+    if (draftInvalid(draft)) return;
     const host: Host = withPassword(
       {
         id: uid("h"),
@@ -347,7 +356,7 @@ function NewHostDialog({ groups, onClose, onCreated }: { groups: string[]; onClo
         </>
       }
     >
-      <HostFields draft={draft} set={set} keys={keys} groups={groups} showErrors={touched} />
+      <HostFields draft={draft} set={set} keys={keys} groups={groups} showErrors={touched} jumpHosts={jumpHosts} />
     </Modal>
   );
 }
