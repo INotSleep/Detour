@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeftRight, Code, FolderOpen, KeyRound, Plus, Server, Settings as SettingsIcon, Users, X } from "lucide-react";
 import { api, errorText, fromView, type CoreInfo, type SyncInfo, type TeamView, type VaultView } from "./lib/api";
-import { applyTeamEntries, applyTeamView, dataOf, writable } from "./lib/teams";
+import { applyTeamEntries, applyTeamView, dataOf, removeVault, writable } from "./lib/teams";
 import { mockWorkspace } from "./lib/mockData";
 import { StoreContext, uid, type Section, type Store } from "./lib/store";
 import type { Settings, Workspace } from "./lib/types";
@@ -168,6 +168,16 @@ export default function App() {
     setWs((cur) => (cur === base ? next : cur));
   }, []);
 
+  /** Takes the list of teams from the core again: teams joined or left on another device. */
+  const refreshTeams = useCallback(async () => {
+    const entries = await api.teamsList();
+    setWs((w) => {
+      if (!w) return w;
+      const left = w.vaults.filter((v) => v.kind === "team" && !entries.some((e) => e.id === v.id));
+      return applyTeamEntries(left.reduce((acc, v) => removeVault(acc, v.id), w), entries);
+    });
+  }, []);
+
   // The personal vault's sync: its state, and a sync every 20 seconds while it is on.
   useEffect(() => {
     if (phase === "ready") api.syncStatus().then(setSync).catch(() => {});
@@ -180,13 +190,16 @@ export default function App() {
         .syncNow()
         .then((r) => {
           setSync(r.status);
-          if (r.changed) void refreshPersonal();
+          if (r.changed) {
+            void refreshPersonal();
+            void refreshTeams();
+          }
         })
         .catch(() => {});
     void run();
     const timer = setInterval(run, 20_000);
     return () => clearInterval(timer);
-  }, [phase, syncOn, refreshPersonal]);
+  }, [phase, syncOn, refreshPersonal, refreshTeams]);
   // After an edit the core merges and sends it; look at the outcome once it had time to go out.
   const syncCheck = useRef<ReturnType<typeof setTimeout>>(undefined);
   const afterPersonalEdit = useCallback(() => {

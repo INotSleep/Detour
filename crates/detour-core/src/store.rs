@@ -47,6 +47,8 @@ pub struct Store {
     git_status: BTreeMap<String, (Option<serde_json::Value>, Option<Millis>)>,
     /// The synced copy of the personal vault, when sync is on and its storage could be opened.
     personal: Option<TeamVault>,
+    /// Teams from other devices that could not be joined here, with why (a serialized `Error`).
+    link_errors: BTreeMap<String, serde_json::Value>,
     /// How syncing the personal vault last went: failure (a serialized `Error`) and last success.
     sync_state: (Option<serde_json::Value>, Option<Millis>),
 }
@@ -114,6 +116,7 @@ impl Store {
             git_status: BTreeMap::new(),
             personal: None,
             sync_state: (None, None),
+            link_errors: BTreeMap::new(),
         }
     }
 
@@ -202,6 +205,7 @@ impl Store {
 
     /// Writes the vault file; with sync on, what changed goes to the synced copy first.
     fn save(&mut self) -> Result<()> {
+        self.refresh_team_links();
         if self.personal.is_some() && self.has_unsynced() {
             let merged = self.merge_personal().map(|_| ());
             // A repository is reached later, in the background; a folder is reached now.
@@ -541,14 +545,22 @@ impl Store {
         self.after_team(&id)
     }
 
-    /// Forgets a team on this device (the shared vault is untouched).
+    /// Leaves a team on this device and, with sync on, on this person's other devices
+    /// (the shared vault is untouched).
     pub fn leave_team(&mut self, id: &str) -> Result<()> {
+        self.vault_mut()?.team_links.retain(|l| l.team_id != id);
+        self.link_errors.remove(id);
+        self.forget_team(id)?;
+        self.save()
+    }
+
+    /// Takes a team off this device only.
+    fn forget_team(&mut self, id: &str) -> Result<()> {
         let gone: Vec<TeamRef> = self.unlocked()?.vault.teams.iter().filter(|t| t.id == id).cloned().collect();
         self.vault_mut()?.teams.retain(|t| t.id != id);
         self.teams.remove(id);
         self.team_errors.remove(id);
         self.git_status.remove(id);
-        self.save()?;
         // A Git team's local copy is only a cache of the repository.
         for r in gone.iter().filter(|r| r.remote.is_some()) {
             let _ = std::fs::remove_dir_all(mirror_of(r).files().parent().unwrap_or(Path::new(&r.path)));
@@ -844,10 +856,14 @@ impl Store {
         let _ = sv.maintain();
         let synced: BTreeMap<String, SyncRecord> = sv.all_records().into_iter().map(|(id, (coll, fields))| (id, SyncRecord { coll, fields })).collect();
         let came_in = synced != local;
-        personal::adopt(&mut s.vault, &synced);
+        let gone = personal::adopt(&mut s.vault, &synced);
         s.vault.sync_base = synced;
         if let Some(r) = &s.vault.sync {
             s.vault.team_heads.insert(r.id.clone(), sv.known_heads().clone());
+        }
+        // Left on another device: leave here too.
+        for id in gone {
+            self.forget_team(&id)?;
         }
         self.write_vault()?;
         Ok(came_in)
@@ -1469,5 +1485,88 @@ impl Store {
     pub fn ssh_import(&mut self, aliases: &[String], known_hosts: bool) -> Result<ImportResult> {
         let ssh = crate::import::ssh_dir().ok_or_else(|| not_found("home folder"))?;
         self.ssh_import_from(&ssh, aliases, known_hosts)
+    }
+}
+
+/* ---------- teams on this person's other devices ---------- */
+
+/// A team joined on another device of this person and not here (yet).
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingTeam {
+    pub team_id: String,
+    pub name: String,
+    pub root: String,
+    /// The repository of a team in Git, which is joined here by itself; otherwise a folder is asked for.
+    pub url: Option<String>,
+    /// Why joining it here failed (a serialized `Error`).
+    pub error: Option<serde_json::Value>,
+}
+
+impl Store {
+    /// Keeps the shared list of teams in step with the teams joined here: each team's
+    /// name, creator and repository. Links of teams not joined here stay as they are.
+    fn refresh_team_links(&mut self) {
+        let Some(s) = self.state.as_mut() else { return };
+        let v = &mut s.vault;
+        for t in &v.teams {
+            let name = self.teams.get(&t.id).map(|tv| tv.name().to_string()).filter(|n| !n.is_empty());
+            let old = v.team_links.iter().position(|l| l.team_id == t.id);
+            let link = TeamLink {
+                team_id: t.id.clone(),
+                name: name.or_else(|| old.map(|i| v.team_links[i].name.clone())).unwrap_or_default(),
+                root: t.root.clone(),
+                url: t.remote.as_ref().map(|r| r.url.clone()),
+                auth: t.remote.as_ref().map(|r| r.auth.clone()),
+                token: t.remote.as_ref().and_then(|r| r.token.clone()),
+            };
+            match old {
+                Some(i) if v.team_links[i] != link => v.team_links[i] = link,
+                Some(_) => {}
+                None => v.team_links.push(link),
+            }
+        }
+    }
+
+    /// Teams on this person's other devices that are not joined here.
+    pub fn pending_teams(&self) -> Result<Vec<PendingTeam>> {
+        let v = &self.unlocked()?.vault;
+        Ok(v.team_links
+            .iter()
+            .filter(|l| !v.teams.iter().any(|t| t.id == l.team_id))
+            .map(|l| PendingTeam { team_id: l.team_id.clone(), name: l.name.clone(), root: l.root.clone(), url: l.url.clone(), error: self.link_errors.get(&l.team_id).cloned() })
+            .collect())
+    }
+
+    /// The remote and creator of a team in Git to join here, from its link.
+    pub fn pending_git_teams(&self) -> Result<Vec<(String, String, GitRemote)>> {
+        let v = &self.unlocked()?.vault;
+        Ok(v.team_links
+            .iter()
+            .filter(|l| !v.teams.iter().any(|t| t.id == l.team_id))
+            .filter_map(|l| Some((l.team_id.clone(), l.root.clone(), GitRemote { url: l.url.clone()?, auth: l.auth.clone().unwrap_or(Auth::Agent), token: l.token.clone() })))
+            .collect())
+    }
+
+    pub fn note_link_error(&mut self, team_id: &str, e: Option<&Error>) {
+        match e {
+            Some(e) => {
+                self.link_errors.insert(team_id.to_string(), serde_json::to_value(e).unwrap_or_default());
+            }
+            None => {
+                self.link_errors.remove(team_id);
+            }
+        }
+    }
+
+    /// Joins, in a folder of this device, a team joined on another device.
+    pub fn join_linked_team(&mut self, team_id: &str, path: &str) -> Result<TeamView> {
+        let link = self.unlocked()?.vault.team_links.iter().find(|l| l.team_id == team_id).cloned().ok_or_else(|| not_found("team"))?;
+        if TeamVault::inspect(path)?.id != team_id {
+            return Err(Error::NotATeamVault);
+        }
+        let view = self.join_team(path, &link.root)?;
+        self.link_errors.remove(team_id);
+        Ok(view)
     }
 }

@@ -107,6 +107,9 @@ pub fn records_of(v: &VaultData, me: &Identity) -> BTreeMap<String, SyncRecord> 
     for k in &v.known_hosts {
         put(derived_id(me, "known", &k.endpoint), Coll::KnownHost, fields_of(k, &[]));
     }
+    for l in &v.team_links {
+        put(derived_id(me, "team", &l.team_id), Coll::TeamLink, fields_of(l, &[]));
+    }
     for (key, o) in &v.team_own {
         let mut f = fields_of(o, &[]);
         f.insert("key".into(), Value::String(key.clone()));
@@ -147,7 +150,11 @@ fn of<T: serde::de::DeserializeOwned>(records: &BTreeMap<String, SyncRecord>, co
 }
 
 /// Makes the synced records this device's records, keeping what never syncs.
-pub fn adopt(v: &mut VaultData, records: &BTreeMap<String, SyncRecord>) {
+/// Returns the teams taken off by another device (to leave here as well).
+pub fn adopt(v: &mut VaultData, records: &BTreeMap<String, SyncRecord>) -> Vec<String> {
+    let links: Vec<TeamLink> = records.values().filter(|r| r.coll == Coll::TeamLink).filter_map(|r| serde_json::from_value(Value::Object(r.fields.clone().into_iter().collect())).ok()).collect();
+    let gone: Vec<String> = v.team_links.iter().filter(|old| !links.iter().any(|l| l.team_id == old.team_id)).map(|l| l.team_id.clone()).collect();
+    v.team_links = merged(&v.team_links, links, |l| l.team_id.clone());
     let last: BTreeMap<String, Option<Millis>> = v.hosts.iter().map(|h| (h.id.clone(), h.last_connected)).collect();
     let mut hosts: Vec<Host> = of(records, Coll::Host);
     for h in &mut hosts {
@@ -166,6 +173,7 @@ pub fn adopt(v: &mut VaultData, records: &BTreeMap<String, SyncRecord>) {
             Some((key, serde_json::from_value(Value::Object(r.fields.clone().into_iter().collect())).ok()?))
         })
         .collect();
+    gone
 }
 
 /* ---------- pairing ---------- */

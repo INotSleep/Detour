@@ -308,3 +308,29 @@ pub async fn replace_sync_server_key(store: &Mutex<Store>, fingerprint: String) 
     locked(store)?.sync_forget_host_key()?;
     sync_personal(store, Some(fingerprint)).await
 }
+
+/// Joins here the teams in Git this person joined on another device: their
+/// repository and creator come with the link, so nothing needs asking.
+/// Returns true if any was joined.
+pub async fn join_linked_teams(store: &Mutex<Store>) -> bool {
+    let Ok(pending) = locked(store).and_then(|s| s.pending_git_teams()) else { return false };
+    let mut joined = false;
+    for (id, root, remote) in pending {
+        let result = async {
+            let (info, token) = inspect_git_team(store, &remote, None).await?;
+            if info.id != id || info.root != root {
+                if let Ok(dir) = locked(store)?.staged(&token) {
+                    let _ = std::fs::remove_dir_all(dir);
+                }
+                return Err(Error::NotATeamVault);
+            }
+            join_git_team(store, &token, &root, remote.clone())
+        }
+        .await;
+        if let Ok(mut s) = locked(store) {
+            s.note_link_error(&id, result.as_ref().err());
+        }
+        joined |= result.is_ok();
+    }
+    joined
+}

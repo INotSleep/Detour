@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use detour_core::model::{Auth, KeyAlgorithm, KeyView, OwnLoginView, VaultView};
 use detour_core::ssh::{self, SessionEvent, SessionHandle};
 use detour_core::personal::Pairing;
-use detour_core::store::{ImportPreview, ImportResult, MyId, PERSONAL, Store, SyncStatus, TeamEntry, VaultUpdate};
+use detour_core::store::{ImportPreview, ImportResult, MyId, PERSONAL, PendingTeam, Store, SyncStatus, TeamEntry, VaultUpdate};
 use detour_core::team::state::{Coll, Level, Role};
 use detour_core::sync;
 use detour_core::sftp::{self, FileEntry, Files};
@@ -254,7 +254,22 @@ fn sync_status(app: State<App>) -> Result<SyncStatus> {
 #[tauri::command]
 async fn sync_now(app: State<'_, App>, trust_fingerprint: Option<String>) -> Result<Synced> {
     let changed = sync::sync_personal(&app.store, trust_fingerprint).await?;
-    synced(&app, changed)
+    // Teams in Git joined on another device get joined here too.
+    let joined = sync::join_linked_teams(&app.store).await;
+    synced(&app, changed || joined)
+}
+
+/// Teams joined on this person's other devices and not here.
+#[tauri::command]
+fn teams_pending(app: State<App>) -> Result<Vec<PendingTeam>> {
+    app.store.lock().map_err(poisoned)?.pending_teams()
+}
+
+/// Joins, in a folder of this device, a team joined on another one.
+#[tauri::command]
+fn team_join_linked(app: State<App>, team_id: String, path: String) -> Result<TeamView> {
+    let r = app.store.lock().map_err(poisoned)?.join_linked_team(&team_id, &path);
+    pushed(&app, PERSONAL, r)
 }
 
 #[tauri::command]
@@ -642,6 +657,8 @@ pub fn builder<R: tauri::Runtime>(builder: tauri::Builder<R>, data_dir: std::pat
             ssh_import_preview,
             ssh_import,
             sync_status,
+            teams_pending,
+            team_join_linked,
             sync_now,
             sync_enable_folder,
             sync_enable_git,

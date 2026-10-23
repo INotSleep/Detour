@@ -208,3 +208,35 @@ async fn sync_survives_locking_and_can_be_turned_off() {
     assert_eq!(labels(&desktop), ["cache", "db"]);
 }
 
+
+#[tokio::test]
+async fn teams_follow_their_person_to_other_devices() {
+    let (laptop, folder) = laptop_in_sync();
+    let team_dir = temp_dir("team").join("acme").display().to_string();
+    let team = laptop.lock().unwrap().create_team(&team_dir, "Acme", "Me", &Store::new_recovery_key()).unwrap();
+    let code = sync::add_device(&laptop).await.unwrap();
+    let desktop = device("desktop");
+    sync::join_folder_sync(&desktop, folder, code.code).await.unwrap();
+
+    // A team in a folder: the desktop knows of it and asks for its folder.
+    let pending = desktop.lock().unwrap().pending_teams().unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!((pending[0].team_id.as_str(), pending[0].name.as_str(), pending[0].url.is_none()), (team.id.as_str(), "Acme", true));
+    // Another team's folder is refused.
+    let other = temp_dir("other").join("o").display().to_string();
+    desktop.lock().unwrap().create_team(&other, "Other", "Me", &Store::new_recovery_key()).unwrap();
+    let other_id = desktop.lock().unwrap().teams().iter().find(|t| t.path == other).unwrap().id.clone();
+    assert!(matches!(desktop.lock().unwrap().join_linked_team(&team.id, &other), Err(detour_core::Error::NotATeamVault)));
+    let view = desktop.lock().unwrap().join_linked_team(&team.id, &team_dir).unwrap();
+    assert!(view.joined, "the same person is already a member");
+    assert!(desktop.lock().unwrap().pending_teams().unwrap().is_empty());
+
+    // The desktop's own team reaches the laptop; leaving it on the laptop leaves it on the desktop.
+    laptop.lock().unwrap().sync_personal().unwrap();
+    assert!(laptop.lock().unwrap().pending_teams().unwrap().iter().any(|p| p.team_id == other_id));
+    laptop.lock().unwrap().leave_team(&team.id).unwrap();
+    desktop.lock().unwrap().sync_personal().unwrap();
+    let left: Vec<String> = desktop.lock().unwrap().teams().iter().map(|t| t.id.clone()).collect();
+    assert_eq!(left, [other_id], "left everywhere");
+    assert!(std::path::Path::new(&team_dir).join("vault.json").exists(), "the team's storage is untouched");
+}

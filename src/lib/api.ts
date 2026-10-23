@@ -217,6 +217,16 @@ export interface FileEntry {
   permissions: number | null;
 }
 
+/** A team joined on another device of this person and not here (detour_core::store::PendingTeam). */
+export interface PendingTeam {
+  teamId: string;
+  name: string;
+  root: string;
+  /** A team in Git joins here by itself; a team in a folder needs the folder on this device. */
+  url: string | null;
+  error: CoreError | null;
+}
+
 /** A host ~/.ssh/config names (detour_core::store::ImportHost). */
 export interface ImportHost {
   alias: string;
@@ -549,6 +559,11 @@ export const api = {
       return false;
     }
   },
+
+  /* teams on this person's other devices */
+
+  teamsPending: (): Promise<PendingTeam[]> => (real ? invoke("teams_pending") : Promise.resolve([])),
+  teamJoinLinked: (teamId: string, path: string): Promise<TeamView> => invoke("team_join_linked", { teamId, path }),
 
   /* moving over from OpenSSH (into the personal vault) */
 

@@ -1,6 +1,6 @@
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { ChevronRight, Copy, Ellipsis, IdCard, LogIn, LogOut, Plus, RefreshCw, ShieldAlert, ShieldQuestion, TriangleAlert, UserMinus, UserPlus, Users, UserX } from "lucide-react";
-import { api, errorText, type CoreError } from "../lib/api";
+import { api, errorText, isCoreError, type CoreError, type PendingTeam } from "../lib/api";
 import { copyText, formatAgo, plural, sleep, useStore } from "../lib/store";
 import { atLeast, canManage, removeVault } from "../lib/teams";
 import type { ActivityItem, Coll, Level, Member, Problem, Role, Vault } from "../lib/types";
@@ -68,7 +68,9 @@ const memberRank = (m: Member) => (m.recovery ? 9 : m.isYou ? 0 : { owner: 1, ad
 const byRank = (a: Member, b: Member) => memberRank(a) - memberRank(b) || a.name.localeCompare(b.name);
 
 function TeamPage({ vault }: { vault: Vault }) {
-  const { ws, update, toast, applyTeamView, resolveConflicts, setVault } = useStore();
+  const { ws, update, toast, applyTeamView, resolveConflicts, setVault, sync: personalSync } = useStore();
+  // With sync on, leaving takes the team off all of this person's devices.
+  const everywhere = !!personalSync?.enabled;
   const me = useMyId();
   const [tab, setTab] = useState<"members" | "access">("members");
   const [adding, setAdding] = useState(false);
@@ -145,7 +147,7 @@ function TeamPage({ vault }: { vault: Vault }) {
       if (api.real) await api.teamLeave(vault.id);
       setVault("personal");
       update((w) => removeVault(w, vault.id));
-      toast({ text: `«${vault.name}» убрана с этого устройства`, tone: "success" });
+      toast({ text: `«${vault.name}» убрана ${everywhere ? "со всех устройств" : "с этого устройства"}`, tone: "success" });
     } catch (e) {
       toast({ text: errorText(e), tone: "error" });
     }
@@ -231,7 +233,7 @@ function TeamPage({ vault }: { vault: Vault }) {
         <div className="banner warn">
           <UserX size={16} />
           <span className="grow">Вас удалили из команды</span>
-          <Button size="sm" onClick={leave}>Убрать с устройства</Button>
+          <Button size="sm" onClick={leave}>{everywhere ? "Убрать со всех устройств" : "Убрать с устройства"}</Button>
         </div>
       )}
 
@@ -350,7 +352,7 @@ function TeamPage({ vault }: { vault: Vault }) {
       )}
       {leaving && (
         <ConfirmDialog
-          title={`Убрать «${vault.name}» с этого устройства?`}
+          title={`Убрать «${vault.name}» ${everywhere ? "со всех ваших устройств" : "с этого устройства"}?`}
           body="Хранилище команды и ваше участие останутся, подключить снова можно в любой момент."
           confirm="Убрать"
           onConfirm={leave}
@@ -547,9 +549,15 @@ function AccessMatrix({ vault }: { vault: Vault }) {
 }
 
 function TeamsOverview() {
-  const { ws, setVault, navigate } = useStore();
+  const { ws, setVault, navigate, sync } = useStore();
   const [dialog, setDialog] = useState<"create" | "join" | "id" | null>(null);
   const teams = ws.vaults.filter((v) => v.kind === "team");
+  const [pending, setPending] = useState<PendingTeam[]>([]);
+  const joinedIds = teams.map((t) => t.id).join(",");
+  // Teams joined on other devices: looked at again after every sync and every join here.
+  useEffect(() => {
+    if (api.real) api.teamsPending().then(setPending).catch(() => setPending([]));
+  }, [sync?.syncedAt, joinedIds]);
 
   return (
     <div className="page">
@@ -559,7 +567,7 @@ function TeamsOverview() {
         <Button variant="primary" icon={Plus} onClick={() => setDialog("create")}>Создать команду</Button>
       </PageHeader>
 
-      {teams.length === 0 && <Empty icon={Users} title="Вы пока не в команде" />}
+      {teams.length === 0 && pending.length === 0 && <Empty icon={Users} title="Вы пока не в команде" />}
 
       <div className="team-cards">
         {teams.map((t) => {
@@ -588,9 +596,74 @@ function TeamsOverview() {
         })}
       </div>
 
+      {pending.length > 0 && (
+        <>
+          <h3 className="section-title pending-title">На других устройствах</h3>
+          <div className="team-cards">
+            {pending.map((p) => (
+              <PendingTeamCard key={p.teamId} team={p} onChanged={() => api.teamsPending().then(setPending).catch(() => {})} />
+            ))}
+          </div>
+        </>
+      )}
+
       {dialog === "create" && <CreateTeamDialog onClose={() => setDialog(null)} onDone={() => navigate("team")} />}
       {dialog === "join" && <JoinTeamDialog onClose={() => setDialog(null)} onDone={() => navigate("team")} />}
       {dialog === "id" && <MyIdDialog onClose={() => setDialog(null)} />}
+    </div>
+  );
+}
+
+/** A team joined on another device of this person: one in Git joins by itself, one in a folder needs the folder here. */
+function PendingTeamCard({ team, onChanged }: { team: PendingTeam; onChanged: () => void }) {
+  const { toast, applyTeamView } = useStore();
+  const [busy, setBusy] = useState(false);
+  const [removing, setRemoving] = useState(false);
+
+  const pickFolder = async () => {
+    const path = await api.pickFolder();
+    if (!path) return;
+    setBusy(true);
+    try {
+      applyTeamView(await api.teamJoinLinked(team.teamId, path));
+      toast({ text: `Команда «${team.name}» подключена`, tone: "success" });
+      onChanged();
+    } catch (e) {
+      toast({ text: isCoreError(e) && e.kind === "notATeamVault" ? "В этой папке другая команда" : errorText(e), tone: "error" });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="team-card pending">
+      <span className="pending-avatar"><Users size={16} /></span>
+      <div className="team-card-main">
+        <span className="strong">{team.name || "Команда"}</span>
+        <span className={`small ${team.error ? "err-text" : "muted"}`}>
+          {team.url ? (team.error ? remoteErrorText(team.error) : "Подключается") : "Не подключена"}
+        </span>
+      </div>
+      {!team.url && <Button size="sm" variant="primary" loading={busy} onClick={() => void pickFolder()}>Выбрать папку</Button>}
+      <Menu
+        trigger={(open, isOpen) => <IconButton icon={Ellipsis} label="Ещё" className={isOpen ? "pressed" : ""} onClick={open} />}
+        items={[{ label: "Убрать со всех устройств", icon: LogOut, danger: true, onSelect: () => setRemoving(true) }]}
+      />
+      {removing && (
+        <ConfirmDialog
+          title={`Убрать «${team.name}» со всех устройств?`}
+          confirm="Убрать"
+          onClose={() => setRemoving(false)}
+          onConfirm={async () => {
+            try {
+              await api.teamLeave(team.teamId);
+              onChanged();
+            } catch (e) {
+              toast({ text: errorText(e), tone: "error" });
+            }
+          }}
+        />
+      )}
     </div>
   );
 }

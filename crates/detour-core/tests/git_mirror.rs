@@ -552,6 +552,33 @@ mod stores {
     }
 
     #[tokio::test]
+    async fn a_team_in_git_joins_on_another_device_by_itself() {
+        if !super::git_available() {
+            return;
+        }
+        let (repo, _) = super::bare_repo();
+        let (port, _) = super::over_http::start(repo.parent().unwrap().to_path_buf(), "tok").await;
+        let remote = GitRemote { url: format!("http://127.0.0.1:{port}/vault.git"), auth: Auth::Password, token: Some("tok".into()) };
+
+        let (laptop, _) = store("laptop");
+        let team = sync::create_git_team(&laptop, remote, "Acme", "Me", &Store::new_recovery_key(), None).await.unwrap();
+        let sync_dir = super::temp_dir("sync").join("vault").display().to_string();
+        laptop.lock().unwrap().sync_enable(&sync_dir, None).unwrap();
+        let code = sync::add_device(&laptop).await.unwrap();
+
+        let (desktop, _) = store("desktop");
+        // A fresh device has its own identity but no teams yet.
+        sync::join_folder_sync(&desktop, sync_dir, code.code).await.unwrap();
+        assert!(desktop.lock().unwrap().pending_teams().unwrap()[0].url.is_some());
+        assert!(sync::join_linked_teams(&desktop).await, "the repository, token and creator came with the link");
+        let teams = desktop.lock().unwrap().teams();
+        assert_eq!(teams.len(), 1);
+        assert_eq!(teams[0].id, team.id);
+        assert!(teams[0].view.as_ref().is_some_and(|v| v.joined && v.remote.is_some()));
+        assert!(desktop.lock().unwrap().pending_teams().unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn two_stores_share_a_team_through_a_repository() {
         if !super::git_available() {
             return;

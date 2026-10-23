@@ -302,6 +302,26 @@ pub struct VaultData {
     /// The synced records as of the last sync: what this device changed since is measured against it.
     #[serde(default)]
     pub sync_base: std::collections::BTreeMap<String, crate::personal::SyncRecord>,
+    /// Teams on all of this person's devices, joined here or not.
+    #[serde(default)]
+    pub team_links: Vec<TeamLink>,
+}
+
+/// A team as this person's devices share it: where it is, not where it sits on one device.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamLink {
+    pub team_id: String,
+    pub name: String,
+    /// Detour ID of the vault's creator, confirmed when it was first joined.
+    pub root: String,
+    /// The repository of a team in Git; `None` for a team in a folder (each device picks its own).
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub auth: Option<Auth>,
+    #[serde(default)]
+    pub token: Option<String>,
 }
 
 /// A team vault this person has joined.

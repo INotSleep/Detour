@@ -32,11 +32,13 @@ pub enum Coll {
     KnownHost,
     /// A member's own login for a team host (personal vaults only).
     OwnLogin,
+    /// A team this person is in, so their other devices join it too (personal vaults only).
+    TeamLink,
 }
 
 impl Coll {
     pub fn has_secret(self) -> bool {
-        matches!(self, Coll::Host | Coll::Key | Coll::OwnLogin)
+        matches!(self, Coll::Host | Coll::Key | Coll::OwnLogin | Coll::TeamLink)
     }
 
     /// Fields kept under the record's secret key.
@@ -45,6 +47,7 @@ impl Coll {
             Coll::Host => &["password", "proxyPassword"],
             Coll::Key => &["privateKey", "passphrase"],
             Coll::OwnLogin => &["password"],
+            Coll::TeamLink => &["token"],
             _ => &[],
         }
     }
