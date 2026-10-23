@@ -98,13 +98,6 @@ src/                  React + TypeScript UI, xterm.js terminal
   lib/api.ts          the only boundary between the UI and the core
 ```
 
-## Next
-
-- Sign in with GitHub instead of a token
-- Replace keys on servers after someone leaves a team
-- SSH certificates
-- ssh-agent forwarding
-
 ## Contributing
 
 Issues and pull requests are welcome. Contributions are published under the project's license. `cargo test --workspace` and `npx tsc --noEmit` must pass.
