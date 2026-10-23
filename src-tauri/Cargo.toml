@@ -1,0 +1,20 @@
+[package]
+name = "detour"
+description = "Detour desktop app (Tauri shell around detour-core)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "detour_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.4", features = [] }
+
+[dependencies]
+detour-core.workspace = true
+tauri = { version = "2.12.5", features = [] }
+tauri-plugin-dialog = "2.8.3"
+serde.workspace = true
+serde_json.workspace = true
