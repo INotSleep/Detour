@@ -5,9 +5,11 @@
 // Rust side.
 
 import { Channel, invoke, isTauri } from "@tauri-apps/api/core";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { fakeKeyMaterial, parsePrivateKey } from "./keys";
 import { mockSecrets } from "./mockData";
+import { mockFiles } from "./mockFiles";
 import type { ActivityItem, Coll, Conflict, Host, Level, OwnLogin, Problem, Role, Snippet, SshKey, Tunnel } from "./types";
 
 export interface CoreInfo {
@@ -30,7 +32,9 @@ export type CoreError =
   | { kind: "forbidden" | "notATeamVault" | "folderNotEmpty" | "rootChanged" | "alreadyMember" }
   | { kind: "git"; message: string }
   | { kind: "portBusy" | "forwardRefused"; port: number }
-  | { kind: "unavailable"; path: string };
+  | { kind: "unavailable"; path: string }
+  | { kind: "sftp"; message: string }
+  | { kind: "cancelled" };
 
 export type SecretKind = "password" | "passphrase";
 
@@ -66,6 +70,8 @@ export function errorText(e: unknown): string {
     case "git": return gitReason(e.message);
     case "portBusy": return `Порт ${e.port} занят другой программой`;
     case "forwardRefused": return `Сервер не разрешает открыть порт ${e.port}`;
+    case "sftp": return e.message.endsWith("already exists") ? "Уже есть файл с таким именем" : e.message;
+    case "cancelled": return "Отменено";
     case "connect": return e.message === "connection lost" ? "Соединение с сервером потеряно" : e.message;
     default: return e.message;
   }
@@ -184,6 +190,25 @@ export interface MyId {
 
 /* ---------- sessions ---------- */
 
+/** A file or folder on a server, see `detour_core::sftp::FileEntry`. */
+export interface FileEntry {
+  name: string;
+  kind: "file" | "dir" | "link";
+  size: number;
+  /** Unix ms */
+  modified: number | null;
+  permissions: number | null;
+}
+
+/** A local file picked to upload. */
+export interface LocalFile {
+  /** Path on this computer; in a plain browser just the name. */
+  path: string;
+  name: string;
+}
+
+type OnProgress = (done: number, total: number) => void;
+
 export interface SessionCallbacks {
   onData: (bytes: Uint8Array) => void;
   onClosed: (exitStatus: number | null) => void;
@@ -215,6 +240,44 @@ function demoKey(vaultId: string, name: string, algorithm: SshKey["algorithm"], 
     passphraseSaved: !!passphrase && remember,
     createdAt: Date.now(),
   };
+}
+
+/* ---------- files helpers ---------- */
+
+function progressChannel(onProgress: OnProgress) {
+  const ch = new Channel<{ done: number; total: number }>();
+  ch.onmessage = (m) => onProgress(m.done, m.total);
+  return ch;
+}
+
+function baseName(path: string) {
+  return path.split(/[\\/]/).pop() || path;
+}
+
+const demoDelay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const demoUsers = new Map<string, string>();
+const demoUser = (id: string) => demoUsers.get(id) ?? "demo";
+const demoCancelled = new Set<string>();
+const demoPicked = new Map<string, number>();
+
+function demoLocal(files: File[]): LocalFile[] {
+  return files.map((f) => {
+    demoPicked.set(f.name, f.size);
+    return { path: f.name, name: f.name };
+  });
+}
+
+/** A transfer at about 40 MB/s, at least a second long. */
+async function demoTransfer(transfer: string, total: number, onProgress: OnProgress) {
+  const ms = Math.max(1000, (total / 40_000_000) * 1000);
+  const start = Date.now();
+  for (;;) {
+    if (demoCancelled.delete(transfer)) throw { kind: "cancelled" } satisfies CoreError;
+    const t = Math.min(1, (Date.now() - start) / ms);
+    onProgress(Math.round(total * t), total);
+    if (t >= 1) return;
+    await demoDelay(100);
+  }
 }
 
 /* ---------- api ---------- */
@@ -407,6 +470,88 @@ export const api = {
   tunnelStop: (t: Tunnel): Promise<void> => invoke("tunnel_stop", { vaultId: t.vaultId, tunnelId: t.id }),
   /** Running and failed tunnels, keyed `<vault>/<tunnel>`. */
   tunnelsStatus: (): Promise<{ key: string; state: "on" | "error"; connections: number; error: CoreError | null }[]> => invoke("tunnels_status"),
+
+  /* files (SFTP) */
+
+  /** Opens a file browser on a host; `secret` and `trustFingerprint` answer a login's prompts. */
+  async filesOpen(host: Host, secret: string | null, trustFingerprint: string | null): Promise<{ id: string; home: string }> {
+    if (api.usesCore(host.vaultId)) return invoke("files_open", { vaultId: host.vaultId, hostId: host.id, secret, trustFingerprint });
+    await demoDelay(500);
+    if (host.online === false) throw { kind: "unreachable", endpoint: `${host.address}:${host.port}` } satisfies CoreError;
+    demoUsers.set(host.id, host.user);
+    return { id: host.id, home: mockFiles.home(host.user) };
+  },
+  async filesList(id: string, path: string): Promise<FileEntry[]> {
+    if (real) return invoke("files_list", { id, path });
+    await demoDelay(120);
+    return mockFiles.list(demoUser(id), path);
+  },
+  async filesResolve(id: string, path: string): Promise<string> {
+    return real ? invoke("files_resolve", { id, path }) : mockFiles.resolve(path);
+  },
+  async filesMkdir(id: string, path: string): Promise<void> {
+    if (real) return invoke("files_mkdir", { id, path });
+    mockFiles.mkdir(demoUser(id), path);
+  },
+  async filesRename(id: string, from: string, to: string): Promise<void> {
+    if (real) return invoke("files_rename", { id, from, to });
+    mockFiles.rename(demoUser(id), from, to);
+  },
+  /** Removes a file, or a folder with everything in it. */
+  async filesRemove(id: string, path: string): Promise<void> {
+    if (real) return invoke("files_remove", { id, path });
+    await demoDelay(200);
+    mockFiles.remove(demoUser(id), path);
+  },
+  async filesDownload(id: string, remote: string, local: string, transfer: string, onProgress: OnProgress): Promise<void> {
+    if (real) return invoke("files_download", { id, remote, local, transfer, onProgress: progressChannel(onProgress) });
+    await demoTransfer(transfer, mockFiles.size(demoUser(id), remote), onProgress);
+  },
+  async filesUpload(id: string, local: LocalFile, remote: string, transfer: string, onProgress: OnProgress): Promise<void> {
+    if (real) return invoke("files_upload", { id, local: local.path, remote, transfer, onProgress: progressChannel(onProgress) });
+    const size = demoPicked.get(local.path) ?? 0;
+    await demoTransfer(transfer, size, onProgress);
+    mockFiles.upload(demoUser(id), remote, size);
+  },
+  async filesCancel(transfer: string): Promise<void> {
+    if (real) return invoke("files_cancel", { transfer });
+    demoCancelled.add(transfer);
+  },
+  async filesClose(id: string): Promise<void> {
+    if (real) await invoke("files_close", { id });
+  },
+
+  /** Asks which files to upload; empty if cancelled. */
+  async pickUploads(): Promise<LocalFile[]> {
+    if (real) {
+      const r = await open({ multiple: true, directory: false });
+      return (r ?? []).map((path) => ({ path, name: baseName(path) }));
+    }
+    return new Promise((resolve) => {
+      const input = Object.assign(document.createElement("input"), { type: "file", multiple: true });
+      input.onchange = () => resolve(demoLocal([...(input.files ?? [])]));
+      input.oncancel = () => resolve([]);
+      input.click();
+    });
+  },
+
+  /** Files dropped from a browser drag (the demo); in the app drops come from onFileDrop. */
+  droppedFiles: (list: FileList): LocalFile[] => demoLocal([...list]),
+
+  /** Asks where to save a download; null if cancelled. */
+  async pickDownloadTarget(name: string): Promise<string | null> {
+    if (real) return save({ defaultPath: name });
+    return name;
+  },
+
+  /** Files dragged onto the window from the system, in the app. Returns how to stop listening. */
+  async onFileDrop(cb: (e: { type: "enter" | "over" | "leave" } | { type: "drop"; files: LocalFile[] }) => void): Promise<() => void> {
+    if (!real) return () => {};
+    return getCurrentWebview().onDragDropEvent(({ payload: p }) => {
+      if (p.type === "drop") cb({ type: "drop", files: p.paths.map((path) => ({ path, name: baseName(path) })) });
+      else cb({ type: p.type });
+    });
+  },
 
   async secretSave(host: Host, kind: SecretKind, value: string): Promise<void> {
     if (api.usesCore(host.vaultId)) return invoke("secret_save", { vaultId: host.vaultId, hostId: host.id, kind, value });

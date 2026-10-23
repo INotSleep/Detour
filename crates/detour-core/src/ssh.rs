@@ -217,6 +217,13 @@ impl Session {
         Ok(())
     }
 
+    /// A subsystem such as `sftp` on a new channel.
+    pub async fn subsystem(&self, name: &str) -> Result<russh::ChannelStream<client::Msg>> {
+        let channel = self.0.handle.channel_open_session().await.map_err(connect_error)?;
+        channel.request_subsystem(true, name).await.map_err(connect_error)?;
+        Ok(channel.into_stream())
+    }
+
     pub async fn stop_remote(&self, port: u16) {
         self.0.forwards.lock().unwrap().remove(&(port as u32));
         let _ = self.0.handle.cancel_tcpip_forward("localhost", port as u32).await;
@@ -250,6 +257,11 @@ fn pooled(key: &str) -> Option<Session> {
     let p = pool.get_mut(key)?;
     p.used = Instant::now();
     Some(p.session.clone())
+}
+
+/// Drops the kept connection for this target, e.g. after the server closed it.
+pub fn forget_pooled(req: &ConnectRequest) {
+    POOL.lock().unwrap_or_else(|e| e.into_inner()).remove(&pool_key(req));
 }
 
 /// Closes every kept connection (when the vault locks).

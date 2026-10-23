@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ChevronRight, CopyPlus, Ellipsis, Plus, Search, Server, SquareTerminal, Terminal, Trash2, TriangleAlert, X } from "lucide-react";
+import { ChevronRight, CopyPlus, Ellipsis, FolderOpen, Plus, Search, Server, SquareTerminal, Terminal, Trash2, TriangleAlert, X } from "lucide-react";
 import { api, errorText } from "../lib/api";
 import { copyText, formatAgo, sshCommand, uid, useStore } from "../lib/store";
 import type { Host } from "../lib/types";
@@ -10,7 +10,7 @@ import { Button, Empty, IconButton, Menu, Modal, PageHeader } from "./ui";
 import { HostFields, applyDraft, draftErrors, draftFromHost, emptyDraft, useHostDraft } from "./HostForm";
 
 export function HostsView() {
-  const { ws, vault, update, toast, connect, resolveConflicts } = useStore();
+  const { ws, vault, update, toast, connect, openFiles, resolveConflicts } = useStore();
   const conflicted = new Set(vault.conflicts.filter((c) => c.coll === "host").map((c) => c.record));
   const canCreate = writable(vault);
   const [query, setQuery] = useState("");
@@ -149,6 +149,7 @@ export function HostsView() {
                           <Menu
                             trigger={(toggle, open) => <IconButton icon={Ellipsis} label="Ещё" className={open ? "pressed" : ""} onClick={toggle} />}
                             items={[
+                              { label: "Файлы", icon: FolderOpen, onSelect: () => openFiles(h.id) },
                               { label: "Копировать команду ssh", icon: Terminal, onSelect: () => copyCmd(h) },
                               ...(canCreate ? [{ label: "Дублировать", icon: CopyPlus, onSelect: () => duplicate(h) }] : []),
                               ...(atLeast(h.access, "edit") ? [{ label: "Удалить", icon: Trash2, danger: true, hint: "Del", onSelect: () => remove(h) }] : []),
@@ -175,7 +176,7 @@ export function HostsView() {
 }
 
 function HostPanel({ host, groups, onClose, onDelete, onCopy }: { host: Host; groups: string[]; onClose: () => void; onDelete: () => void; onCopy: () => void }) {
-  const { ws, vault, update, toast, connect, resolveConflicts } = useStore();
+  const { ws, vault, update, toast, connect, openFiles, resolveConflicts } = useStore();
   // A team host's shared key must be a team key: teammates don't have your personal ones.
   const keys = ws.keys.filter((k) => k.vaultId === vault.id);
   const conflict = vault.conflicts.find((c) => c.coll === "host" && c.record === host.id);
@@ -225,9 +226,14 @@ function HostPanel({ host, groups, onClose, onDelete, onCopy }: { host: Host; gr
         </button>
       )}
 
-      <Button variant="primary" icon={SquareTerminal} className="block" onClick={() => connect(host.id)}>
-        Подключиться
-      </Button>
+      <div className="panel-connect">
+        <Button variant="primary" icon={SquareTerminal} onClick={() => connect(host.id)}>
+          Подключиться
+        </Button>
+        <Button icon={FolderOpen} onClick={() => openFiles(host.id)}>
+          Файлы
+        </Button>
+      </div>
 
       <form
         className="panel-form"

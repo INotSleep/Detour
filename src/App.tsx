@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeftRight, Code, KeyRound, Plus, Server, Settings as SettingsIcon, Users, X } from "lucide-react";
+import { ArrowLeftRight, Code, FolderOpen, KeyRound, Plus, Server, Settings as SettingsIcon, Users, X } from "lucide-react";
 import { api, errorText, fromView, type CoreInfo, type TeamView, type VaultView } from "./lib/api";
 import { applyTeamEntries, applyTeamView, dataOf, writable } from "./lib/teams";
 import { mockWorkspace } from "./lib/mockData";
@@ -13,6 +13,7 @@ import { TeamsView } from "./components/TeamsView";
 import { SettingsView, SnippetsView } from "./components/OtherViews";
 import { KeysView } from "./components/KeysView";
 import { TunnelsView } from "./components/TunnelsView";
+import { FilesView } from "./components/FilesView";
 import { CommandPalette } from "./components/CommandPalette";
 import { ConflictDialog } from "./components/ConflictDialog";
 import { IconButton, useToaster } from "./components/ui";
@@ -21,6 +22,8 @@ import { LockScreen } from "./components/LockScreen";
 interface Session {
   id: string;
   hostId: string;
+  /** A terminal or a file browser. */
+  kind: "terminal" | "files";
   title: string;
   status: SessionStatus;
   command?: string;
@@ -232,19 +235,21 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey, true);
   }, []);
 
-  const connect = useCallback(
-    (hostId: string, command?: string) => {
+  const openTab = useCallback(
+    (hostId: string, kind: Session["kind"], command?: string) => {
       const host = ws?.hosts.find((h) => h.id === hostId);
       if (!host) return;
       const id = uid("s");
       setSessions((list) => {
-        const same = list.filter((s) => s.hostId === hostId).length;
-        return [...list, { id, hostId, title: same ? `${host.label} (${same + 1})` : host.label, status: "connecting", command }];
+        const same = list.filter((s) => s.hostId === hostId && s.kind === kind).length;
+        return [...list, { id, hostId, kind, title: same ? `${host.label} (${same + 1})` : host.label, status: "connecting", command }];
       });
       setActiveId(id);
     },
     [ws],
   );
+  const connect = useCallback((hostId: string, command?: string) => openTab(hostId, "terminal", command), [openTab]);
+  const openFiles = useCallback((hostId: string) => openTab(hostId, "files"), [openTab]);
 
   const closeSession = (id: string) => {
     const idx = sessions.findIndex((s) => s.id === id);
@@ -275,12 +280,13 @@ export default function App() {
       coreInfo,
       toast: toaster.push,
       connect,
+      openFiles,
       openPalette: () => setPalette(true),
       resolveConflicts: (id) => setConflictVaultId(id ?? vaultId),
       lock,
       applyTeamView: applyView,
     };
-  }, [ws, vaultId, section, settings, coreInfo, connect, toaster.push, lock, applyView]);
+  }, [ws, vaultId, section, settings, coreInfo, connect, openFiles, toaster.push, lock, applyView]);
 
   if (phase === "loading") return null;
   if (!store) return <LockScreen mode={phase === "setup" ? "setup" : "unlock"} onUnlocked={(v) => void unlocked(v)} />;
@@ -311,6 +317,7 @@ export default function App() {
                   onAuxClick={(e) => e.button === 1 && closeSession(s.id)}
                 >
                   <span className={`session-dot ${s.status}`} />
+                  {s.kind === "files" && <FolderOpen size={13} className="tab-kind" />}
                   <span className="tab-label">{s.title}</span>
                   <button
                     className="tab-close"
@@ -342,7 +349,11 @@ export default function App() {
               if (!host) return null;
               return (
                 <div key={s.id} className={`view ${activeId === s.id ? "" : "hidden"}`}>
-                  <TerminalView host={host} active={activeId === s.id} initialCommand={s.command} onStatus={(st) => setStatus(s.id, st)} onExit={() => closeSession(s.id)} />
+                  {s.kind === "files" ? (
+                    <FilesView host={host} active={activeId === s.id} onStatus={(st) => setStatus(s.id, st)} onClose={() => closeSession(s.id)} />
+                  ) : (
+                    <TerminalView host={host} active={activeId === s.id} initialCommand={s.command} onStatus={(st) => setStatus(s.id, st)} onExit={() => closeSession(s.id)} />
+                  )}
                 </div>
               );
             })}

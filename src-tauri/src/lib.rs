@@ -9,6 +9,7 @@ use detour_core::ssh::{self, SessionEvent, SessionHandle};
 use detour_core::store::{MyId, Store, TeamEntry, VaultUpdate};
 use detour_core::team::state::{Coll, Level, Role};
 use detour_core::sync;
+use detour_core::sftp::{self, FileEntry, Files};
 use detour_core::tunnel::{self, TunnelStatus, Tunnels};
 use detour_core::team::git::GitRemote;
 use detour_core::team::{AccessChange, TeamView, VaultInfo};
@@ -21,6 +22,7 @@ struct App {
     store: Arc<Mutex<Store>>,
     sessions: Mutex<HashMap<String, SessionHandle>>,
     tunnels: Tunnels,
+    files: Files,
 }
 
 fn poisoned<T>(_: T) -> Error {
@@ -88,8 +90,77 @@ async fn vault_unlock(app: State<'_, App>, master_password: String) -> Result<Va
 #[tauri::command]
 fn vault_lock(app: State<App>) -> Result<()> {
     app.tunnels.stop_all();
+    app.files.close_all();
     app.store.lock().map_err(poisoned)?.lock();
     Ok(())
+}
+
+/* ---------- files (SFTP) ---------- */
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FilesOpened {
+    id: String,
+    home: String,
+}
+
+#[derive(Serialize, Clone)]
+struct Progress {
+    done: u64,
+    total: u64,
+}
+
+/// Opens a file browser on a host. `secret` and `trust_fingerprint` answer a login's prompts.
+#[tauri::command]
+async fn files_open(app: State<'_, App>, vault_id: String, host_id: String, secret: Option<String>, trust_fingerprint: Option<String>) -> Result<FilesOpened> {
+    let (id, home) = sftp::open_in(&app.store, &app.files, &vault_id, &host_id, secret, trust_fingerprint).await?;
+    Ok(FilesOpened { id, home })
+}
+
+#[tauri::command]
+async fn files_list(app: State<'_, App>, id: String, path: String) -> Result<Vec<FileEntry>> {
+    app.files.list(&id, &path).await
+}
+
+#[tauri::command]
+async fn files_resolve(app: State<'_, App>, id: String, path: String) -> Result<String> {
+    app.files.resolve(&id, &path).await
+}
+
+#[tauri::command]
+async fn files_mkdir(app: State<'_, App>, id: String, path: String) -> Result<()> {
+    app.files.mkdir(&id, &path).await
+}
+
+#[tauri::command]
+async fn files_rename(app: State<'_, App>, id: String, from: String, to: String) -> Result<()> {
+    app.files.rename(&id, &from, &to).await
+}
+
+#[tauri::command]
+async fn files_remove(app: State<'_, App>, id: String, path: String) -> Result<()> {
+    app.files.remove(&id, &path).await
+}
+
+/// Downloads a file; progress arrives on `on_progress`. `transfer` names it for `files_cancel`.
+#[tauri::command]
+async fn files_download(app: State<'_, App>, id: String, remote: String, local: String, transfer: String, on_progress: Channel<Progress>) -> Result<()> {
+    app.files.download(&id, &remote, std::path::Path::new(&local), &transfer, move |done, total| { let _ = on_progress.send(Progress { done, total }); }).await
+}
+
+#[tauri::command]
+async fn files_upload(app: State<'_, App>, id: String, local: String, remote: String, transfer: String, on_progress: Channel<Progress>) -> Result<()> {
+    app.files.upload(&id, std::path::Path::new(&local), &remote, &transfer, move |done, total| { let _ = on_progress.send(Progress { done, total }); }).await
+}
+
+#[tauri::command]
+fn files_cancel(app: State<App>, transfer: String) {
+    app.files.cancel(&transfer);
+}
+
+#[tauri::command]
+fn files_close(app: State<App>, id: String) {
+    app.files.close(&id);
 }
 
 /* ---------- tunnels ---------- */
@@ -440,7 +511,7 @@ fn data_dir() -> std::path::PathBuf {
 pub fn builder<R: tauri::Runtime>(builder: tauri::Builder<R>, data_dir: std::path::PathBuf) -> tauri::Builder<R> {
     builder
         .plugin(tauri_plugin_dialog::init())
-        .manage(App { store: Arc::new(Mutex::new(Store::open(data_dir))), sessions: Mutex::new(HashMap::new()), tunnels: Tunnels::new() })
+        .manage(App { store: Arc::new(Mutex::new(Store::open(data_dir))), sessions: Mutex::new(HashMap::new()), tunnels: Tunnels::new(), files: Files::new() })
         .invoke_handler(tauri::generate_handler![
             core_info,
             write_text_file,
@@ -464,6 +535,16 @@ pub fn builder<R: tauri::Runtime>(builder: tauri::Builder<R>, data_dir: std::pat
             session_close,
             secret_save,
             tunnel_start,
+            files_open,
+            files_list,
+            files_resolve,
+            files_mkdir,
+            files_rename,
+            files_remove,
+            files_download,
+            files_upload,
+            files_cancel,
+            files_close,
             tunnel_stop,
             tunnels_status,
             my_id,

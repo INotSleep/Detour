@@ -7,6 +7,9 @@
 //!
 //! Also serves Git repositories on this machine to user `git` with any key,
 //! through the installed `git`: `ssh://git@127.0.0.1:2222/C:/repos/team.git`.
+//!
+//! SFTP runs OpenSSH's `sftp-server` (Git for Windows ships one) in the
+//! directory given by DETOUR_SFTP_ROOT, or the current one.
 
 use std::sync::Arc;
 
@@ -23,6 +26,15 @@ struct Srv {
     git: Option<Arc<tokio::sync::Mutex<tokio::process::ChildStdin>>>,
     /// The channel the line shell runs on; data of other channels (tunnels) is not ours.
     shell: Option<ChannelId>,
+    /// The channel running `sftp-server`, and its input.
+    sftp: Option<(ChannelId, Arc<tokio::sync::Mutex<tokio::process::ChildStdin>>)>,
+}
+
+fn sftp_server() -> Option<std::path::PathBuf> {
+    ["C:/Program Files/Git/usr/lib/ssh/sftp-server.exe", "/usr/lib/openssh/sftp-server", "/usr/libexec/sftp-server", "/usr/lib/ssh/sftp-server"]
+        .iter()
+        .map(std::path::PathBuf::from)
+        .find(|p| p.exists())
 }
 
 const PROMPT: &[u8] = b"\x1b[1;32mdemo@detour-test\x1b[0m:\x1b[1;34m~\x1b[0m$ ";
@@ -128,6 +140,41 @@ impl server::Handler for Srv {
         Ok(())
     }
 
+    async fn subsystem_request(&mut self, channel: ChannelId, name: &str, session: &mut Session) -> Result<(), Self::Error> {
+        println!("subsystem {name}");
+        let Some(program) = sftp_server().filter(|_| name == "sftp") else {
+            session.channel_failure(channel)?;
+            return Ok(());
+        };
+        let root = std::env::var("DETOUR_SFTP_ROOT").unwrap_or_else(|_| ".".into());
+        // Git for Windows' sftp-server needs the DLLs in Git's usr/bin.
+        let mut path = std::ffi::OsString::from(program.ancestors().nth(3).map(|u| u.join("bin")).unwrap_or_default());
+        path.push(if cfg!(windows) { ";" } else { ":" });
+        path.push(std::env::var_os("PATH").unwrap_or_default());
+        let mut child = tokio::process::Command::new(&program)
+            .env("PATH", path)
+            .current_dir(root)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()?;
+        self.sftp = Some((channel, Arc::new(tokio::sync::Mutex::new(child.stdin.take().unwrap()))));
+        let mut stdout = child.stdout.take().unwrap();
+        let handle = session.handle();
+        tokio::spawn(async move {
+            let mut buf = vec![0u8; 64 * 1024];
+            while let Ok(n) = stdout.read(&mut buf).await {
+                if n == 0 || handle.data(channel, buf[..n].to_vec()).await.is_err() {
+                    break;
+                }
+            }
+            let _ = child.wait().await;
+            let _ = handle.close(channel).await;
+        });
+        session.channel_success(channel)?;
+        Ok(())
+    }
+
     async fn shell_request(&mut self, channel: ChannelId, session: &mut Session) -> Result<(), Self::Error> {
         self.shell = Some(channel);
         session.data(channel, b"Welcome to the Detour test server\r\n".to_vec())?;
@@ -139,6 +186,12 @@ impl server::Handler for Srv {
         if let Some(git) = &self.git {
             let _ = git.lock().await.write_all(data).await;
             return Ok(());
+        }
+        if let Some((ch, input)) = &self.sftp {
+            if *ch == channel {
+                let _ = input.lock().await.write_all(data).await;
+                return Ok(());
+            }
         }
         if self.shell != Some(channel) {
             return Ok(());
@@ -185,5 +238,5 @@ async fn main() {
     println!("host key {}", key.public_key().fingerprint(Default::default()));
     println!("listening on 127.0.0.1:{port}, user demo / {password}");
     let config = Arc::new(server::Config { keys: vec![key], ..Default::default() });
-    Srv { password, line: String::new(), git: None, shell: None }.run_on_address(config, ("127.0.0.1", port)).await.unwrap();
+    Srv { password, line: String::new(), git: None, shell: None, sftp: None }.run_on_address(config, ("127.0.0.1", port)).await.unwrap();
 }

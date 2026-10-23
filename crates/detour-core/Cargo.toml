@@ -23,6 +23,7 @@ flate2 = "1.1.10"
 ureq = { version = "3.5.0", default-features = false, features = ["rustls", "platform-verifier", "win-system-proxy"] }
 serde.workspace = true
 thiserror.workspace = true
+russh-sftp = "3.0.1"
 
 [dev-dependencies]
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "io-util", "test-util"] }

@@ -290,6 +290,7 @@ button.tab { padding-right: 12px; }
 }
 .icon-btn:hover, .icon-btn.pressed { background: var(--hover); color: var(--text); }
 .icon-btn:active { background: var(--press); }
+.icon-btn:disabled { opacity: 0.35; cursor: default; pointer-events: none; }
 
 [data-tip]::after {
   content: attr(data-tip);
@@ -833,3 +834,68 @@ select.input { cursor: pointer; padding-right: 28px; appearance: none; backgroun
 .own-line .saved-password { margin-top: 0; }
 .own-actions { display: flex; gap: 4px; margin-left: -10px; }
 .banner .grow .banner-sub { display: block; margin-top: 2px; font-size: 11.5px; color: var(--text-2); overflow-wrap: anywhere; }
+
+/* ============ files (SFTP) ============ */
+
+.tab-kind { flex: none; color: var(--muted); }
+.panel-connect { display: flex; gap: 8px; }
+.panel-connect .btn-primary { flex: 1; }
+
+.files { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--bg); }
+.files-center { flex: 1; display: grid; place-items: center; padding: 24px; }
+.files-wait { display: flex; align-items: center; gap: 10px; color: var(--muted); font-family: var(--mono); font-size: 12.5px; }
+
+.files-bar { display: flex; align-items: center; gap: 6px; height: 48px; padding: 0 12px; border-bottom: 1px solid var(--line); flex: none; }
+.files-bar .btn { flex: none; }
+.files-crumbs {
+  flex: 1; min-width: 0; height: 30px; display: flex; align-items: center; gap: 1px;
+  padding: 0 4px; border-radius: var(--r); overflow-x: auto; scrollbar-width: none; cursor: text;
+  font-family: var(--mono); font-size: 12.5px;
+}
+.files-crumbs::-webkit-scrollbar { display: none; }
+.files-crumbs:hover { background: var(--hover); }
+.crumb-part { display: inline-flex; align-items: center; flex: none; }
+.crumb { height: 24px; padding: 0 5px; border-radius: 5px; color: var(--text-2); white-space: nowrap; cursor: pointer; }
+.crumb:hover { background: var(--press); color: var(--text); }
+.crumb.current { color: var(--text); font-weight: 600; }
+.crumb-sep { color: var(--muted); }
+.files-path-input { flex: 1; min-width: 0; height: 30px; font-size: 12.5px; }
+
+.files-list { flex: 1; min-height: 0; overflow: auto; padding: 4px 8px 12px; outline: none; }
+.files-row {
+  display: grid; grid-template-columns: 22px minmax(0, 1fr) 96px 132px 64px; align-items: center; gap: 10px;
+  height: 32px; padding: 0 8px; border-radius: 6px; cursor: default; user-select: none;
+}
+.files-row:not(.files-head):hover { background: var(--hover); }
+.files-row.selected, .files-row.selected:hover { background: var(--accent-soft); }
+.files-list:focus-visible .files-row.selected { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
+.files-head { position: sticky; top: 0; z-index: 1; height: 30px; background: var(--bg); color: var(--muted); font-size: 11.5px; font-weight: 600; }
+.files-icon { color: var(--muted); }
+.files-icon.dir { color: var(--accent); }
+.files-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.files-size, .files-date { color: var(--muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.files-size { text-align: right; }
+.files-row .row-actions { gap: 0; }
+.files-row .icon-btn { width: 26px; height: 26px; }
+.files-row:hover .row-actions, .files-row.selected .row-actions { opacity: 1; }
+.files-name-input { height: 26px; padding: 0 7px; font-size: 13px; }
+.files-empty { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 56px 0; color: var(--muted); }
+
+.files-transfers { flex: none; max-height: 168px; overflow: auto; border-top: 1px solid var(--line); padding: 6px 12px; display: flex; flex-direction: column; gap: 2px; }
+.transfer { display: grid; grid-template-columns: 16px minmax(80px, 1fr) minmax(80px, 200px) auto 28px; align-items: center; gap: 10px; height: 32px; font-size: 12.5px; color: var(--text-2); }
+.transfer.done, .transfer.error { grid-template-columns: 16px minmax(80px, 1fr) auto 28px; }
+.transfer-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.transfer-bar { height: 4px; border-radius: 2px; background: var(--press); overflow: hidden; }
+.transfer-bar > span { display: block; height: 100%; background: var(--accent); border-radius: 2px; transition: width 0.12s linear; }
+.transfer-amount { color: var(--muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.transfer.active .transfer-amount { min-width: 140px; text-align: right; }
+.transfer .err-text, .transfer .ok-text { font-size: 12px; }
+.transfer .icon-btn { width: 26px; height: 26px; }
+
+.files-drop {
+  position: absolute; inset: 8px; z-index: 5; border-radius: var(--r-lg);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  border: 2px dashed color-mix(in srgb, var(--accent) 60%, transparent);
+  background: color-mix(in srgb, var(--bg) 82%, var(--accent));
+  color: var(--accent); font-weight: 600; pointer-events: none; animation: fade 0.1s var(--ease);
+}

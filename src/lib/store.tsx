@@ -24,6 +24,8 @@ export interface Store {
   coreInfo: CoreInfo | null;
   toast: (t: ToastInput) => void;
   connect: (hostId: string, command?: string) => void;
+  /** Opens a file browser tab on a host. */
+  openFiles: (hostId: string) => void;
   openPalette: () => void;
   /** Opens the conflict resolver for a vault (defaults to the current one). */
   resolveConflicts: (vaultId?: string) => void;

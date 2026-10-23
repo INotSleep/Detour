@@ -124,7 +124,7 @@ export function Modal({ title, onClose, children, footer, width = 440, onSubmit 
   }, [onClose]);
 
   useEffect(() => {
-    ref.current?.querySelector<HTMLElement>("input:not([readonly]), select, textarea, button.btn-primary")?.focus();
+    ref.current?.querySelector<HTMLElement>("input:not([readonly]), select, textarea, button.btn-primary, button.btn-danger")?.focus();
   }, []);
 
   return createPortal(

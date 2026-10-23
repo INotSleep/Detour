@@ -8,6 +8,7 @@
 pub mod identity;
 pub mod keys;
 pub mod model;
+pub mod sftp;
 pub mod ssh;
 pub mod store;
 pub mod sync;
@@ -76,6 +77,12 @@ pub enum Error {
     RootChanged,
     #[error("already a member")]
     AlreadyMember,
+    /// The server refused or failed a file operation.
+    #[error("sftp: {message}")]
+    Sftp { message: String },
+    /// The user cancelled it.
+    #[error("cancelled")]
+    Cancelled,
     /// A local port for a tunnel is taken by another program.
     #[error("port {port} is in use")]
     PortBusy { port: u16 },
