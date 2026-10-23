@@ -1092,7 +1092,7 @@ dependencies = [
 
 [[package]]
 name = "detour"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "detour-core",
  "serde",
@@ -1107,7 +1107,7 @@ dependencies = [
 
 [[package]]
 name = "detour-core"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "age",
  "base64 0.22.1",
