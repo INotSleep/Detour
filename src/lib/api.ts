@@ -6,6 +6,7 @@
 
 import { Channel, invoke, isTauri } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { fakeKeyMaterial, parsePrivateKey } from "./keys";
 import { mockSecrets } from "./mockData";
@@ -497,6 +498,25 @@ export const api = {
   tunnelStop: (t: Tunnel): Promise<void> => invoke("tunnel_stop", { vaultId: t.vaultId, tunnelId: t.id }),
   /** Running and failed tunnels, keyed `<vault>/<tunnel>`. */
   tunnelsStatus: (): Promise<{ key: string; state: "on" | "error"; connections: number; error: CoreError | null }[]> => invoke("tunnels_status"),
+
+  /* clipboard: the system one in the app, the browser's in the demo */
+
+  async clipboardRead(): Promise<string> {
+    try {
+      return real ? await readText() : await navigator.clipboard.readText();
+    } catch {
+      return "";
+    }
+  },
+  async clipboardWrite(text: string): Promise<boolean> {
+    try {
+      if (real) await writeText(text);
+      else await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      return false;
+    }
+  },
 
   /* personal vault sync */
 

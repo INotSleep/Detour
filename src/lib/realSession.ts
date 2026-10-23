@@ -110,7 +110,8 @@ export function runRealSession(term: Terminal, host: Host, opts: Options): () =>
         if (disposed) return;
         if (answer !== "replace") return fail("Подключение отменено: ключ хоста изменился");
         await api.hostForgetKey(host.vaultId, host.id);
-        trust = null;
+        // The user just saw the new key: trust it without asking again.
+        trust = e.actual;
         return open();
       }
       case "needSecret":

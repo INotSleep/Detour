@@ -8,7 +8,7 @@ import type { Settings, Workspace } from "./lib/types";
 import type { SessionStatus } from "./lib/fakeShell";
 import { Sidebar } from "./components/Sidebar";
 import { HostsView } from "./components/HostsView";
-import { TerminalView } from "./components/TerminalView";
+import { TerminalTab } from "./components/TerminalTab";
 import { TeamsView } from "./components/TeamsView";
 import { SettingsView, SnippetsView } from "./components/OtherViews";
 import { KeysView } from "./components/KeysView";
@@ -38,7 +38,17 @@ const sectionMeta: Record<Section, { title: string; icon: typeof Server }> = {
   settings: { title: "Настройки", icon: SettingsIcon },
 };
 
-const defaultSettings: Settings = { theme: "dark", fontSize: 13, scrollback: 5000, autoLockMinutes: 15 };
+const defaultSettings: Settings = { theme: "dark", fontSize: 13, scrollback: 5000, autoLockMinutes: 15, rightClick: "paste" };
+const SETTINGS_KEY = "detour.settings";
+
+/** Settings of this device, kept in the webview's storage. */
+function loadSettings(): Settings {
+  try {
+    return { ...defaultSettings, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? "{}") };
+  } catch {
+    return defaultSettings;
+  }
+}
 
 type Phase = "loading" | "setup" | "locked" | "ready";
 
@@ -73,7 +83,14 @@ export default function App() {
   const [activeId, setActiveId] = useState("home");
   const [palette, setPalette] = useState(false);
   const [conflictVaultId, setConflictVaultId] = useState<string | null>(null);
-  const [settings, setSettingsState] = useState<Settings>(defaultSettings);
+  const [settings, setSettingsState] = useState<Settings>(loadSettings);
+  useEffect(() => {
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+    } catch {
+      /* private mode: settings last for this run */
+    }
+  }, [settings]);
   const [sync, setSync] = useState<SyncInfo | null>(null);
   const toaster = useToaster();
 
@@ -406,7 +423,7 @@ export default function App() {
                   {s.kind === "files" ? (
                     <FilesView host={host} active={activeId === s.id} onStatus={(st) => setStatus(s.id, st)} onClose={() => closeSession(s.id)} />
                   ) : (
-                    <TerminalView host={host} active={activeId === s.id} initialCommand={s.command} onStatus={(st) => setStatus(s.id, st)} onExit={() => closeSession(s.id)} />
+                    <TerminalTab host={host} active={activeId === s.id} initialCommand={s.command} onStatus={(st) => setStatus(s.id, st)} onExit={() => closeSession(s.id)} />
                   )}
                 </div>
               );

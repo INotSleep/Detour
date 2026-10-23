@@ -147,6 +147,10 @@ export function SettingsView() {
             {[1000, 5000, 10000, 50000].map((n) => <option key={n} value={n}>{n.toLocaleString("ru-RU")} строк</option>)}
           </select>
         </div>
+        <div className="setting">
+          <span>Правая кнопка мыши</span>
+          <Segmented value={settings.rightClick} onChange={(rightClick) => setSettings({ rightClick })} options={[{ value: "paste", label: "Копировать и вставить" }, { value: "menu", label: "Меню" }]} />
+        </div>
       </section>
 
       <SyncSettings />

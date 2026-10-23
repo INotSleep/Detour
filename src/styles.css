@@ -928,3 +928,30 @@ select.input { cursor: pointer; padding-right: 28px; appearance: none; backgroun
 .perm-who { font-size: 13px; }
 .perm-cell { display: flex; justify-content: center; }
 .perm-octal { width: 90px; }
+
+/* terminal: panes, search, menu */
+.term-panes { position: absolute; inset: 0; display: flex; background: var(--term); }
+.term-panes.col { flex-direction: column; }
+.term-pane { position: relative; flex: 1 1 0; min-width: 0; min-height: 0; }
+.term-pane.focused::after { content: ""; position: absolute; inset: 0; border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); pointer-events: none; }
+.term-divider { flex: none; background: var(--line-strong); position: relative; z-index: 2; }
+.term-divider.row { width: 1px; cursor: col-resize; }
+.term-divider.col { height: 1px; cursor: row-resize; }
+.term-divider::before { content: ""; position: absolute; inset: -3px; }
+.term-divider:hover, .term-divider:active { background: var(--accent); }
+body.resizing { user-select: none; }
+body.resizing-row, body.resizing-row * { cursor: col-resize !important; }
+body.resizing-col, body.resizing-col * { cursor: row-resize !important; }
+
+.term-search {
+  position: absolute; top: 8px; right: 16px; z-index: 5;
+  display: flex; align-items: center; gap: 4px; padding: 4px 4px 4px 10px;
+  border-radius: var(--r); background: var(--raised); box-shadow: var(--shadow); animation: pop 0.12s var(--ease);
+}
+.term-search-input { width: 200px; height: 26px; border: none; outline: none; background: transparent; color: var(--text); font: inherit; font-size: 13px; }
+.term-search-count { min-width: 56px; font-size: 12px; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.term-search .icon-btn { width: 26px; height: 26px; }
+.term-menu { position: fixed; z-index: 50; }
+.menu button:disabled { opacity: 0.4; pointer-events: none; }
+/* Terminals and file browsers fill their view and scroll inside. */
+.view:has(> .term-panes), .view:has(> .files) { overflow: hidden; }
