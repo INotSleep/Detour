@@ -1,12 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowDown, ArrowUp, Check, Download, Ellipsis, File, FolderOpen, FolderPlus, Folder, House, Link2, Loader2, Pencil, RotateCw, ShieldAlert, ShieldQuestion, Trash2, Upload, X,
+  ArrowDown, ArrowUp, Check, ChevronDown, ChevronUp, Copy, Download, Ellipsis, File, FolderOpen, FolderPlus, FolderUp, Folder, House, KeyRound, Link2, Loader2, Pencil, RotateCw, ShieldAlert, ShieldQuestion, SquareTerminal, Trash2, Upload, X,
 } from "lucide-react";
 import { api, errorText, isCoreError, type FileEntry, type LocalFile, type SecretKind } from "../lib/api";
-import { plural, uid, useStore } from "../lib/store";
+import { copyText, plural, uid, useStore } from "../lib/store";
 import type { Host } from "../lib/types";
 import type { SessionStatus } from "../lib/fakeShell";
-import { Button, Checkbox, ConfirmDialog, Field, IconButton, Menu, PasswordInput } from "./ui";
+import { Button, Checkbox, ConfirmDialog, Field, IconButton, Menu, Modal, PasswordInput } from "./ui";
 
 interface Props {
   host: Host;
@@ -32,9 +32,12 @@ interface Transfer {
   dir: string;
   done: number;
   total: number;
+  started: number;
   state: "active" | "done" | "error";
   error?: string;
 }
+
+type SortBy = "name" | "size" | "modified";
 
 /** `dir` joined with `name`, in the server's syntax. */
 const join = (dir: string, name: string) => (dir.endsWith("/") ? dir + name : `${dir}/${name}`);
@@ -68,18 +71,43 @@ function formatModified(ms: number | null) {
   return d.getFullYear() === now.getFullYear() ? `${date} ${time}` : date;
 }
 
+/** `0o754` -> "rwxr-xr--". */
+function formatMode(mode: number | null) {
+  if (mode == null) return "";
+  return [6, 3, 0].map((s) => ((mode >> s) & 4 ? "r" : "-") + ((mode >> s) & 2 ? "w" : "-") + ((mode >> s) & 1 ? "x" : "-")).join("");
+}
+
+/** Folders first, then by the chosen column. */
+function sortEntries(list: FileEntry[], by: SortBy, desc: boolean) {
+  const key = (e: FileEntry) => (by === "size" ? e.size : by === "modified" ? (e.modified ?? 0) : 0);
+  return [...list].sort((a, b) => {
+    const dirs = Number(b.kind === "dir") - Number(a.kind === "dir");
+    if (dirs) return dirs;
+    const k = by === "name" ? a.name.localeCompare(b.name, "ru", { numeric: true, sensitivity: "base" }) : key(a) - key(b) || a.name.localeCompare(b.name, "ru", { numeric: true });
+    return desc ? -k : k;
+  });
+}
+
+/** A shell command that goes to `path`. */
+const cdTo = (path: string) => `cd '${path.replace(/'/g, `'\\''`)}'`;
+
 export function FilesView({ host, active, onStatus, onClose }: Props) {
-  const { update, toast, applyTeamView } = useStore();
+  const { update, toast, applyTeamView, connect: openTerminal } = useStore();
   const [phase, setPhase] = useState<Phase>({ kind: "connecting" });
   const [path, setPath] = useState("");
   const [entries, setEntries] = useState<FileEntry[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<string | null>(null);
+  // Selected names; the cursor is the one keys move from.
+  const [sel, setSel] = useState<string[]>([]);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const anchor = useRef<string | null>(null);
+  const [sort, setSort] = useState<{ by: SortBy; desc: boolean }>({ by: "name", desc: false });
   const [renaming, setRenaming] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
-  const [removing, setRemoving] = useState<FileEntry | null>(null);
-  const [replacing, setReplacing] = useState<{ files: LocalFile[]; existing: string[] } | null>(null);
+  const [removing, setRemoving] = useState<FileEntry[] | null>(null);
+  const [replacing, setReplacing] = useState<{ items: LocalFile[]; existing: string[] } | null>(null);
+  const [chmodding, setChmodding] = useState<FileEntry | null>(null);
   const [transfers, setTransfers] = useState<Transfer[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [editingPath, setEditingPath] = useState<string | null>(null);
@@ -90,6 +118,9 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
   const conn = phase.kind === "ready" ? phase : null;
   const cb = useRef(onStatus);
   cb.current = onStatus;
+
+  const sorted = useMemo(() => (entries ? sortEntries(entries, sort.by, sort.desc) : null), [entries, sort]);
+  const picked = sorted?.filter((e) => sel.includes(e.name)) ?? [];
 
   useEffect(() => {
     cb.current(phase.kind === "ready" ? "connected" : phase.kind === "failed" ? "failed" : "connecting");
@@ -139,6 +170,35 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
   idRef.current = conn?.id ?? null;
   useEffect(() => () => void (idRef.current && api.filesClose(idRef.current)), []);
 
+  /* ---------- selection ---------- */
+
+  const selectOnly = (name: string | null) => {
+    setSel(name ? [name] : []);
+    setCursor(name);
+    anchor.current = name;
+  };
+
+  /** Selects from the anchor to `name`, as Shift does. */
+  const selectRange = (name: string) => {
+    if (!sorted) return;
+    const names = sorted.map((e) => e.name);
+    const a = names.indexOf(anchor.current ?? name);
+    const b = names.indexOf(name);
+    setSel(names.slice(Math.min(a, b), Math.max(a, b) + 1));
+    setCursor(name);
+  };
+
+  const clickRow = (ev: React.MouseEvent, name: string) => {
+    if (ev.shiftKey && anchor.current) return selectRange(name);
+    if (ev.ctrlKey || ev.metaKey) {
+      setSel((s) => (s.includes(name) ? s.filter((n) => n !== name) : [...s, name]));
+      setCursor(name);
+      anchor.current = name;
+      return;
+    }
+    selectOnly(name);
+  };
+
   /* ---------- browsing ---------- */
 
   /** Shows a folder; `select` picks an entry in it. */
@@ -149,7 +209,7 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
       setPath(dir);
       setEntries(list);
       setListError(null);
-      setSelected(select !== undefined ? select : list[0]?.name ?? null);
+      selectOnly(select !== undefined ? select : sortEntries(list, sort.by, sort.desc)[0]?.name ?? null);
       setRenaming(null);
       setCreating(false);
     } catch (e) {
@@ -161,7 +221,7 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
   };
 
   const go = (dir: string, select?: string | null) => conn && open(conn.id, dir, select);
-  const refresh = (select?: string | null) => go(pathRef.current, select === undefined ? selected : select);
+  const refresh = (select?: string | null) => go(pathRef.current, select === undefined ? cursor : select);
 
   const up = async () => {
     if (!conn || path === "/") return;
@@ -188,15 +248,17 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
         /* not a folder */
       }
     }
-    void download(e);
+    void download([e]);
   };
+
+  const toggleSort = (by: SortBy) => setSort((s) => (s.by === by ? { by, desc: !s.desc } : { by, desc: by !== "name" }));
 
   /* ---------- transfers ---------- */
 
   const patchTransfer = (id: string, p: Partial<Transfer>) => setTransfers((ts) => ts.map((t) => (t.id === id ? { ...t, ...p } : t)));
   const dropTransfer = (id: string) => setTransfers((ts) => ts.filter((t) => t.id !== id));
 
-  const run = async (t: Transfer, work: (onProgress: (done: number, total: number) => void) => Promise<void>) => {
+  const run = async (t: Transfer, work: (onProgress: (done: number, total: number) => void) => Promise<unknown>) => {
     setTransfers((ts) => [...ts, t]);
     try {
       await work((done, total) => patchTransfer(t.id, { done, total }));
@@ -210,28 +272,42 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
     }
   };
 
-  const download = async (e: FileEntry) => {
-    if (!conn) return;
-    const local = await api.pickDownloadTarget(e.name);
-    if (!local) return;
-    const t: Transfer = { id: uid("t"), up: false, name: e.name, dir: path, done: 0, total: e.size, state: "active" };
-    await run(t, (p) => api.filesDownload(conn.id, join(t.dir, e.name), local, t.id, p));
+  const transfer = (up: boolean, name: string, total = 0): Transfer => ({ id: uid("t"), up, name, dir: path, done: 0, total, started: Date.now(), state: "active" });
+
+  /** One file: saved where the user says. A folder or several things: into a folder the user picks. */
+  const download = async (items: FileEntry[]) => {
+    if (!conn || items.length === 0) return;
+    const [only] = items;
+    if (items.length === 1 && only && only.kind !== "dir") {
+      const local = await api.pickDownloadTarget(only.name);
+      if (!local) return;
+      const t = transfer(false, only.name, only.size);
+      await run(t, (p) => api.filesDownload(conn.id, join(t.dir, only.name), local, t.id, p));
+      return;
+    }
+    const into = await api.pickDownloadFolder();
+    if (!into) return;
+    for (const e of items) {
+      const t = transfer(false, e.name, e.kind === "dir" ? 0 : e.size);
+      void run(t, (p) => api.filesDownloadInto(conn.id, join(t.dir, e.name), into, t.id, p));
+    }
   };
 
-  const upload = (files: LocalFile[], force = false) => {
-    if (!conn || files.length === 0) return;
-    const existing = files.filter((f) => entries?.some((e) => e.name === f.name)).map((f) => f.name);
-    if (existing.length && !force) return setReplacing({ files, existing });
+  const upload = (items: LocalFile[], force = false) => {
+    if (!conn || items.length === 0) return;
+    const existing = items.filter((f) => entries?.some((e) => e.name === f.name)).map((f) => f.name);
+    if (existing.length && !force) return setReplacing({ items, existing });
     const dir = path;
-    for (const f of files) {
-      const t: Transfer = { id: uid("t"), up: true, name: f.name, dir, done: 0, total: 0, state: "active" };
-      void run(t, (p) => api.filesUpload(conn.id, f, join(dir, f.name), t.id, p)).then((ok) => void (ok && pathRef.current === dir && refresh(f.name)));
+    for (const f of items) {
+      const t = transfer(true, f.name);
+      void run(t, (p) => api.filesUpload(conn.id, f, join(dir, f.name), existing.includes(f.name), t.id, p)).then((ok) => void (ok && pathRef.current === dir && refresh(f.name)));
     }
   };
 
   const pickUploads = async () => upload(await api.pickUploads());
+  const pickFolders = async () => upload(await api.pickUploadFolders());
 
-  // Files dragged in from the system.
+  // Files and folders dragged in from the system.
   const uploadRef = useRef(upload);
   uploadRef.current = upload;
   const ready = !!conn && entries !== null;
@@ -283,17 +359,37 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
     }
   };
 
-  const remove = async (e: FileEntry) => {
+  const remove = async (items: FileEntry[]) => {
+    if (!conn || !sorted) return;
+    const idx = sorted.findIndex((x) => x.name === items[0]?.name);
+    let gone = 0;
+    for (const e of items) {
+      try {
+        await api.filesRemove(conn.id, join(path, e.name));
+        gone++;
+      } catch (err) {
+        toast({ text: `${e.name}: ${errorText(err)}`, tone: "error" });
+      }
+    }
+    if (gone) toast({ text: items.length === 1 ? `«${items[0]!.name}» удалён` : `Удалено: ${gone}`, tone: "success" });
+    const left = sorted.filter((x) => !items.some((i) => i.name === x.name));
+    void refresh(left[Math.min(Math.max(idx, 0), left.length - 1)]?.name ?? null);
+  };
+
+  const chmod = async (e: FileEntry, mode: number) => {
     if (!conn) return;
-    const idx = entries?.findIndex((x) => x.name === e.name) ?? -1;
     try {
-      await api.filesRemove(conn.id, join(path, e.name));
-      toast({ text: `«${e.name}» удалён`, tone: "success" });
-      const next = entries?.filter((x) => x.name !== e.name) ?? [];
-      void refresh(next[Math.min(idx, next.length - 1)]?.name ?? null);
+      await api.filesChmod(conn.id, join(path, e.name), mode);
+      toast({ text: `Права «${e.name}»: ${formatMode(mode)}`, tone: "success" });
+      void refresh(e.name);
     } catch (err) {
       toast({ text: errorText(err), tone: "error" });
     }
+  };
+
+  const copyPath = async (e: FileEntry) => {
+    const p = join(path, e.name);
+    toast((await copyText(p)) ? { text: `Скопировано: ${p}`, tone: "success" } : { text: "Не удалось скопировать", tone: "error" });
   };
 
   /* ---------- keyboard ---------- */
@@ -303,28 +399,34 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
   }, [active, ready]);
 
   const onListKey = (ev: React.KeyboardEvent) => {
-    if (!entries || renaming || creating || removing || replacing || (ev.target as HTMLElement).tagName === "INPUT") return;
-    const i = entries.findIndex((e) => e.name === selected);
-    const cur = entries[i];
+    if (!sorted || renaming || creating || removing || replacing || chmodding || (ev.target as HTMLElement).tagName === "INPUT") return;
+    const i = sorted.findIndex((e) => e.name === cursor);
+    const cur = sorted[i];
     const move = (to: number) => {
       ev.preventDefault();
-      const e = entries[Math.max(0, Math.min(entries.length - 1, to))];
+      const e = sorted[Math.max(0, Math.min(sorted.length - 1, to))];
       if (!e) return;
-      setSelected(e.name);
+      if (ev.shiftKey) selectRange(e.name);
+      else selectOnly(e.name);
       listRef.current?.querySelector(`[data-name="${CSS.escape(e.name)}"]`)?.scrollIntoView({ block: "nearest" });
     };
+    const ctrl = ev.ctrlKey || ev.metaKey;
     if (ev.key === "ArrowDown") move(i + 1);
     else if (ev.key === "ArrowUp") move(i - 1);
     else if (ev.key === "Home") move(0);
-    else if (ev.key === "End") move(entries.length - 1);
-    else if (ev.key === "Enter" && cur) void enter(cur);
+    else if (ev.key === "End") move(sorted.length - 1);
+    else if (ev.key === "Enter" && cur) void (picked.length > 1 ? download(picked) : enter(cur));
     else if (ev.key === "Backspace") void up();
-    else if (ev.key === "Delete" && cur) setRemoving(cur);
+    else if (ev.key === "Delete" && picked.length) setRemoving(picked);
     else if (ev.key === "F2" && cur) setRenaming(cur.name);
+    else if (ev.key === "Escape" && sel.length > 1) selectOnly(cursor);
     else if (ev.key === "F5") {
       ev.preventDefault();
       void refresh();
-    } else if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "l") {
+    } else if (ctrl && ev.key.toLowerCase() === "a") {
+      ev.preventDefault();
+      setSel(sorted.map((e) => e.name));
+    } else if (ctrl && ev.key.toLowerCase() === "l") {
       ev.preventDefault();
       setEditingPath(path);
     }
@@ -332,7 +434,7 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
 
   /* ---------- view ---------- */
 
-  if (!conn || entries === null) {
+  if (!conn || sorted === null) {
     return (
       <div className="files">
         <div className="files-center">
@@ -343,6 +445,7 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
   }
 
   const where = path === "/" ? "/" : path.split("/").pop();
+  const SortMark = ({ by }: { by: SortBy }) => (sort.by === by ? sort.desc ? <ChevronDown size={12} /> : <ChevronUp size={12} /> : null);
 
   return (
     <div
@@ -385,16 +488,29 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
         )}
         {loading && <Loader2 size={14} className="spin muted" />}
         <IconButton icon={RotateCw} label="Обновить · F5" onClick={() => void refresh()} />
+        <IconButton icon={SquareTerminal} label="Терминал в этой папке" onClick={() => openTerminal(host.id, cdTo(path))} />
         <Button size="sm" icon={FolderPlus} onClick={() => setCreating(true)}>Папка</Button>
+        {api.real && <IconButton icon={FolderUp} label="Загрузить папку" onClick={() => void pickFolders()} />}
         <Button size="sm" variant="primary" icon={Upload} onClick={() => void pickUploads()}>Загрузить</Button>
       </div>
 
-      <div className="files-list" ref={listRef} tabIndex={0} onKeyDown={onListKey} role="grid" aria-label={path}>
+      {picked.length > 1 && (
+        <div className="files-selbar">
+          <span>Выбрано: {picked.length}</span>
+          <Button size="sm" icon={Download} onClick={() => void download(picked)}>Скачать</Button>
+          <Button size="sm" variant="ghost" icon={Trash2} className="danger-text" onClick={() => setRemoving(picked)}>Удалить</Button>
+          <span className="grow" />
+          <IconButton icon={X} label="Снять выделение · Esc" onClick={() => selectOnly(cursor)} />
+        </div>
+      )}
+
+      <div className="files-list" ref={listRef} tabIndex={0} onKeyDown={onListKey} role="grid" aria-label={path} aria-multiselectable>
         <div className="files-row files-head" role="row">
           <span />
-          <span>Имя</span>
-          <span className="files-size">Размер</span>
-          <span>Изменён</span>
+          <button className="files-sort" onClick={() => toggleSort("name")}>Имя <SortMark by="name" /></button>
+          <button className="files-sort files-size" onClick={() => toggleSort("size")}><SortMark by="size" /> Размер</button>
+          <button className="files-sort" onClick={() => toggleSort("modified")}>Изменён <SortMark by="modified" /></button>
+          <span>Права</span>
           <span />
         </div>
         {creating && (
@@ -404,18 +520,20 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
             <span />
             <span />
             <span />
+            <span />
           </div>
         )}
-        {entries.map((e) => {
+        {sorted.map((e) => {
           const Icon = e.kind === "dir" ? Folder : e.kind === "link" ? Link2 : File;
+          const isSel = sel.includes(e.name);
           return (
             <div
               key={e.name}
               data-name={e.name}
               role="row"
-              aria-selected={selected === e.name}
-              className={`files-row ${selected === e.name ? "selected" : ""}`}
-              onClick={() => setSelected(e.name)}
+              aria-selected={isSel}
+              className={`files-row ${isSel ? "selected" : ""} ${cursor === e.name ? "cursor" : ""}`}
+              onClick={(ev) => clickRow(ev, e.name)}
               onDoubleClick={() => void enter(e)}
             >
               <Icon size={15} className={`files-icon ${e.kind}`} />
@@ -426,21 +544,26 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
               )}
               <span className="files-size">{e.kind === "dir" ? "" : formatBytes(e.size)}</span>
               <span className="files-date">{formatModified(e.modified)}</span>
+              <span className="files-mode mono">{formatMode(e.permissions)}</span>
               <span className="row-actions">
-                {e.kind !== "dir" && <IconButton icon={Download} label="Скачать" onClick={(ev) => (ev.stopPropagation(), void download(e))} />}
+                <IconButton icon={Download} label="Скачать" onClick={(ev) => (ev.stopPropagation(), void download([e]))} />
                 <Menu
                   trigger={(toggle, isOpen) => <IconButton icon={Ellipsis} label="Ещё" className={isOpen ? "pressed" : ""} onClick={toggle} />}
                   items={[
-                    ...(e.kind === "dir" ? [{ label: "Открыть", icon: FolderOpen, onSelect: () => void enter(e) }] : [{ label: "Скачать", icon: Download, onSelect: () => void download(e) }]),
+                    ...(e.kind === "dir" ? [{ label: "Открыть", icon: FolderOpen, onSelect: () => void enter(e) }] : []),
+                    { label: "Скачать", icon: Download, onSelect: () => void download([e]) },
+                    { label: "Копировать путь", icon: Copy, onSelect: () => void copyPath(e) },
+                    ...(e.kind === "dir" ? [{ label: "Терминал в этой папке", icon: SquareTerminal, onSelect: () => openTerminal(host.id, cdTo(join(path, e.name))) }] : []),
+                    { label: "Права доступа", icon: KeyRound, onSelect: () => setChmodding(e) },
                     { label: "Переименовать", icon: Pencil, hint: "F2", onSelect: () => setRenaming(e.name) },
-                    { label: "Удалить", icon: Trash2, danger: true, hint: "Del", onSelect: () => setRemoving(e) },
+                    { label: "Удалить", icon: Trash2, danger: true, hint: "Del", onSelect: () => setRemoving([e]) },
                   ]}
                 />
               </span>
             </div>
           );
         })}
-        {entries.length === 0 && !creating && (
+        {sorted.length === 0 && !creating && (
           <div className="files-empty">
             <span>Папка пуста</span>
             <Button size="sm" icon={Upload} onClick={() => void pickUploads()}>Загрузить файлы</Button>
@@ -465,8 +588,8 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
 
       {removing && (
         <ConfirmDialog
-          title={`Удалить «${removing.name}»?`}
-          body={removing.kind === "dir" ? "Вместе со всем содержимым" : undefined}
+          title={removing.length === 1 ? `Удалить «${removing[0]!.name}»?` : `Удалить ${removing.length} ${plural(removing.length, "элемент", "элемента", "элементов")}?`}
+          body={removing.some((e) => e.kind === "dir") ? "Папки вместе со всем содержимым" : undefined}
           confirm="Удалить"
           onConfirm={() => void remove(removing)}
           onClose={() => {
@@ -477,13 +600,23 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
       )}
       {replacing && (
         <ConfirmDialog
-          title={replacing.existing.length === 1 ? `Заменить «${replacing.existing[0]}»?` : `Заменить ${replacing.existing.length} ${plural(replacing.existing.length, "файл", "файла", "файлов")}?`}
+          title={replacing.existing.length === 1 ? `Заменить «${replacing.existing[0]}»?` : `Заменить ${replacing.existing.length} ${plural(replacing.existing.length, "элемент", "элемента", "элементов")}?`}
           confirm="Заменить"
-          onConfirm={() => upload(replacing.files, true)}
+          onConfirm={() => upload(replacing.items, true)}
           onClose={() => {
             setReplacing(null);
             focusList();
           }}
+        />
+      )}
+      {chmodding && (
+        <PermissionsDialog
+          entry={chmodding}
+          onClose={() => {
+            setChmodding(null);
+            focusList();
+          }}
+          onSave={(mode) => void chmod(chmodding, mode)}
         />
       )}
     </div>
@@ -491,6 +624,74 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
 }
 
 /* ---------- pieces ---------- */
+
+const WHO = [
+  { label: "Владелец", shift: 6 },
+  { label: "Группа", shift: 3 },
+  { label: "Остальные", shift: 0 },
+];
+const WHAT = [
+  { label: "Чтение", bit: 4 },
+  { label: "Запись", bit: 2 },
+  { label: "Выполнение", bit: 1 },
+];
+
+/** Unix permission bits as checkboxes and as a number, kept in step. */
+function PermissionsDialog({ entry, onClose, onSave }: { entry: FileEntry; onClose: () => void; onSave: (mode: number) => void }) {
+  const [mode, setMode] = useState(entry.permissions ?? (entry.kind === "dir" ? 0o755 : 0o644));
+  const [octal, setOctal] = useState((mode & 0o777).toString(8).padStart(3, "0"));
+  const set = (m: number) => {
+    setMode(m);
+    setOctal((m & 0o777).toString(8).padStart(3, "0"));
+  };
+  return (
+    <Modal
+      title={`Права «${entry.name}»`}
+      width={420}
+      onClose={onClose}
+      onSubmit={() => {
+        onSave(mode);
+        onClose();
+      }}
+      footer={
+        <>
+          <Button type="button" variant="ghost" onClick={onClose}>Отмена</Button>
+          <Button type="submit" variant="primary">Сохранить</Button>
+        </>
+      }
+    >
+      <div className="perm-grid">
+        <span />
+        {WHAT.map((w) => <span key={w.bit} className="perm-head">{w.label}</span>)}
+        {WHO.map((who) => (
+          <Fragment key={who.label}>
+            <span className="perm-who">{who.label}</span>
+            {WHAT.map((w) => {
+              const bit = w.bit << who.shift;
+              return (
+                <span key={`${who.shift}-${w.bit}`} className="perm-cell">
+                  <Checkbox checked={!!(mode & bit)} onChange={(on) => set(on ? mode | bit : mode & ~bit)}>{""}</Checkbox>
+                </span>
+              );
+            })}
+          </Fragment>
+        ))}
+      </div>
+      <Field label="Числом">
+        <input
+          className="input mono perm-octal"
+          value={octal}
+          maxLength={4}
+          onChange={(e) => {
+            const v = e.target.value.replace(/[^0-7]/g, "");
+            setOctal(v);
+            if (v.length >= 3) setMode((mode & ~0o7777) | parseInt(v, 8));
+          }}
+        />
+      </Field>
+    </Modal>
+  );
+}
 
 function Crumbs({ path, onGo, onEdit }: { path: string; onGo: (p: string) => void; onEdit: () => void }) {
   const parts = path.split("/").filter(Boolean);
@@ -548,6 +749,8 @@ function NameInput({ initial, onDone }: { initial: string; onDone: (v: string | 
 
 function TransferRow({ t, onCancel, onDismiss }: { t: Transfer; onCancel: () => void; onDismiss: () => void }) {
   const pct = t.total ? Math.round((t.done / t.total) * 100) : 0;
+  const secs = (Date.now() - t.started) / 1000;
+  const speed = secs >= 1 && t.done ? ` · ${formatBytes(t.done / secs)}/с` : "";
   return (
     <div className={`transfer ${t.state}`}>
       {t.state === "done" ? <Check size={14} className="ok-text" /> : t.up ? <ArrowUp size={14} /> : <ArrowDown size={14} />}
@@ -555,7 +758,7 @@ function TransferRow({ t, onCancel, onDismiss }: { t: Transfer; onCancel: () => 
       {t.state === "active" && (
         <>
           <span className="transfer-bar"><span style={{ width: `${pct}%` }} /></span>
-          <span className="transfer-amount">{t.total ? `${formatBytes(t.done)} из ${formatBytes(t.total)}` : ""}</span>
+          <span className="transfer-amount">{t.total ? `${formatBytes(t.done)} из ${formatBytes(t.total)}${speed}` : ""}</span>
         </>
       )}
       {t.state === "done" && <span className="transfer-amount ok-text">{t.up ? "Загружен" : "Скачан"}</span>}

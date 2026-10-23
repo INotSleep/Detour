@@ -150,9 +150,22 @@ async fn files_download(app: State<'_, App>, id: String, remote: String, local: 
     app.files.download(&id, &remote, std::path::Path::new(&local), &transfer, move |done, total| { let _ = on_progress.send(Progress { done, total }); }).await
 }
 
+/// Uploads a file or a folder; `replace` lets it replace what is there once complete.
 #[tauri::command]
-async fn files_upload(app: State<'_, App>, id: String, local: String, remote: String, transfer: String, on_progress: Channel<Progress>) -> Result<()> {
-    app.files.upload(&id, std::path::Path::new(&local), &remote, &transfer, move |done, total| { let _ = on_progress.send(Progress { done, total }); }).await
+async fn files_upload(app: State<'_, App>, id: String, local: String, remote: String, replace: bool, transfer: String, on_progress: Channel<Progress>) -> Result<()> {
+    app.files.upload(&id, std::path::Path::new(&local), &remote, replace, &transfer, move |done, total| { let _ = on_progress.send(Progress { done, total }); }).await
+}
+
+/// Downloads a file or a folder into a local folder under a free name. Returns where it went.
+#[tauri::command]
+async fn files_download_into(app: State<'_, App>, id: String, remote: String, local_dir: String, transfer: String, on_progress: Channel<Progress>) -> Result<String> {
+    let to = app.files.download_into(&id, &remote, std::path::Path::new(&local_dir), &transfer, move |done, total| { let _ = on_progress.send(Progress { done, total }); }).await?;
+    Ok(to.display().to_string())
+}
+
+#[tauri::command]
+async fn files_chmod(app: State<'_, App>, id: String, path: String, mode: u32) -> Result<()> {
+    app.files.chmod(&id, &path, mode).await
 }
 
 #[tauri::command]
@@ -643,6 +656,8 @@ pub fn builder<R: tauri::Runtime>(builder: tauri::Builder<R>, data_dir: std::pat
             files_remove,
             files_download,
             files_upload,
+            files_download_into,
+            files_chmod,
             files_cancel,
             files_close,
             tunnel_stop,

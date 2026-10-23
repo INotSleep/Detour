@@ -142,7 +142,7 @@ async fn browse_upload_download_rename_remove() {
     // Upload with progress up to the full size.
     let seen = Arc::new(Mutex::new(Vec::new()));
     let s = seen.clone();
-    files.upload(&id, &local.join("big.bin"), &join(&dir, "big.bin"), "t1", move |d, t| s.lock().unwrap().push((d, t))).await.unwrap();
+    files.upload(&id, &local.join("big.bin"), &join(&dir, "big.bin"), false, "t1", move |d, t| s.lock().unwrap().push((d, t))).await.unwrap();
     assert_eq!(seen.lock().unwrap().last().copied(), Some((data.len() as u64, data.len() as u64)));
     assert_eq!(std::fs::read(root.join("docs/big.bin")).unwrap(), data, "the server got every byte");
 
@@ -210,13 +210,13 @@ async fn an_upload_replaces_a_file_only_when_it_completes() {
         tokio::time::sleep(Duration::from_millis(150)).await;
         f2.cancel("up");
     });
-    let res = files.upload(&id, &local.join("big.bin"), &join(&home, "notes.txt"), "up", |_, _| {}).await;
+    let res = files.upload(&id, &local.join("big.bin"), &join(&home, "notes.txt"), true, "up", |_, _| {}).await;
     canceller.await.unwrap();
     assert!(matches!(res, Err(Error::Cancelled)), "{res:?}");
     assert_eq!(std::fs::read(root.join("notes.txt")).unwrap(), b"old", "the old file is untouched");
     assert!(!root.join("notes.txt.part").exists());
 
-    files.upload(&id, &local.join("notes.txt"), &join(&home, "notes.txt"), "up2", |_, _| {}).await.unwrap();
+    files.upload(&id, &local.join("notes.txt"), &join(&home, "notes.txt"), true, "up2", |_, _| {}).await.unwrap();
     assert_eq!(std::fs::read(root.join("notes.txt")).unwrap(), b"new");
     assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1, "nothing left beside it");
 }
@@ -231,3 +231,91 @@ async fn missing_paths_are_not_found() {
     assert!(home.starts_with(&up) && up.len() < home.len(), "{up} vs {home}");
 }
 
+
+/// A small tree: `site/index.html`, `site/css/a.css` and an empty `site/empty/`.
+fn local_site(dir: &std::path::Path) -> std::path::PathBuf {
+    let site = dir.join("site");
+    std::fs::create_dir_all(site.join("css")).unwrap();
+    std::fs::create_dir_all(site.join("empty")).unwrap();
+    std::fs::write(site.join("index.html"), b"<h1>hi</h1>").unwrap();
+    std::fs::write(site.join("css/a.css"), sample(300 * 1024)).unwrap();
+    site
+}
+
+#[tokio::test]
+async fn folders_go_up_and_come_back_whole() {
+    let Some((root, req)) = server().await else { return };
+    let files = Files::new();
+    let (id, home, _) = files.open(&req).await.unwrap();
+    let local = temp_dir("local");
+    let site = local_site(&local);
+
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let s = seen.clone();
+    files.upload(&id, &site, &join(&home, "site"), false, "up", move |d, t| s.lock().unwrap().push((d, t))).await.unwrap();
+    let total = 300 * 1024 + 11;
+    assert_eq!(seen.lock().unwrap().last().copied(), Some((total, total)), "one progress for the whole folder");
+    assert_eq!(std::fs::read(root.join("site/css/a.css")).unwrap(), sample(300 * 1024));
+    assert!(root.join("site/empty").is_dir());
+    assert!(!root.join("site.part").exists());
+    // Without replace, an existing folder is not touched.
+    assert!(files.upload(&id, &site, &join(&home, "site"), false, "up2", |_, _| {}).await.is_err());
+
+    // Into a local folder: under its own name, then under a free one.
+    let back = temp_dir("back");
+    let first = files.download_into(&id, &join(&home, "site"), &back, "d1", |_, _| {}).await.unwrap();
+    let second = files.download_into(&id, &join(&home, "site"), &back, "d2", |_, _| {}).await.unwrap();
+    assert_eq!(first, back.join("site"));
+    assert_eq!(second, back.join("site (2)"));
+    assert_eq!(std::fs::read(back.join("site (2)/css/a.css")).unwrap(), sample(300 * 1024));
+    assert_eq!(std::fs::read(back.join("site/index.html")).unwrap(), b"<h1>hi</h1>");
+    assert!(back.join("site/empty").is_dir());
+    // A single file goes in the same way.
+    let one = files.download_into(&id, &join(&home, "site/index.html"), &back, "d3", |_, _| {}).await.unwrap();
+    assert_eq!(one, back.join("index.html"));
+}
+
+#[tokio::test]
+async fn replacing_a_folder_happens_only_when_the_upload_is_complete() {
+    let Some((root, req)) = server().await else { return };
+    std::fs::create_dir_all(root.join("site")).unwrap();
+    std::fs::write(root.join("site/old.txt"), b"old").unwrap();
+    let files = Files::new();
+    let (id, home, _) = files.open(&req).await.unwrap();
+    let local = temp_dir("local");
+    let site = local_site(&local);
+    std::fs::write(site.join("big.bin"), sample(64 * 1024 * 1024)).unwrap();
+
+    let f2 = files.clone();
+    let canceller = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        f2.cancel("up");
+    });
+    let res = files.upload(&id, &site, &join(&home, "site"), true, "up", |_, _| {}).await;
+    canceller.await.unwrap();
+    assert!(matches!(res, Err(Error::Cancelled)), "{res:?}");
+    assert_eq!(std::fs::read(root.join("site/old.txt")).unwrap(), b"old", "the old folder is untouched");
+    assert!(!root.join("site.part").exists());
+
+    std::fs::remove_file(site.join("big.bin")).unwrap();
+    files.upload(&id, &site, &join(&home, "site"), true, "up2", |_, _| {}).await.unwrap();
+    assert!(!root.join("site/old.txt").exists(), "replaced, not merged");
+    assert!(root.join("site/index.html").exists());
+}
+
+#[tokio::test]
+async fn permissions_can_be_changed() {
+    let Some((_root, req)) = server().await else { return };
+    let files = Files::new();
+    let (id, home, _) = files.open(&req).await.unwrap();
+    let local = temp_dir("local");
+    std::fs::write(local.join("run.sh"), b"#!/bin/sh\n").unwrap();
+    files.upload(&id, &local.join("run.sh"), &join(&home, "run.sh"), false, "u", |_, _| {}).await.unwrap();
+    files.chmod(&id, &join(&home, "run.sh"), 0o750).await.unwrap();
+    // Windows' sftp-server only approximates Unix bits.
+    if cfg!(unix) {
+        let list = files.list(&id, &home).await.unwrap();
+        assert_eq!(list.iter().find(|e| e.name == "run.sh").unwrap().permissions, Some(0o750));
+    }
+    assert!(matches!(files.chmod(&id, &join(&home, "nope"), 0o600).await, Err(Error::NotFound { .. })));
+}

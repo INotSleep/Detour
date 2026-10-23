@@ -863,7 +863,7 @@ select.input { cursor: pointer; padding-right: 28px; appearance: none; backgroun
 
 .files-list { flex: 1; min-height: 0; overflow: auto; padding: 4px 8px 12px; outline: none; }
 .files-row {
-  display: grid; grid-template-columns: 22px minmax(0, 1fr) 96px 132px 64px; align-items: center; gap: 10px;
+  display: grid; grid-template-columns: 22px minmax(0, 1fr) 96px 132px 84px 64px; align-items: center; gap: 10px;
   height: 32px; padding: 0 8px; border-radius: 6px; cursor: default; user-select: none;
 }
 .files-row:not(.files-head):hover { background: var(--hover); }
@@ -888,7 +888,7 @@ select.input { cursor: pointer; padding-right: 28px; appearance: none; backgroun
 .transfer-bar { height: 4px; border-radius: 2px; background: var(--press); overflow: hidden; }
 .transfer-bar > span { display: block; height: 100%; background: var(--accent); border-radius: 2px; transition: width 0.12s linear; }
 .transfer-amount { color: var(--muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.transfer.active .transfer-amount { min-width: 140px; text-align: right; }
+.transfer.active .transfer-amount { min-width: 210px; text-align: right; }
 .transfer .err-text, .transfer .ok-text { font-size: 12px; }
 .transfer .icon-btn { width: 26px; height: 26px; }
 
@@ -913,3 +913,18 @@ select.input { cursor: pointer; padding-right: 28px; appearance: none; backgroun
   text-align: center; font-size: 22px; font-weight: 600; letter-spacing: 2px; color: var(--text); user-select: all;
 }
 .pair-code.loading { color: var(--muted); animation: pulse 1s ease-in-out infinite; }
+
+/* files: sorting, selection, permissions */
+.files-sort { justify-self: start; display: inline-flex; align-items: center; gap: 3px; height: 22px; padding: 0; color: inherit; font: inherit; cursor: pointer; border-radius: 4px; }
+.files-sort:hover { color: var(--text-2); }
+.files-sort.files-size { justify-self: end; }
+.files-mode { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+.files-list:focus-visible .files-row.selected { box-shadow: none; }
+.files-list:focus-visible .files-row.cursor { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
+.files-selbar { display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 12px 0 18px; border-bottom: 1px solid var(--line); background: var(--accent-soft); font-size: 12.5px; font-weight: 550; flex: none; }
+.files-selbar > span:first-child { margin-right: 6px; }
+.perm-grid { display: grid; grid-template-columns: 1fr repeat(3, 84px); align-items: center; row-gap: 6px; }
+.perm-head { font-size: 12px; color: var(--muted); text-align: center; }
+.perm-who { font-size: 13px; }
+.perm-cell { display: flex; justify-content: center; }
+.perm-octal { width: 90px; }

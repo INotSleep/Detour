@@ -5,6 +5,7 @@ interface Node {
   kind: "file" | "dir";
   size: number;
   modified: number;
+  mode?: number;
   children?: Map<string, Node>;
 }
 
@@ -59,7 +60,7 @@ export const mockFiles = {
     const n = find(user, path);
     if (!n?.children) throw notFound(path);
     return [...n.children.entries()]
-      .map(([name, c]) => ({ name, kind: c.kind, size: c.size, modified: c.modified, permissions: c.kind === "dir" ? 0o755 : 0o644 }))
+      .map(([name, c]) => ({ name, kind: c.kind, size: c.size, modified: c.modified, permissions: c.mode ?? (c.kind === "dir" ? 0o755 : 0o644) }))
       .sort((a, b) => Number(a.kind !== "dir") - Number(b.kind !== "dir") || a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
   },
 
@@ -72,8 +73,10 @@ export const mockFiles = {
     return "/" + out.join("/");
   },
 
+  /** A file's size, or everything in a folder. */
   size(user: string, path: string): number {
-    return find(user, path)?.size ?? 0;
+    const total = (n: Node | null): number => (!n ? 0 : n.children ? [...n.children.values()].reduce((s, c) => s + total(c), 0) : n.size);
+    return total(find(user, path));
   },
 
   put(user: string, path: string, node: Node) {
@@ -99,6 +102,12 @@ export const mockFiles = {
     if (!node) throw notFound(from);
     mockFiles.remove(user, from);
     mockFiles.put(user, to, node);
+  },
+
+  chmod(user: string, path: string, mode: number) {
+    const n = find(user, path);
+    if (!n) throw notFound(path);
+    n.mode = mode;
   },
 
   remove(user: string, path: string) {

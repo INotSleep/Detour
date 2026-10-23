@@ -553,15 +553,28 @@ export const api = {
     await demoDelay(200);
     mockFiles.remove(demoUser(id), path);
   },
+  /** Downloads a file to the place the user picked. */
   async filesDownload(id: string, remote: string, local: string, transfer: string, onProgress: OnProgress): Promise<void> {
     if (real) return invoke("files_download", { id, remote, local, transfer, onProgress: progressChannel(onProgress) });
     await demoTransfer(transfer, mockFiles.size(demoUser(id), remote), onProgress);
   },
-  async filesUpload(id: string, local: LocalFile, remote: string, transfer: string, onProgress: OnProgress): Promise<void> {
-    if (real) return invoke("files_upload", { id, local: local.path, remote, transfer, onProgress: progressChannel(onProgress) });
+  /** Downloads a file or a whole folder into a local folder, under a name not taken there. Returns where it went. */
+  async filesDownloadInto(id: string, remote: string, localDir: string, transfer: string, onProgress: OnProgress): Promise<string> {
+    if (real) return invoke("files_download_into", { id, remote, localDir, transfer, onProgress: progressChannel(onProgress) });
+    await demoTransfer(transfer, mockFiles.size(demoUser(id), remote), onProgress);
+    return `${localDir}\\${baseName(remote)}`;
+  },
+  /** Uploads a file or a whole folder; with `replace` what is there is replaced once the upload is complete. */
+  async filesUpload(id: string, local: LocalFile, remote: string, replace: boolean, transfer: string, onProgress: OnProgress): Promise<void> {
+    if (real) return invoke("files_upload", { id, local: local.path, remote, replace, transfer, onProgress: progressChannel(onProgress) });
     const size = demoPicked.get(local.path) ?? 0;
     await demoTransfer(transfer, size, onProgress);
     mockFiles.upload(demoUser(id), remote, size);
+  },
+  /** Sets Unix permission bits (`0o755`). */
+  async filesChmod(id: string, path: string, mode: number): Promise<void> {
+    if (real) return invoke("files_chmod", { id, path, mode });
+    mockFiles.chmod(demoUser(id), path, mode);
   },
   async filesCancel(transfer: string): Promise<void> {
     if (real) return invoke("files_cancel", { transfer });
@@ -585,6 +598,13 @@ export const api = {
     });
   },
 
+  /** Asks which folders to upload; empty if cancelled. Only in the app. */
+  async pickUploadFolders(): Promise<LocalFile[]> {
+    if (!real) return [];
+    const r = await open({ multiple: true, directory: true });
+    return (r ?? []).map((path) => ({ path, name: baseName(path) }));
+  },
+
   /** Files dropped from a browser drag (the demo); in the app drops come from onFileDrop. */
   droppedFiles: (list: FileList): LocalFile[] => demoLocal([...list]),
 
@@ -592,6 +612,15 @@ export const api = {
   async pickDownloadTarget(name: string): Promise<string | null> {
     if (real) return save({ defaultPath: name });
     return name;
+  },
+
+  /** Asks for a folder to download several things into; null if cancelled. */
+  async pickDownloadFolder(): Promise<string | null> {
+    if (real) {
+      const r = await open({ directory: true, multiple: false });
+      return typeof r === "string" ? r : null;
+    }
+    return "Загрузки";
   },
 
   /** Files dragged onto the window from the system, in the app. Returns how to stop listening. */
