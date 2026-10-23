@@ -202,6 +202,8 @@ export interface Settings {
   fontSize: number;
   scrollback: number;
   autoLockMinutes: number;
+  /** Look for a new version at start. */
+  autoUpdate: boolean;
   /** What a right click in a terminal does: paste (and copy a selection), or open a menu. */
   rightClick: "paste" | "menu";
 }

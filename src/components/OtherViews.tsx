@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { Code, Ellipsis, Lock, Pencil, Play, Plus, Trash2 } from "lucide-react";
+import { Code, Download, Ellipsis, Lock, Pencil, Play, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { api, errorText, isCoreError } from "../lib/api";
 import { uid, useStore } from "../lib/store";
 import { atLeast, writable } from "../lib/teams";
 import type { Snippet } from "../lib/types";
-import { Button, Empty, Field, IconButton, Menu, Modal, PageHeader, PasswordInput, Segmented } from "./ui";
+import { Button, Empty, Field, IconButton, Menu, Modal, PageHeader, PasswordInput, Segmented, Switch } from "./ui";
 import { SyncSettings } from "./SyncSettings";
+import { NO_RELEASES } from "../lib/updates";
 
 /* ---------- snippets ---------- */
 
@@ -119,7 +120,7 @@ function SnippetDialog({ snippet, onClose }: { snippet: Snippet | null; onClose:
 /* ---------- settings ---------- */
 
 export function SettingsView() {
-  const { settings, setSettings, coreInfo, lock } = useStore();
+  const { settings, setSettings, coreInfo, lock, update_: update, checkUpdate, installUpdate } = useStore();
   const [changingMaster, setChangingMaster] = useState(false);
   return (
     <div className="page narrow">
@@ -184,6 +185,29 @@ export function SettingsView() {
           <span>Версия</span>
           <span className="muted mono">{coreInfo ? `${coreInfo.coreVersion} · ${coreInfo.os}` : "0.0.1"}</span>
         </div>
+        {api.real && (
+          <>
+            <div className="setting">
+              <span>Обновления</span>
+              <div className="update-row">
+                {update.kind === "latest" && <span className="muted small">Последняя версия</span>}
+                {update.kind === "error" && <span className={`small ${update.text === NO_RELEASES ? "muted" : "err-text"}`}>{update.text}</span>}
+                {update.kind === "installing" && <span className="muted small">{update.share === null ? "Загрузка" : `Загрузка ${Math.round(update.share * 100)}%`}</span>}
+                {update.kind === "available" || update.kind === "installing" ? (
+                  <Button size="sm" variant="primary" icon={Download} loading={update.kind === "installing"} onClick={() => void installUpdate()}>
+                    Установить {update.info.version}
+                  </Button>
+                ) : (
+                  <Button size="sm" icon={RefreshCw} loading={update.kind === "checking"} onClick={() => void checkUpdate()}>Проверить</Button>
+                )}
+              </div>
+            </div>
+            <div className="setting">
+              <span>Проверять при запуске</span>
+              <Switch label="Проверять при запуске" checked={settings.autoUpdate} onChange={(autoUpdate) => setSettings({ autoUpdate })} />
+            </div>
+          </>
+        )}
       </section>
       {changingMaster && <MasterPasswordDialog onClose={() => setChangingMaster(false)} />}
     </div>

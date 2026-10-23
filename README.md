@@ -31,6 +31,9 @@ npm run tauri dev    # desktop app with detour-core
 cargo test --workspace
 ```
 
+Release builds sign their update files with the updater key: set `TAURI_SIGNING_PRIVATE_KEY` (and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`), or leave them out with
+`npm run tauri build -- --config "{\"bundle\":{\"createUpdaterArtifacts\":false}}"`. CI reads both from the repository's secrets.
+
 ## Teams without a server
 
 A team vault is a folder of signed, per-device, append-only logs, encrypted end to end. Access to every host, key and snippet is set per member and enforced by encryption, not by the client: a member never receives keys for what they may not see. Every client also checks that the storage hides, rolls back or forges nothing. Members join by exchanging Detour IDs; a recovery key is created with every team. Design and current limits: [docs/teams.md](docs/teams.md).
@@ -49,4 +52,5 @@ A team vault is a folder of signed, per-device, append-only logs, encrypted end 
 - [x] Import from `~/.ssh/config` (patterns, `Include`, `ProxyJump`, keys) and `known_hosts`
 - [x] SFTP: browse and sort, upload and download files and whole folders with progress, speed and cancel, select several, rename, delete, permissions, a terminal in the current folder; nothing half-written or replaced on failure
 - [x] Personal vault sync between your devices through a folder or a Git repository, new devices added with a one-time code
+- [x] Updates from GitHub releases, signed and checked against the key built into the app
 - [x] CI: tests on macOS, Windows and Linux on every push; installers for each from `v*` tags (draft release) or a manual run

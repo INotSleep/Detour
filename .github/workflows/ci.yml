@@ -84,10 +84,13 @@ jobs:
 
       - run: npm ci
 
-      # Builds the installers; on a tag, also attaches them to a draft release.
+      # Builds the installers; on a tag, also attaches them to a draft release, with the
+      # signed update files and latest.json the app's updater reads.
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
           releaseName: Detour ${{ github.ref_name }}
@@ -103,4 +106,6 @@ jobs:
             target/release/bundle/**/*.msi
             target/release/bundle/**/*.exe
             target/release/bundle/**/*.dmg
+            target/release/bundle/**/*.sig
+            target/release/bundle/**/*.app.tar.gz
           if-no-files-found: error

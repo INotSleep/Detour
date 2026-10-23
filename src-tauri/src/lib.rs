@@ -643,6 +643,8 @@ pub fn builder<R: tauri::Runtime>(builder: tauri::Builder<R>, data_dir: std::pat
     builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(App { store: Arc::new(Mutex::new(Store::open(data_dir))), sessions: Mutex::new(HashMap::new()), tunnels: Tunnels::new(), files: Files::new() })
         .invoke_handler(tauri::generate_handler![
             core_info,

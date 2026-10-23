@@ -19,6 +19,8 @@ tauri-plugin-dialog = "2.8.3"
 serde.workspace = true
 serde_json.workspace = true
 tauri-plugin-clipboard-manager = "2.5.0"
+tauri-plugin-updater = "2.14.0"
+tauri-plugin-process = "2.4.0"
 
 [dev-dependencies]
 tauri = { version = "2.12.5", features = ["test"] }

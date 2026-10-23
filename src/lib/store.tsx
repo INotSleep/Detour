@@ -1,6 +1,14 @@
 import { createContext, useContext } from "react";
 import type { Settings, Vault, Workspace } from "./types";
 import type { CoreInfo, SyncInfo, TeamView } from "./api";
+import type { UpdateInfo } from "./updates";
+
+/** Where looking for and installing a new version stands. */
+export type UpdateState =
+  | { kind: "idle" | "checking" | "latest" }
+  | { kind: "available"; info: UpdateInfo }
+  | { kind: "installing"; info: UpdateInfo; share: number | null }
+  | { kind: "error"; text: string };
 
 export type Section = "hosts" | "keys" | "snippets" | "tunnels" | "team" | "settings";
 
@@ -38,6 +46,9 @@ export interface Store {
   setSync: (s: SyncInfo) => void;
   /** Reads the personal vault again, after sync brought changes. */
   refreshPersonal: () => Promise<void>;
+  update_: UpdateState;
+  checkUpdate: () => Promise<void>;
+  installUpdate: () => Promise<void>;
 }
 
 export const StoreContext = createContext<Store | null>(null);

@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Permissions for the main window",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:allow-save", "dialog:allow-open", "clipboard-manager:allow-read-text", "clipboard-manager:allow-write-text"]
+  "permissions": ["core:default", "dialog:allow-save", "dialog:allow-open", "clipboard-manager:allow-read-text", "clipboard-manager:allow-write-text", "updater:default", "process:allow-restart"]
 }

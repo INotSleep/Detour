@@ -3,7 +3,8 @@ import { ArrowLeftRight, Code, FolderOpen, KeyRound, Plus, Server, Settings as S
 import { api, errorText, fromView, type CoreInfo, type SyncInfo, type TeamView, type VaultView } from "./lib/api";
 import { applyTeamEntries, applyTeamView, dataOf, removeVault, writable } from "./lib/teams";
 import { mockWorkspace } from "./lib/mockData";
-import { StoreContext, uid, type Section, type Store } from "./lib/store";
+import { StoreContext, uid, type Section, type Store, type UpdateState } from "./lib/store";
+import { checkForUpdate, installUpdate as installFound, updateErrorText } from "./lib/updates";
 import type { Settings, Workspace } from "./lib/types";
 import type { SessionStatus } from "./lib/fakeShell";
 import { Sidebar } from "./components/Sidebar";
@@ -38,7 +39,7 @@ const sectionMeta: Record<Section, { title: string; icon: typeof Server }> = {
   settings: { title: "Настройки", icon: SettingsIcon },
 };
 
-const defaultSettings: Settings = { theme: "dark", fontSize: 13, scrollback: 5000, autoLockMinutes: 15, rightClick: "paste" };
+const defaultSettings: Settings = { theme: "dark", fontSize: 13, scrollback: 5000, autoLockMinutes: 15, rightClick: "paste", autoUpdate: true };
 const SETTINGS_KEY = "detour.settings";
 
 /** Settings of this device, kept in the webview's storage. */
@@ -92,6 +93,7 @@ export default function App() {
     }
   }, [settings]);
   const [sync, setSync] = useState<SyncInfo | null>(null);
+  const [updateState, setUpdateState] = useState<UpdateState>({ kind: "idle" });
   const toaster = useToaster();
 
   useEffect(() => {
@@ -167,6 +169,44 @@ export default function App() {
     wsRef.current = next;
     setWs((cur) => (cur === base ? next : cur));
   }, []);
+
+  /* ---------- new versions ---------- */
+
+  const installUpdate = useCallback(async () => {
+    const st = updateStateRef.current;
+    if (st.kind !== "available") return;
+    setUpdateState({ kind: "installing", info: st.info, share: null });
+    try {
+      // The app restarts into the new version when this finishes.
+      await installFound((share) => setUpdateState({ kind: "installing", info: st.info, share }));
+    } catch (e) {
+      setUpdateState({ kind: "error", text: updateErrorText(e) });
+    }
+  }, []);
+  const updateStateRef = useRef(updateState);
+  updateStateRef.current = updateState;
+
+  const checkUpdate = useCallback(async (quiet = false) => {
+    if (!api.real) return setUpdateState({ kind: "latest" });
+    setUpdateState({ kind: "checking" });
+    try {
+      const info = await checkForUpdate();
+      setUpdateState(info ? { kind: "available", info } : { kind: "latest" });
+      if (info && quiet) toaster.push({ text: `Доступна версия ${info.version}`, duration: 15000, action: { label: "Обновить", run: () => void installUpdate() } });
+    } catch (e) {
+      // A check at start that fails says nothing; one asked for says why.
+      setUpdateState(quiet ? { kind: "idle" } : { kind: "error", text: updateErrorText(e) });
+    }
+  }, [toaster.push, installUpdate]);
+
+  // Look for a new version a little after start.
+  useEffect(() => {
+    if (!api.real || phase !== "ready" || !settings.autoUpdate) return;
+    const timer = setTimeout(() => void checkUpdate(true), 8000);
+    return () => clearTimeout(timer);
+    // Once per unlock.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase]);
 
   /** Takes the list of teams from the core again: teams joined or left on another device. */
   const refreshTeams = useCallback(async () => {
@@ -369,8 +409,11 @@ export default function App() {
       sync,
       setSync,
       refreshPersonal,
+      update_: updateState,
+      checkUpdate: () => checkUpdate(false),
+      installUpdate,
     };
-  }, [ws, vaultId, section, settings, coreInfo, connect, openFiles, toaster.push, lock, applyView, sync, refreshPersonal]);
+  }, [ws, vaultId, section, settings, coreInfo, connect, openFiles, toaster.push, lock, applyView, sync, refreshPersonal, updateState, checkUpdate, installUpdate]);
 
   if (phase === "loading") return null;
   if (!store) return <LockScreen mode={phase === "setup" ? "setup" : "unlock"} onUnlocked={(v) => void unlocked(v)} />;
