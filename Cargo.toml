@@ -5,7 +5,7 @@ members = ["crates/detour-core", "src-tauri"]
 [workspace.package]
 version = "0.0.1"
 edition = "2024"
-license = "Apache-2.0"
+license = "AGPL-3.0-only"
 
 [workspace.dependencies]
 detour-core = { path = "crates/detour-core" }

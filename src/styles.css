@@ -973,3 +973,5 @@ body.resizing-col, body.resizing-col * { cursor: row-resize !important; }
 .team-card.pending:hover { background: var(--surface); }
 .pending-avatar { width: 36px; height: 36px; flex: none; display: grid; place-items: center; border-radius: 10px; border: 1px dashed var(--line-strong); color: var(--muted); }
 .update-row { display: flex; align-items: center; gap: 10px; }
+
+.selectable { user-select: text; }

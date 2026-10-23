@@ -1,56 +1,116 @@
+<div align="center">
+
+<img src="public/logo.svg" width="96" alt="Detour logo">
+
 # Detour
 
-Open-source SSH client for macOS, Windows and Linux with **serverless Teams**:
-a team shares hosts, keys and snippets through storage it already owns
-(a private Git repo or a shared folder). Everything is end-to-end encrypted
-to each member's key, and every change is signed. No accounts, no Detour cloud.
+**An SSH client for teams, with no server in the middle.**
 
-> Status: early. The personal vault (synced between your devices), keys, SSH sessions, tunnels, SFTP file browsing and team vaults over a shared folder or a Git repository (SSH or HTTPS) work. CI tests every change and builds installers on macOS, Windows and Linux.
+Hosts, keys and passwords are shared through a Git repository or a folder you already have,<br>
+encrypted end to end and signed on every change.
 
-## Layout
+[![CI](https://github.com/INotSleep/Detour/actions/workflows/ci.yml/badge.svg)](https://github.com/INotSleep/Detour/actions/workflows/ci.yml)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-6e9bff)](LICENSE)
+![macOS | Windows | Linux](https://img.shields.io/badge/macOS%20%7C%20Windows%20%7C%20Linux-3ecf8e)
 
-```
-crates/detour-core/   SSH, vaults, team sync, crypto — no UI dependencies
-src-tauri/            Tauri 2 shell: thin commands that call detour-core
-src/                  React + TypeScript UI (xterm.js terminal)
-  lib/api.ts          the only UI ↔ backend boundary (falls back to mocks in a browser)
-```
+[**Download**](https://github.com/INotSleep/Detour/releases/latest) · [Security design](docs/teams.md) · [Build from source](#build-from-source)
 
-`detour-core` must never depend on Tauri, so the frontend can be swapped without
-touching SSH, crypto or sync code.
+<img src="docs/images/terminal.png" alt="Two terminal panes connected to a server" width="100%">
 
-## Development
+</div>
 
-Requirements: Node 20+, Rust (stable), and the platform's Tauri prerequisites
-(Windows: Visual Studio Build Tools with the C++ workload, WebView2).
+## Features
+
+- **Terminal.** Tabs, split panes, search. Copy and paste like your system terminal, or like Termius.
+- **SFTP.** Files and whole folders with progress and cancel, permissions, a terminal in the current folder. A failed transfer never leaves a half-written file.
+- **Tunnels.** Local (`-L`), remote (`-R`) and SOCKS (`-D`) forwarding.
+- **Proxies.** Chains of jump hosts (`-J`), SOCKS5 and HTTP proxies, with logins.
+- **Import.** `~/.ssh/config` with `Include`, patterns and `ProxyJump`, keys and `known_hosts`.
+- **All your devices.** Your vault syncs between them. A new device joins with a one-time code.
+- **Teams.** Access per host, key and snippet, per person.
+
+<p>
+  <img src="docs/images/hosts.png" alt="Hosts" width="49%">
+  <img src="docs/images/access.png" alt="Team access per host and person" width="49%">
+</p>
+
+## Security
+
+Detour treats the storage, the network and every other member's computer as hostile. There is no Detour server to trust or to breach.
+
+| If | Then |
+|---|---|
+| your Git host or shared folder leaks | the attacker gets ciphertext. Names, addresses, logins, members and who can see what are encrypted. |
+| the storage alters, reorders, hides or rolls back changes others have seen | every member's Detour detects it and says so. |
+| a teammate's copy of Detour is modified | it still holds only the keys that teammate was given. Access is enforced by encryption, not by the app. |
+| someone is removed from a team | the rest of the team moves to new keys. Nothing written afterwards is readable to them. |
+| your laptop is stolen | the vault is sealed with your master password and locks itself when idle. |
+| a server's host key changes | the connection stops before any password or key is sent. |
+| a Detour ID is swapped on its way to an admin | the fingerprints you compare don't match. |
+| someone publishes a fake update | the app refuses it: updates must carry the project's signature. |
+
+**Built on** [age](https://age-encryption.org) (X25519, scrypt), ChaCha20-Poly1305, Ed25519 signatures and per-device hash chains, [russh](https://github.com/Eugeny/russh) and [rustls](https://github.com/rustls/rustls). No accounts, no telemetry.
+
+The full design, including what cryptography can't protect against: [docs/teams.md](docs/teams.md).
+
+## Teams
+
+1. Create a team in a Git repository (any SSH or HTTPS remote) or in a shared folder (Syncthing, Dropbox, OneDrive, SMB).
+2. Add a teammate by the Detour ID they send you, and pick what they can see.
+3. They open the same repository or folder.
+
+## Install
+
+Installers for macOS, Windows and Linux are on the [Releases](https://github.com/INotSleep/Detour/releases/latest) page. Detour updates itself from there.
+
+The interface is in Russian for now.
+
+## Build from source
+
+Requirements: Node 20+, Rust (stable), and the [Tauri prerequisites](https://tauri.app/start/prerequisites/) for your system.
 
 ```bash
 npm install
-npm run dev          # UI only, in a browser at http://localhost:1420 (mock data)
-npm run tauri dev    # desktop app with detour-core
+npm run tauri dev        # the desktop app
+npm run dev              # the UI alone in a browser, with demo data
 cargo test --workspace
 ```
 
-Release builds sign their update files with the updater key: set `TAURI_SIGNING_PRIVATE_KEY` (and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`), or leave them out with
-`npm run tauri build -- --config "{\"bundle\":{\"createUpdaterArtifacts\":false}}"`. CI reads both from the repository's secrets.
+<details>
+<summary>Release builds</summary>
 
-## Teams without a server
+Release builds sign their update files with the updater key: set `TAURI_SIGNING_PRIVATE_KEY` (and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` if it has one), or build without update files:
 
-A team vault is a folder of signed, per-device, append-only logs, encrypted end to end. Access to every host, key and snippet is set per member and enforced by encryption, not by the client: a member never receives keys for what they may not see. Every client also checks that the storage hides, rolls back or forges nothing. Members join by exchanging Detour IDs; a recovery key is created with every team. Design and current limits: [docs/teams.md](docs/teams.md).
+```bash
+npm run tauri build -- --config "{\"bundle\":{\"createUpdaterArtifacts\":false}}"
+```
 
-## Roadmap
+CI builds installers for every `v*` tag into a draft release.
 
-- [x] UI mockup: hosts, terminal tabs, keys, snippets, teams
-- [x] Real SSH sessions in detour-core (russh) streamed to xterm.js
-- [x] Local encrypted vault (personal)
-- [x] Known hosts / host key pinning
-- [x] Team vaults over a shared folder (Detour ID, roles, conflicts, recovery key)
-- [x] Per-record access enforced by encryption, own logins for team hosts, storage integrity checks
-- [x] Team vaults over Git (SSH or HTTPS with a token), with Detour's own Git client
-- [x] Tunnels: local (`-L`), remote (`-R`) and SOCKS5 (`-D`) port forwarding over a kept SSH connection
-- [x] Reaching hosts through a jump host (`-J`, chained), a SOCKS5 or an HTTP proxy (with a login)
-- [x] Import from `~/.ssh/config` (patterns, `Include`, `ProxyJump`, keys) and `known_hosts`
-- [x] SFTP: browse and sort, upload and download files and whole folders with progress, speed and cancel, select several, rename, delete, permissions, a terminal in the current folder; nothing half-written or replaced on failure
-- [x] Personal vault sync between your devices through a folder or a Git repository, new devices added with a one-time code
-- [x] Updates from GitHub releases, signed and checked against the key built into the app
-- [x] CI: tests on macOS, Windows and Linux on every push; installers for each from `v*` tags (draft release) or a manual run
+</details>
+
+### Layout
+
+```
+crates/detour-core/   SSH, SFTP, vaults, team sync, crypto. No UI dependencies.
+src-tauri/            Tauri 2 shell: thin commands over detour-core
+src/                  React + TypeScript UI, xterm.js terminal
+  lib/api.ts          the only boundary between the UI and the core
+```
+
+## Next
+
+- Sign in with GitHub instead of a token
+- Replace keys on servers after someone leaves a team
+- SSH certificates
+- ssh-agent forwarding
+
+## Contributing
+
+Issues and pull requests are welcome. Contributions are published under the project's license. `cargo test --workspace` and `npx tsc --noEmit` must pass.
+
+## License
+
+Detour is free software under the [GNU AGPL v3](LICENSE) with the additional terms in [NOTICE](NOTICE).
+
+Use it anywhere, including at work, at no cost. Whoever distributes a modified version, or runs one as a network service, must publish its source under the same license, credit it as **Based on Detour** with a link to this repository, and must not call it Detour.

@@ -1,0 +1,32 @@
+Detour
+Copyright (C) 2026 Vladislav (INotSleep) and Detour contributors
+https://github.com/INotSleep/Detour
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, version 3, with the additional terms below.
+The license text is in the LICENSE file.
+
+This program is distributed in the hope that it will be useful, but
+WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public
+License for more details.
+
+
+Additional terms under section 7 of the GNU Affero General Public License
+-------------------------------------------------------------------------
+
+1. Attribution (section 7(b)). Every copy and every modified version of
+   this program, and every work that contains any part of it, must keep
+   this NOTICE file, and must show the following attribution in its
+   Appropriate Legal Notices (section 5(d)), or, if it has none, in its
+   documentation:
+
+       Based on Detour (https://github.com/INotSleep/Detour)
+
+2. Origin (section 7(c)). A modified version must be marked as different
+   from the original and must not be presented as Detour itself.
+
+3. Name (section 7(e)). This license grants no right to use the name
+   "Detour" or its logo as the name or logo of a modified version, other
+   than in the attribution required above.

@@ -185,6 +185,10 @@ export function SettingsView() {
           <span>Версия</span>
           <span className="muted mono">{coreInfo ? `${coreInfo.coreVersion} · ${coreInfo.os}` : "0.0.1"}</span>
         </div>
+        <div className="setting">
+          <span>Лицензия</span>
+          <span className="muted mono selectable">AGPL-3.0 · github.com/INotSleep/Detour</span>
+        </div>
         {api.real && (
           <>
             <div className="setting">
