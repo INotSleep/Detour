@@ -955,3 +955,14 @@ body.resizing-col, body.resizing-col * { cursor: row-resize !important; }
 .menu button:disabled { opacity: 0.4; pointer-events: none; }
 /* Terminals and file browsers fill their view and scroll inside. */
 .view:has(> .term-panes), .view:has(> .files) { overflow: hidden; }
+
+/* import from ~/.ssh */
+.import-wait { display: grid; place-items: center; padding: 32px; color: var(--muted); }
+.import-head { padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+.import-list { max-height: 340px; overflow: auto; margin: 0 -6px; display: flex; flex-direction: column; gap: 1px; }
+.import-row.checkbox { width: auto; display: flex; align-items: center; gap: 10px; padding: 7px 6px; border-radius: 6px; color: var(--text); }
+.import-row:hover { background: var(--hover); }
+.import-row.done { opacity: 0.55; cursor: default; }
+.import-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.import-alias { font-weight: 600; font-size: 13px; }
+.import-addr { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

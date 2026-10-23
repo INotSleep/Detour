@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use detour_core::model::{Auth, KeyAlgorithm, KeyView, OwnLoginView, VaultView};
 use detour_core::ssh::{self, SessionEvent, SessionHandle};
 use detour_core::personal::Pairing;
-use detour_core::store::{MyId, PERSONAL, Store, SyncStatus, TeamEntry, VaultUpdate};
+use detour_core::store::{ImportPreview, ImportResult, MyId, PERSONAL, Store, SyncStatus, TeamEntry, VaultUpdate};
 use detour_core::team::state::{Coll, Level, Role};
 use detour_core::sync;
 use detour_core::sftp::{self, FileEntry, Files};
@@ -210,6 +210,20 @@ fn vault_get(app: State<App>) -> Result<VaultView> {
 #[tauri::command]
 fn vault_put(app: State<App>, update: VaultUpdate) -> Result<VaultView> {
     let r = app.store.lock().map_err(poisoned)?.put(update);
+    pushed(&app, PERSONAL, r)
+}
+
+/* ---------- moving over from OpenSSH ---------- */
+
+/// What ~/.ssh/config and ~/.ssh/known_hosts hold, against the personal vault.
+#[tauri::command]
+fn ssh_import_preview(app: State<App>) -> Result<ImportPreview> {
+    app.store.lock().map_err(poisoned)?.ssh_import_preview()
+}
+
+#[tauri::command]
+fn ssh_import(app: State<App>, aliases: Vec<String>, known_hosts: bool) -> Result<ImportResult> {
+    let r = app.store.lock().map_err(poisoned)?.ssh_import(&aliases, known_hosts);
     pushed(&app, PERSONAL, r)
 }
 
@@ -625,6 +639,8 @@ pub fn builder<R: tauri::Runtime>(builder: tauri::Builder<R>, data_dir: std::pat
             vault_change_master_password,
             vault_get,
             vault_put,
+            ssh_import_preview,
+            ssh_import,
             sync_status,
             sync_now,
             sync_enable_folder,

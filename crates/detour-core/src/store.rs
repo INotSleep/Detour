@@ -1268,3 +1268,206 @@ mod tests {
         s.unlock("new").unwrap();
     }
 }
+
+/* ---------- moving over from OpenSSH ---------- */
+
+/// What importing from `~/.ssh` would bring.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportPreview {
+    pub config_path: String,
+    pub config_found: bool,
+    pub hosts: Vec<ImportHost>,
+    /// Server keys not pinned here yet.
+    pub known_new: usize,
+    /// Pinned here with a different key: left as they are.
+    pub known_different: usize,
+    /// Hashed lines, which can't be read.
+    pub known_hashed: usize,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportHost {
+    #[serde(flatten)]
+    pub host: crate::import::ConfigHost,
+    /// The same host (address, port and user, or name) is in the vault already.
+    pub exists: bool,
+    /// Its `IdentityFile` can't be read: it would log in with ssh-agent.
+    pub key_missing: bool,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportResult {
+    pub hosts: usize,
+    pub keys: usize,
+    pub known: usize,
+}
+
+const IMPORT_GROUP: &str = "SSH config";
+
+impl Store {
+    fn same_host(v: &VaultData, alias: &str, address: &str, port: u16, user: &str) -> Option<String> {
+        v.hosts
+            .iter()
+            .find(|h| (h.address.eq_ignore_ascii_case(address) && h.port == port && h.user == user) || h.label == alias)
+            .map(|h| h.id.clone())
+    }
+
+    /// What `config` and `known_hosts` in `ssh` (normally `~/.ssh`) hold, against this vault.
+    pub fn ssh_import_preview_from(&self, ssh: &Path) -> Result<ImportPreview> {
+        let v = &self.unlocked()?.vault;
+        let home = ssh.parent().unwrap_or(ssh);
+        let config = ssh.join("config");
+        let hosts = crate::import::read_config(&config, home)
+            .into_iter()
+            .map(|h| ImportHost {
+                exists: Self::same_host(v, &h.alias, &h.address, h.port, &h.user).is_some(),
+                key_missing: h.key_file.as_ref().is_some_and(|f| !Path::new(f).is_file()),
+                host: h,
+            })
+            .collect();
+        let known = crate::import::read_known_hosts(&ssh.join("known_hosts"));
+        let pinned = |e: &crate::import::KnownEntry| v.known_hosts.iter().find(|k| k.endpoint.eq_ignore_ascii_case(&e.endpoint)).map(|k| k.fingerprint == e.fingerprint);
+        Ok(ImportPreview {
+            config_path: config.display().to_string(),
+            config_found: config.is_file(),
+            hosts,
+            known_new: known.entries.iter().filter(|e| pinned(e).is_none()).count(),
+            known_different: known.entries.iter().filter(|e| pinned(e) == Some(false)).count(),
+            known_hashed: known.hashed,
+        })
+    }
+
+    pub fn ssh_import_preview(&self) -> Result<ImportPreview> {
+        self.ssh_import_preview_from(&crate::import::ssh_dir().ok_or_else(|| not_found("home folder"))?)
+    }
+
+    /// Imports the chosen hosts (with their keys and the hosts they go through)
+    /// and, if asked, server keys not pinned yet. Hosts already here are skipped.
+    pub fn ssh_import_from(&mut self, ssh: &Path, aliases: &[String], known_hosts: bool) -> Result<ImportResult> {
+        let home = ssh.parent().unwrap_or(ssh).to_path_buf();
+        let config = crate::import::read_config(&ssh.join("config"), &home);
+        let mut result = ImportResult { hosts: 0, keys: 0, known: 0 };
+        // Alias -> host id, for hosts imported now or already here.
+        let mut ids: HashMap<String, String> = HashMap::new();
+        // Hosts this import created, which may still get a route.
+        let mut created: Vec<String> = Vec::new();
+        let mut queue: Vec<String> = aliases.to_vec();
+        let mut done: Vec<String> = Vec::new();
+        while let Some(alias) = queue.pop() {
+            if done.contains(&alias) {
+                continue;
+            }
+            done.push(alias.clone());
+            let Some(h) = config.iter().find(|h| h.alias == alias).cloned() else { continue };
+            if let Some(id) = Self::same_host(&self.unlocked()?.vault, &h.alias, &h.address, h.port, &h.user) {
+                ids.insert(alias, id);
+                continue;
+            }
+            // Hosts a chosen one goes through come along.
+            for hop in &h.jumps {
+                if config.iter().any(|c| &c.alias == hop) && !done.contains(hop) {
+                    queue.push(hop.clone());
+                }
+            }
+            let auth = match h.key_file.as_deref().and_then(|f| std::fs::read_to_string(f).ok().map(|text| (f.to_string(), text))) {
+                Some((file, text)) => {
+                    let name = Path::new(&file).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "imported-key".into());
+                    match keys::import_locked(&name, &text) {
+                        Ok(entry) => {
+                            let v = self.vault_mut()?;
+                            let id = match v.keys.iter().find(|k| k.fingerprint == entry.fingerprint) {
+                                Some(k) => k.id.clone(),
+                                None => {
+                                    let id = entry.id.clone();
+                                    v.keys.push(entry);
+                                    result.keys += 1;
+                                    id
+                                }
+                            };
+                            Auth::Key { key_id: id }
+                        }
+                        Err(_) => Auth::Agent,
+                    }
+                }
+                None => Auth::Agent,
+            };
+            let id = crate::new_id();
+            ids.insert(alias.clone(), id.clone());
+            created.push(id.clone());
+            self.vault_mut()?.hosts.push(Host {
+                id,
+                group: IMPORT_GROUP.into(),
+                label: h.alias.clone(),
+                address: h.address.clone(),
+                port: h.port,
+                user: h.user.clone(),
+                auth,
+                tags: vec![],
+                last_connected: None,
+                password: None,
+                proxy: None,
+                proxy_password: None,
+            });
+            result.hosts += 1;
+        }
+        // Routes, once every host has an id: ProxyJump a,b means a, then b, then the host.
+        for h in config.iter().filter(|h| done.contains(&h.alias) && !h.jumps.is_empty()) {
+            let Some(target) = ids.get(&h.alias).cloned() else { continue };
+            if !created.contains(&target) {
+                continue;
+            }
+            let mut previous: Option<String> = None;
+            for hop in &h.jumps {
+                let hop_id = match ids.get(hop) {
+                    Some(id) => id.clone(),
+                    None => {
+                        let (user, address, port) = crate::import::parse_hop(hop, &h.user);
+                        let v = self.vault_mut()?;
+                        match Self::same_host(v, hop, &address, port, &user) {
+                            Some(id) => id,
+                            None => {
+                                let id = crate::new_id();
+                                v.hosts.push(Host { id: id.clone(), group: IMPORT_GROUP.into(), label: hop.clone(), address, port, user, auth: Auth::Agent, tags: vec![], last_connected: None, password: None, proxy: None, proxy_password: None });
+                                result.hosts += 1;
+                                // A hop written out in full goes through the hop before it.
+                                if let Some(prev) = &previous
+                                    && let Some(x) = v.hosts.last_mut()
+                                {
+                                    x.proxy = Some(Proxy::Jump { host_id: prev.clone() });
+                                }
+                                id
+                            }
+                        }
+                    }
+                };
+                ids.entry(hop.clone()).or_insert_with(|| hop_id.clone());
+                previous = Some(hop_id);
+            }
+            if let Some(last) = previous
+                && let Some(x) = self.vault_mut()?.hosts.iter_mut().find(|x| x.id == target)
+            {
+                x.proxy = Some(Proxy::Jump { host_id: last });
+            }
+        }
+        if known_hosts {
+            let known = crate::import::read_known_hosts(&ssh.join("known_hosts"));
+            let v = self.vault_mut()?;
+            for e in known.entries {
+                if !v.known_hosts.iter().any(|k| k.endpoint.eq_ignore_ascii_case(&e.endpoint)) {
+                    v.known_hosts.push(e.to_known());
+                    result.known += 1;
+                }
+            }
+        }
+        self.save()?;
+        Ok(result)
+    }
+
+    pub fn ssh_import(&mut self, aliases: &[String], known_hosts: bool) -> Result<ImportResult> {
+        let ssh = crate::import::ssh_dir().ok_or_else(|| not_found("home folder"))?;
+        self.ssh_import_from(&ssh, aliases, known_hosts)
+    }
+}

@@ -99,6 +99,28 @@ pub fn import(name: &str, text: &str, passphrase: Option<&str>, remember: bool) 
     entry(&name, &key, passphrase, remember)
 }
 
+/// Takes an OpenSSH key still encrypted with its passphrase, as it is: its public
+/// half is readable without it, and the passphrase is asked when the key is used.
+pub fn import_locked(name: &str, text: &str) -> Result<KeyEntry> {
+    let key = PrivateKey::from_openssh(text.trim()).map_err(|e| invalid(e.to_string()))?;
+    if !key.is_encrypted() {
+        return import(name, text, None, false);
+    }
+    let (algorithm, bits) = algorithm_of(&key)?;
+    Ok(KeyEntry {
+        id: new_id(),
+        name: name.to_string(),
+        algorithm,
+        bits,
+        fingerprint: key.public_key().fingerprint(HashAlg::Sha256).to_string(),
+        public_key: key.public_key().to_openssh().map_err(|e| invalid(e.to_string()))?,
+        private_key: key.to_openssh(LineEnding::LF).map_err(|e| invalid(e.to_string()))?.to_string(),
+        has_passphrase: true,
+        passphrase: None,
+        created_at: now_ms(),
+    })
+}
+
 /// Opens a stored key for authentication.
 pub fn unlock(entry: &KeyEntry, passphrase: Option<&str>) -> Result<PrivateKey> {
     let passphrase = passphrase.or(entry.passphrase.as_deref());

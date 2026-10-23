@@ -6,6 +6,7 @@
 //! replaced without touching it.
 
 pub mod identity;
+pub mod import;
 pub mod keys;
 pub mod model;
 pub mod personal;

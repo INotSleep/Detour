@@ -217,6 +217,28 @@ export interface FileEntry {
   permissions: number | null;
 }
 
+/** A host ~/.ssh/config names (detour_core::store::ImportHost). */
+export interface ImportHost {
+  alias: string;
+  address: string;
+  port: number;
+  user: string;
+  keyFile: string | null;
+  jumps: string[];
+  unsupported: "proxyCommand" | null;
+  exists: boolean;
+  keyMissing: boolean;
+}
+
+export interface ImportPreview {
+  configPath: string;
+  configFound: boolean;
+  hosts: ImportHost[];
+  knownNew: number;
+  knownDifferent: number;
+  knownHashed: number;
+}
+
 /** Where the personal vault syncs and how that goes (detour_core::store::SyncStatus). */
 export interface SyncInfo {
   enabled: boolean;
@@ -527,6 +549,11 @@ export const api = {
       return false;
     }
   },
+
+  /* moving over from OpenSSH (into the personal vault) */
+
+  sshImportPreview: (): Promise<ImportPreview> => invoke("ssh_import_preview"),
+  sshImport: (aliases: string[], knownHosts: boolean): Promise<{ hosts: number; keys: number; known: number }> => invoke("ssh_import", { aliases, knownHosts }),
 
   /* personal vault sync */
 

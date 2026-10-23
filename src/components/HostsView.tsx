@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ChevronRight, CopyPlus, Ellipsis, FolderOpen, Plus, Search, Server, SquareTerminal, Terminal, Trash2, TriangleAlert, X } from "lucide-react";
+import { ChevronRight, CopyPlus, Download, Ellipsis, FolderOpen, Plus, Search, Server, SquareTerminal, Terminal, Trash2, TriangleAlert, X } from "lucide-react";
 import { api, errorText } from "../lib/api";
 import { copyText, formatAgo, sshCommand, uid, useStore } from "../lib/store";
 import type { Host } from "../lib/types";
@@ -8,6 +8,7 @@ import { atLeast, writable } from "../lib/teams";
 import { OwnLoginSection, SavedPassword } from "./HostLogin";
 import { Button, Empty, IconButton, Menu, Modal, PageHeader } from "./ui";
 import { HostFields, applyDraft, draftFromHost, draftInvalid, emptyDraft, useHostDraft } from "./HostForm";
+import { ImportDialog } from "./ImportDialog";
 
 export function HostsView() {
   const { ws, vault, update, toast, connect, openFiles, resolveConflicts } = useStore();
@@ -17,6 +18,7 @@ export function HostsView() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [creating, setCreating] = useState(false);
+  const [importing, setImporting] = useState(false);
 
   const hosts = ws.hosts.filter((h) => h.vaultId === vault.id);
   const groupNames = [...new Set(hosts.map((h) => h.group))];
@@ -78,11 +80,25 @@ export function HostsView() {
                 {query && <IconButton icon={X} label="Очистить" size={13} onClick={() => setQuery("")} />}
               </label>
             )}
+            {vault.kind === "personal" && (
+              <Menu trigger={(open, isOpen) => <IconButton icon={Ellipsis} label="Ещё" className={isOpen ? "pressed" : ""} onClick={open} />} items={[{ label: "Импорт из ~/.ssh", icon: Download, onSelect: () => setImporting(true) }]} />
+            )}
             {canCreate && <Button variant="primary" icon={Plus} onClick={() => setCreating(true)}>Добавить хост</Button>}
           </PageHeader>
 
           {hosts.length === 0 && (
-            <Empty icon={Server} title="Нет хостов" action={canCreate ? <Button variant="primary" icon={Plus} onClick={() => setCreating(true)}>Добавить хост</Button> : undefined} />
+            <Empty
+              icon={Server}
+              title="Нет хостов"
+              action={
+                canCreate ? (
+                  <div className="row-buttons">
+                    {vault.kind === "personal" && <Button icon={Download} onClick={() => setImporting(true)}>Импорт из ~/.ssh</Button>}
+                    <Button variant="primary" icon={Plus} onClick={() => setCreating(true)}>Добавить хост</Button>
+                  </div>
+                ) : undefined
+              }
+            />
           )}
           {hosts.length > 0 && filtered.length === 0 && <Empty icon={Search} title={`Ничего не найдено по «${query}»`} />}
 
@@ -171,6 +187,7 @@ export function HostsView() {
       )}
 
       {creating && <NewHostDialog groups={groupNames} onClose={() => setCreating(false)} onCreated={(h) => setSelectedId(h.id)} />}
+      {importing && <ImportDialog onClose={() => setImporting(false)} />}
     </div>
   );
 }

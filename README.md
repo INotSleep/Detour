@@ -46,6 +46,7 @@ A team vault is a folder of signed, per-device, append-only logs, encrypted end 
 - [x] Team vaults over Git (SSH or HTTPS with a token), with Detour's own Git client
 - [x] Tunnels: local (`-L`), remote (`-R`) and SOCKS5 (`-D`) port forwarding over a kept SSH connection
 - [x] Reaching hosts through a jump host (`-J`, chained), a SOCKS5 or an HTTP proxy (with a login)
+- [x] Import from `~/.ssh/config` (patterns, `Include`, `ProxyJump`, keys) and `known_hosts`
 - [x] SFTP: browse and sort, upload and download files and whole folders with progress, speed and cancel, select several, rename, delete, permissions, a terminal in the current folder; nothing half-written or replaced on failure
 - [x] Personal vault sync between your devices through a folder or a Git repository, new devices added with a one-time code
 - [x] CI: tests on macOS, Windows and Linux on every push; installers for each from `v*` tags (draft release) or a manual run
