@@ -33,7 +33,7 @@ cargo test --workspace
 
 ## Teams without a server
 
-A team vault is a folder of signed, per-device, append-only logs, encrypted end to end. Members join by exchanging Detour IDs; a recovery key is created with every team. Design and current limits: [docs/teams.md](docs/teams.md).
+A team vault is a folder of signed, per-device, append-only logs, encrypted end to end. Access to every host, key and snippet is set per member and enforced by encryption, not by the client: a member never receives keys for what they may not see. Every client also checks that the storage hides, rolls back or forges nothing. Members join by exchanging Detour IDs; a recovery key is created with every team. Design and current limits: [docs/teams.md](docs/teams.md).
 
 ## Roadmap
 
@@ -42,6 +42,7 @@ A team vault is a folder of signed, per-device, append-only logs, encrypted end 
 - [x] Local encrypted vault (personal)
 - [x] Known hosts / host key pinning
 - [x] Team vaults over a shared folder (Detour ID, roles, conflicts, recovery key)
+- [x] Per-record access enforced by encryption, own logins for team hosts, storage integrity checks
 - [ ] Team vaults over Git
 - [ ] Port forwarding, SFTP
 - [ ] CI builds for macOS, Windows, Linux

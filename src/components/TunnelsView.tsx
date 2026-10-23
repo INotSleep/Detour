@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { ArrowLeftRight, ArrowRight, Copy, Ellipsis, Globe, Laptop, Loader2, Pencil, Plus, RotateCw, Server, Trash2, type LucideIcon } from "lucide-react";
 import { copyText, sleep, uid, useStore } from "../lib/store";
 import type { Host, Tunnel } from "../lib/types";
-import { writable } from "../lib/teams";
+import { atLeast, writable } from "../lib/teams";
 import { Button, Empty, Field, IconButton, Menu, Modal, PageHeader, Switch } from "./ui";
 
 /* ---------- route ---------- */
@@ -57,7 +57,7 @@ function endpoint(t: Tunnel, via?: Host) {
 
 export function TunnelsView() {
   const { ws, vault, update, toast, navigate } = useStore();
-  const canEdit = writable(vault);
+  const canCreate = writable(vault);
   const [editing, setEditing] = useState<Tunnel | "new" | null>(null);
   // Each start attempt gets a token; a click while starting invalidates it, so a late result can't flip the switch.
   const attempts = useRef(new Map<string, number>());
@@ -126,14 +126,15 @@ export function TunnelsView() {
   return (
     <div className="page">
       <PageHeader title="Туннели" count={tunnels.length || undefined}>
-        {canEdit && <Button variant="primary" icon={Plus} onClick={() => setEditing("new")}>Создать туннель</Button>}
+        {canCreate && <Button variant="primary" icon={Plus} onClick={() => setEditing("new")}>Создать туннель</Button>}
       </PageHeader>
 
-      {tunnels.length === 0 && <Empty icon={ArrowLeftRight} title="Нет туннелей" action={canEdit ? <Button variant="primary" icon={Plus} onClick={() => setEditing("new")}>Создать туннель</Button> : undefined} />}
+      {tunnels.length === 0 && <Empty icon={ArrowLeftRight} title="Нет туннелей" action={canCreate ? <Button variant="primary" icon={Plus} onClick={() => setEditing("new")}>Создать туннель</Button> : undefined} />}
 
       <div className="rows">
         {tunnels.map((t) => {
           const via = ws.hosts.find((h) => h.id === t.viaHostId);
+          const canEdit = atLeast(t.access, "edit");
           return (
             <div className={`item-row tunnel-row ${t.state}`} key={t.id} onDoubleClick={() => canEdit && setEditing(t)}>
               <Switch label={t.state === "on" ? "Закрыть туннель" : "Открыть туннель"} checked={t.state === "on" || t.state === "starting"} busy={t.state === "starting"} onChange={() => toggle(t.id)} />

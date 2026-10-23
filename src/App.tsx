@@ -47,6 +47,7 @@ const emptyWorkspace = (): Workspace => ({
   snippets: [],
   tunnels: [],
   activity: [],
+  access: [],
 });
 
 /** The real personal vault and teams from detour-core; demo data in a plain browser. */

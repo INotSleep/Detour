@@ -75,16 +75,29 @@ fn team_flow_over_ipc() {
     assert_eq!(info["rootFingerprint"], alice.ok("my_id", json!({}))["fingerprint"]);
     let joined = bob.ok("team_join", json!({ "path": path, "root": info["root"] }));
     assert_eq!(joined["joined"], false);
-    alice.ok("team_member_add", json!({ "id": id, "detourId": bob_id["detourId"], "name": "Bob", "role": "member", "canReveal": false }));
+    alice.ok("team_member_add", json!({ "id": id, "detourId": bob_id["detourId"], "name": "Bob", "role": "member", "access": "view" }));
     let view = bob.ok("team_sync", json!({ "id": id }));
     assert_eq!(view["joined"], true);
     assert_eq!(view["data"]["snippets"][0]["command"], "df -h");
+    let bob_member = view["members"].as_array().unwrap().iter().find(|m| m["isYou"] == true).unwrap()["id"].clone();
 
-    // Bob can't export the private key without "can reveal"; Alice can.
+    // With View access Bob can't have the key or the password; Alice can.
     let key_id = key["id"].as_str().unwrap();
     let denied = bob.call("key_export", json!({ "vaultId": id, "keyId": key_id, "passphrase": null })).unwrap_err();
     assert_eq!(denied["kind"], "forbidden");
+    assert_eq!(bob.call("host_password", json!({ "vaultId": id, "hostId": "h1", "own": false })).unwrap_err()["kind"], "forbidden");
     assert!(alice.ok("key_export", json!({ "vaultId": id, "keyId": key_id, "passphrase": null })).as_str().unwrap().contains("OPENSSH PRIVATE KEY"));
+    assert_eq!(alice.ok("host_password", json!({ "vaultId": id, "hostId": "h1", "own": false })), "pw");
+
+    // Bob's own login for the host stays on his side.
+    let view = bob.ok("team_own_login_set", json!({ "id": id, "hostId": "h1", "login": { "user": "bob", "auth": { "type": "password" }, "newPassword": "bobs" } }));
+    assert_eq!(view["data"]["hosts"][0]["own"]["hasPassword"], true);
+    assert_eq!(bob.ok("host_password", json!({ "vaultId": id, "hostId": "h1", "own": true })), "bobs");
+
+    // The matrix: Alice gives Bob Edit on the host.
+    let view = alice.ok("team_access_set", json!({ "id": id, "changes": [{ "record": "h1", "member": bob_member, "level": "edit" }] }));
+    assert!(view["access"].as_array().unwrap().iter().any(|a| a["member"] == bob_member && a["record"] == "h1" && a["level"] == "edit"));
+    bob.ok("team_sync", json!({ "id": id }));
 
     // A conflict: both change the port without syncing, then Alice resolves it.
     let mut a_up = update.clone();
@@ -103,8 +116,7 @@ fn team_flow_over_ipc() {
     assert!(view["conflicts"].as_array().unwrap().is_empty());
 
     // Roles and removal.
-    let bob_member = view["members"].as_array().unwrap().iter().find(|m| m["name"] == "Bob").unwrap()["id"].clone();
-    alice.ok("team_member_update", json!({ "id": id, "member": bob_member, "role": "readOnly", "canReveal": true }));
+    alice.ok("team_member_update", json!({ "id": id, "member": bob_member, "role": "admin" }));
     let view = alice.ok("team_member_remove", json!({ "id": id, "member": bob_member }));
     assert!(view["members"].as_array().unwrap().iter().all(|m| m["name"] != "Bob"));
 

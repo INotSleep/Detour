@@ -10,7 +10,10 @@ export type SyncBackend =
 
 export type SyncStatus = "synced" | "syncing" | "offline" | "conflict";
 
-export type Role = "owner" | "admin" | "member" | "readOnly";
+export type Role = "owner" | "admin" | "member";
+
+/** Access to one team record; each level includes the ones before it (detour_core::team::state::Level). */
+export type Level = "none" | "view" | "secret" | "edit";
 
 export interface Vault {
   id: string;
@@ -26,10 +29,26 @@ export interface Vault {
   /** Team only: you were removed from the member list. */
   removed?: boolean;
   myRole?: Role;
-  /** Team only: you may view and export secrets. */
-  canReveal?: boolean;
-  /** Team only: log entries that failed verification. */
-  problems?: number;
+  /** Team only: your member id. */
+  me?: string;
+  /** Team only: what is wrong with the storage or changes in it. */
+  problems?: Problem[];
+}
+
+/** detour_core::team::ProblemView */
+export type Problem = { authorName: string } & (
+  | { kind: "rejected"; device: string; author: string; seq: number; reason: string }
+  | { kind: "missing" | "forked" | "rolledBack"; device: string; author: string; seq: number }
+  | { kind: "unknownFile"; path: string }
+);
+
+/** One member's access to one team record. */
+export interface AccessEntry {
+  vaultId: string;
+  coll: Coll;
+  record: string;
+  member: string;
+  level: Level;
 }
 
 export type Coll = "host" | "key" | "snippet" | "tunnel";
@@ -59,10 +78,24 @@ export interface Host {
   newPassword?: string;
   /** Unix ms of the last successful login. */
   lastConnected?: number;
+  /** Team only: your access. */
+  access?: Level;
+  /** Team only: your own login, used instead of the shared one. */
+  own?: OwnLogin;
   /** mock: demo hosts only */
   os?: Os;
   /** mock: demo hosts only; real reachability is known only when connecting */
   online?: boolean;
+}
+
+/** A person's own login for a team host, kept in their personal vault. */
+export interface OwnLogin {
+  user: string;
+  /** A key here is a personal key. */
+  auth: Auth;
+  hasPassword: boolean;
+  /** Transient: a password just typed in. */
+  newPassword?: string;
 }
 
 export interface Member {
@@ -71,7 +104,6 @@ export interface Member {
   vaultId: string;
   name: string;
   role: Role;
-  canReveal: boolean;
   /** The team's recovery key, listed as an owner. */
   recovery: boolean;
   fingerprint: string;
@@ -92,6 +124,8 @@ export interface SshKey {
   passphraseSaved: boolean;
   /** Unix ms */
   createdAt: number;
+  /** Team only: your access. */
+  access?: Level;
 }
 
 export interface Snippet {
@@ -99,6 +133,8 @@ export interface Snippet {
   vaultId: string;
   name: string;
   command: string;
+  /** Team only: your access. */
+  access?: Level;
 }
 
 /**
@@ -118,13 +154,16 @@ export interface Tunnel {
   state: "off" | "starting" | "on" | "error";
   /** mock */
   error?: string;
+  /** Team only: your access. */
+  access?: Level;
 }
 
 /** detour_core::team::ActivityView */
 export type ActivityItem = { vaultId: string; authorName: string; isYou: boolean; at: number } & (
   | { kind: "created" }
   | { kind: "renamed"; name: string }
-  | { kind: "added" | "changed" | "deleted"; coll: Coll; id: string }
+  | { kind: "added" | "changed" | "secretChanged" | "deleted"; coll: Coll; id: string; name: string }
+  | { kind: "accessChanged"; coll: Coll; id: string; name: string; member: string; level: Level }
   | { kind: "memberAdded" | "memberChanged" | "memberRemoved"; member: string }
 );
 
@@ -136,6 +175,7 @@ export interface Workspace {
   snippets: Snippet[];
   tunnels: Tunnel[];
   activity: ActivityItem[];
+  access: AccessEntry[];
 }
 
 export interface Settings {

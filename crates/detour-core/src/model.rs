@@ -60,6 +60,38 @@ pub struct HostView {
     /// Incoming only: a password typed in the UI to save with this edit.
     #[serde(default, skip_serializing)]
     pub new_password: Option<String>,
+    /// Team hosts: this person's own login, used instead of the shared one.
+    #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
+    pub own: Option<OwnLoginView>,
+}
+
+/// A member's own login for a team host, kept in their personal vault.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OwnLogin {
+    pub user: String,
+    /// A key here refers to a personal key.
+    pub auth: Auth,
+    #[serde(default)]
+    pub password: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OwnLoginView {
+    pub user: String,
+    pub auth: Auth,
+    #[serde(default)]
+    pub has_password: bool,
+    /// Incoming only: a password typed in the UI to save.
+    #[serde(default, skip_serializing)]
+    pub new_password: Option<String>,
+}
+
+impl From<&OwnLogin> for OwnLoginView {
+    fn from(o: &OwnLogin) -> Self {
+        Self { user: o.user.clone(), auth: o.auth.clone(), has_password: o.password.is_some(), new_password: None }
+    }
 }
 
 impl From<&Host> for HostView {
@@ -76,6 +108,7 @@ impl From<&Host> for HostView {
             last_connected: h.last_connected,
             has_password: h.password.is_some(),
             new_password: None,
+            own: None,
         }
     }
 }
@@ -100,6 +133,8 @@ pub struct KeyEntry {
     /// OpenSSH public key line.
     pub public_key: String,
     /// OpenSSH private key; encrypted with the passphrase when `has_passphrase`.
+    /// Empty for a team key whose secret part this member can't read.
+    #[serde(default)]
     pub private_key: String,
     pub has_passphrase: bool,
     /// Saved passphrase; `None` = ask when the key is used.
@@ -208,6 +243,12 @@ pub struct VaultData {
     /// Last login per team host (`<team id>/<host id>`), kept locally.
     #[serde(default)]
     pub team_last_connected: std::collections::BTreeMap<String, Millis>,
+    /// Own logins for team hosts (`<team id>/<host id>`).
+    #[serde(default)]
+    pub team_own: std::collections::BTreeMap<String, OwnLogin>,
+    /// Per team, the head of every device this person has read: storage can't roll them back.
+    #[serde(default)]
+    pub team_heads: std::collections::BTreeMap<String, std::collections::BTreeMap<String, crate::team::log::Head>>,
 }
 
 /// A team vault this person has joined.

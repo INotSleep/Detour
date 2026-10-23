@@ -3,15 +3,16 @@ import { ChevronRight, CopyPlus, Ellipsis, Plus, Search, Server, SquareTerminal,
 import { api, errorText } from "../lib/api";
 import { copyText, formatAgo, sshCommand, uid, useStore } from "../lib/store";
 import type { Host } from "../lib/types";
-import { HostIcon } from "./common";
-import { writable } from "../lib/teams";
+import { HostIcon, authLabel } from "./common";
+import { atLeast, writable } from "../lib/teams";
+import { OwnLoginSection, SavedPassword } from "./HostLogin";
 import { Button, Empty, IconButton, Menu, Modal, PageHeader } from "./ui";
 import { HostFields, applyDraft, draftErrors, draftFromHost, emptyDraft, useHostDraft } from "./HostForm";
 
 export function HostsView() {
   const { ws, vault, update, toast, connect, resolveConflicts } = useStore();
   const conflicted = new Set(vault.conflicts.filter((c) => c.coll === "host").map((c) => c.record));
-  const canEdit = writable(vault);
+  const canCreate = writable(vault);
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -77,11 +78,11 @@ export function HostsView() {
                 {query && <IconButton icon={X} label="Очистить" size={13} onClick={() => setQuery("")} />}
               </label>
             )}
-            {canEdit && <Button variant="primary" icon={Plus} onClick={() => setCreating(true)}>Добавить хост</Button>}
+            {canCreate && <Button variant="primary" icon={Plus} onClick={() => setCreating(true)}>Добавить хост</Button>}
           </PageHeader>
 
           {hosts.length === 0 && (
-            <Empty icon={Server} title="Нет хостов" action={canEdit ? <Button variant="primary" icon={Plus} onClick={() => setCreating(true)}>Добавить хост</Button> : undefined} />
+            <Empty icon={Server} title="Нет хостов" action={canCreate ? <Button variant="primary" icon={Plus} onClick={() => setCreating(true)}>Добавить хост</Button> : undefined} />
           )}
           {hosts.length > 0 && filtered.length === 0 && <Empty icon={Search} title={`Ничего не найдено по «${query}»`} />}
 
@@ -106,7 +107,7 @@ export function HostsView() {
                         onDoubleClick={() => connect(h.id)}
                         onKeyDown={(e) => {
                           if (e.key === "Enter") connect(h.id);
-                          if (e.key === "Delete" && canEdit) remove(h);
+                          if (e.key === "Delete" && atLeast(h.access, "edit")) remove(h);
                         }}
                       >
                         <HostIcon host={h} />
@@ -149,12 +150,8 @@ export function HostsView() {
                             trigger={(toggle, open) => <IconButton icon={Ellipsis} label="Ещё" className={open ? "pressed" : ""} onClick={toggle} />}
                             items={[
                               { label: "Копировать команду ssh", icon: Terminal, onSelect: () => copyCmd(h) },
-                              ...(canEdit
-                                ? [
-                                    { label: "Дублировать", icon: CopyPlus, onSelect: () => duplicate(h) },
-                                    { label: "Удалить", icon: Trash2, danger: true, hint: "Del", onSelect: () => remove(h) },
-                                  ]
-                                : []),
+                              ...(canCreate ? [{ label: "Дублировать", icon: CopyPlus, onSelect: () => duplicate(h) }] : []),
+                              ...(atLeast(h.access, "edit") ? [{ label: "Удалить", icon: Trash2, danger: true, hint: "Del", onSelect: () => remove(h) }] : []),
                             ]}
                           />
                         </div>
@@ -169,7 +166,7 @@ export function HostsView() {
       </div>
 
       {selected && (
-        <HostPanel key={[selected.id, selected.address, selected.port, selected.user, selected.label, selected.group].join("|")} host={selected} groups={groupNames} onClose={() => setSelectedId(null)} onDelete={() => remove(selected)} onCopy={() => copyCmd(selected)} />
+        <HostPanel key={[selected.id, selected.address, selected.port, selected.user, selected.label, selected.group, selected.access, JSON.stringify(selected.own)].join("|")} host={selected} groups={groupNames} onClose={() => setSelectedId(null)} onDelete={() => remove(selected)} onCopy={() => copyCmd(selected)} />
       )}
 
       {creating && <NewHostDialog groups={groupNames} onClose={() => setCreating(false)} onCreated={(h) => setSelectedId(h.id)} />}
@@ -179,9 +176,12 @@ export function HostsView() {
 
 function HostPanel({ host, groups, onClose, onDelete, onCopy }: { host: Host; groups: string[]; onClose: () => void; onDelete: () => void; onCopy: () => void }) {
   const { ws, vault, update, toast, connect, resolveConflicts } = useStore();
-  const keys = ws.keys.filter((k) => k.vaultId === vault.id || k.vaultId === "personal");
+  // A team host's shared key must be a team key: teammates don't have your personal ones.
+  const keys = ws.keys.filter((k) => k.vaultId === vault.id);
   const conflict = vault.conflicts.find((c) => c.coll === "host" && c.record === host.id);
-  const canEdit = writable(vault);
+  const canEdit = atLeast(host.access, "edit");
+  const shared = atLeast(host.access, "secret");
+  const team = vault.kind === "team";
   const initial = draftFromHost(host);
   const { draft, set, setDraft, touched, setTouched } = useHostDraft(initial);
   const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
@@ -237,9 +237,11 @@ function HostPanel({ host, groups, onClose, onDelete, onCopy }: { host: Host; gr
         }}
         onKeyDown={(e) => e.key === "Escape" && dirty && (e.stopPropagation(), setDraft(initial))}
       >
-        <fieldset className="plain-fieldset" disabled={!canEdit}>
-          <HostFields draft={draft} set={set} keys={keys} groups={groups} showErrors={touched} passwordSaved={host.hasPassword} onForgetPassword={canEdit ? forgetPassword : undefined} />
-        </fieldset>
+        {canEdit ? (
+          <HostFields draft={draft} set={set} keys={keys} groups={groups} showErrors={touched} passwordSaved={host.hasPassword} onForgetPassword={forgetPassword} savedPassword={host.hasPassword ? <SavedPassword host={host} /> : null} />
+        ) : (
+          <HostDetails host={host} shared={shared} keyName={keys.find((k) => host.auth.type === "key" && k.id === host.auth.keyId)?.name} />
+        )}
         {dirty && (
           <div className="panel-save">
             <Button type="button" variant="ghost" onClick={() => setDraft(initial)}>Отменить</Button>
@@ -247,6 +249,8 @@ function HostPanel({ host, groups, onClose, onDelete, onCopy }: { host: Host; gr
           </div>
         )}
       </form>
+
+      {team && <OwnLoginSection host={host} />}
 
       <div className="grow" />
 
@@ -267,9 +271,41 @@ function HostPanel({ host, groups, onClose, onDelete, onCopy }: { host: Host; gr
   );
 }
 
+/** What a member who may not edit the host sees of it. */
+function HostDetails({ host, shared, keyName }: { host: Host; shared: boolean; keyName?: string }) {
+  return (
+    <dl className="meta details">
+      <dt>Адрес</dt>
+      <dd className="mono">{host.address}{host.port !== 22 && `:${host.port}`}</dd>
+      <dt>Пользователь</dt>
+      <dd className="mono">{host.user}</dd>
+      {shared && (
+        <>
+          <dt>Вход</dt>
+          <dd>{authLabel(host, keyName)}</dd>
+        </>
+      )}
+      {shared && host.auth.type === "password" && host.hasPassword && (
+        <>
+          <dt>Пароль</dt>
+          <dd><SavedPassword host={host} /></dd>
+        </>
+      )}
+      <dt>Группа</dt>
+      <dd>{host.group}</dd>
+      {host.tags.length > 0 && (
+        <>
+          <dt>Теги</dt>
+          <dd>{host.tags.join(", ")}</dd>
+        </>
+      )}
+    </dl>
+  );
+}
+
 function NewHostDialog({ groups, onClose, onCreated }: { groups: string[]; onClose: () => void; onCreated: (h: Host) => void }) {
   const { ws, vault, update, toast, connect } = useStore();
-  const keys = ws.keys.filter((k) => k.vaultId === vault.id || k.vaultId === "personal");
+  const keys = ws.keys.filter((k) => k.vaultId === vault.id);
   const { draft, set, touched, setTouched } = useHostDraft(emptyDraft(keys, groups[0] ?? ""));
   const errors = draftErrors(draft);
 

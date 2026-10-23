@@ -4,7 +4,7 @@ import { api, errorText, isCoreError } from "../lib/api";
 import { parsePrivateKey, suggestKeyName } from "../lib/keys";
 import { copyText, formatDate, plural, useStore } from "../lib/store";
 import type { SshKey, Workspace } from "../lib/types";
-import { revealable, writable } from "../lib/teams";
+import { atLeast, writable } from "../lib/teams";
 import { Button, Checkbox, ConfirmDialog, Empty, Field, IconButton, Menu, Modal, PageHeader, PasswordInput, Segmented } from "./ui";
 
 type Dialog = { kind: "create" } | { kind: "import" } | { kind: "export"; key: SshKey } | { kind: "passphrase"; key: SshKey } | { kind: "delete"; key: SshKey };
@@ -18,8 +18,7 @@ export function algorithmLabel(k: Pick<SshKey, "algorithm" | "bits">) {
 export function KeysView() {
   const { ws, vault, update, toast } = useStore();
   const [dialog, setDialog] = useState<Dialog | null>(null);
-  const canEdit = writable(vault);
-  const canReveal = revealable(vault);
+  const canCreate = writable(vault);
   const keys = ws.keys.filter((k) => k.vaultId === vault.id);
 
   const usage = (k: SshKey) => ws.hosts.filter((h) => h.auth.type === "key" && h.auth.keyId === k.id).length;
@@ -47,11 +46,11 @@ export function KeysView() {
   return (
     <div className="page">
       <PageHeader title="Ключи" count={keys.length || undefined}>
-        {canEdit && <Button icon={Upload} onClick={() => setDialog({ kind: "import" })}>Импортировать</Button>}
-        {canEdit && <Button variant="primary" icon={Plus} onClick={create}>Создать ключ</Button>}
+        {canCreate && <Button icon={Upload} onClick={() => setDialog({ kind: "import" })}>Импортировать</Button>}
+        {canCreate && <Button variant="primary" icon={Plus} onClick={create}>Создать ключ</Button>}
       </PageHeader>
 
-      {keys.length === 0 && <Empty icon={KeyRound} title="Нет ключей" action={canEdit ? <Button variant="primary" icon={Plus} onClick={create}>Создать ключ</Button> : undefined} />}
+      {keys.length === 0 && <Empty icon={KeyRound} title="Нет ключей" action={canCreate ? <Button variant="primary" icon={Plus} onClick={create}>Создать ключ</Button> : undefined} />}
 
       <div className="rows">
         {keys.map((k) => {
@@ -78,8 +77,8 @@ export function KeysView() {
                   trigger={(toggle, open) => <IconButton icon={Ellipsis} label="Ещё" className={open ? "pressed" : ""} onClick={toggle} />}
                   items={[
                     { label: "Сохранить публичный ключ", icon: Download, onSelect: () => savePublic(k) },
-                    ...(canReveal ? [{ label: "Экспортировать приватный ключ", icon: FileUp, onSelect: () => setDialog({ kind: "export", key: k }) }] : []),
-                    ...(canEdit
+                    ...(atLeast(k.access, "secret") ? [{ label: "Экспортировать приватный ключ", icon: FileUp, onSelect: () => setDialog({ kind: "export", key: k }) }] : []),
+                    ...(atLeast(k.access, "edit")
                       ? [
                           { label: k.hasPassphrase ? "Изменить пароль ключа" : "Задать пароль ключа", icon: Lock, onSelect: () => setDialog({ kind: "passphrase", key: k }) },
                           { label: "Удалить", icon: Trash2, danger: true, onSelect: () => (n ? setDialog({ kind: "delete", key: k }) : remove(k)) },

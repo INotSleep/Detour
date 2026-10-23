@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import { Copy, Download, FolderOpen, KeyRound, ShieldCheck } from "lucide-react";
 import { api, errorText, isCoreError, type TeamView } from "../lib/api";
 import { copyText, sleep, uid, useStore } from "../lib/store";
-import type { Role, Vault } from "../lib/types";
-import { Button, Checkbox, Field, IconButton, Modal } from "./ui";
+import type { Level, Role, Vault } from "../lib/types";
+import { Button, Field, IconButton, Modal, Segmented } from "./ui";
 
 /* ---------- demo stand-ins (plain browser) ---------- */
 
@@ -85,14 +85,15 @@ export function CreateTeamDialog({ onClose, onDone }: { onClose: () => void; onD
       } else {
         await sleep(500);
         const id = uid("v");
-        const vault: Vault = { id, name: name.trim(), kind: "team", sync: { type: "folder", path: path.trim() }, syncStatus: "synced", lastSync: Date.now(), conflicts: [], joined: true, myRole: "owner", canReveal: true, problems: 0 };
+        const meId = uid("m");
+        const vault: Vault = { id, name: name.trim(), kind: "team", sync: { type: "folder", path: path.trim() }, syncStatus: "synced", lastSync: Date.now(), conflicts: [], joined: true, myRole: "owner", me: meId, problems: [] };
         update((w) => ({
           ...w,
           vaults: [...w.vaults, vault],
           members: [
             ...w.members,
-            { id: uid("m"), vaultId: id, name: myName.trim(), role: "owner", canReveal: true, recovery: false, fingerprint: DEMO_ID.fingerprint, isYou: true },
-            { id: uid("m"), vaultId: id, name: "Recovery key", role: "owner", canReveal: true, recovery: true, fingerprint: demoGroup() + "-" + demoGroup(), isYou: false },
+            { id: meId, vaultId: id, name: myName.trim(), role: "owner", recovery: false, fingerprint: DEMO_ID.fingerprint, isYou: true },
+            { id: uid("m"), vaultId: id, name: "Recovery key", role: "owner", recovery: true, fingerprint: demoGroup() + "-" + demoGroup(), isYou: false },
           ],
           activity: [...w.activity, { vaultId: id, authorName: myName.trim(), isYou: true, at: Date.now(), kind: "created" }],
         }));
@@ -273,7 +274,7 @@ export function AddMemberDialog({ vault, onClose }: { vault: Vault; onClose: () 
   const [idError, setIdError] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [role, setRole] = useState<Role>("member");
-  const [canReveal, setCanReveal] = useState(false);
+  const [access, setAccess] = useState<Level>("view");
   const [busy, setBusy] = useState(false);
   const iAmOwner = vault.myRole === "owner";
 
@@ -304,12 +305,12 @@ export function AddMemberDialog({ vault, onClose }: { vault: Vault; onClose: () 
     setBusy(true);
     try {
       if (api.real) {
-        applyTeamView(await api.teamMemberAdd(vault.id, detourId.trim(), name.trim(), role, canReveal));
+        applyTeamView(await api.teamMemberAdd(vault.id, detourId.trim(), name.trim(), role, access));
       } else {
         await sleep(400);
         update((w) => ({
           ...w,
-          members: [...w.members, { id: uid("m"), vaultId: vault.id, name: name.trim(), role, canReveal, recovery: false, fingerprint: fingerprint!, isYou: false }],
+          members: [...w.members, { id: uid("m"), vaultId: vault.id, name: name.trim(), role, recovery: false, fingerprint: fingerprint!, isYou: false }],
           activity: [...w.activity, { vaultId: vault.id, authorName: "Вы", isYou: true, at: Date.now(), kind: "memberAdded", member: name.trim() }],
         }));
       }
@@ -353,11 +354,21 @@ export function AddMemberDialog({ vault, onClose }: { vault: Vault; onClose: () 
             {iAmOwner && <option value="owner">Владелец</option>}
             {iAmOwner && <option value="admin">Админ</option>}
             <option value="member">Участник</option>
-            <option value="readOnly">Только чтение</option>
           </select>
         </Field>
       </div>
-      <Checkbox checked={canReveal} onChange={setCanReveal}>Видит секреты: пароли и приватные ключи</Checkbox>
+      <Field label="Доступ ко всем записям">
+        <Segmented
+          value={access}
+          onChange={setAccess}
+          options={[
+            { value: "none", label: "Нет" },
+            { value: "view", label: "Видит" },
+            { value: "secret", label: "Секрет" },
+            { value: "edit", label: "Изменяет" },
+          ]}
+        />
+      </Field>
     </Modal>
   );
 }

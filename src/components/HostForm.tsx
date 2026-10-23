@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { Auth, Host, SshKey } from "../lib/types";
 import { Button, Field, PasswordInput, Segmented } from "./ui";
 
@@ -69,9 +69,11 @@ interface HostFieldsProps {
   /** A password is already saved for this host. */
   passwordSaved?: boolean;
   onForgetPassword?: () => void;
+  /** Shows the saved password on request. */
+  savedPassword?: ReactNode;
 }
 
-export function HostFields({ draft, set, keys, groups, showErrors, passwordSaved, onForgetPassword }: HostFieldsProps) {
+export function HostFields({ draft, set, keys, groups, showErrors, passwordSaved, onForgetPassword, savedPassword }: HostFieldsProps) {
   const errors = draftErrors(draft);
   return (
     <>
@@ -119,6 +121,7 @@ export function HostFields({ draft, set, keys, groups, showErrors, passwordSaved
               <Button type="button" variant="ghost" size="sm" onClick={onForgetPassword}>Забыть</Button>
             )}
           </div>
+          {passwordSaved && !draft.password && savedPassword}
         </Field>
       )}
       <div className="row">

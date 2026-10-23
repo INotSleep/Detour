@@ -104,6 +104,7 @@ kbd { font-family: inherit; }
 
 .page { padding: 28px 36px 48px; max-width: 1080px; }
 .page.narrow { max-width: 680px; }
+.page.wide { max-width: none; }
 
 .page-header { display: flex; align-items: center; gap: 10px; min-height: 34px; margin-bottom: 20px; }
 .page-header h1 { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: -0.2px; display: flex; align-items: baseline; gap: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -604,7 +605,7 @@ select.input { cursor: pointer; padding-right: 28px; appearance: none; backgroun
 
 .team-grid { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 36px; align-items: start; }
 
-.member-row { display: grid; grid-template-columns: 32px minmax(0, 1fr) 150px 64px 40px; align-items: center; gap: 12px; height: 54px; padding: 0 10px; border-radius: var(--r); transition: background 0.1s; }
+.member-row { display: grid; grid-template-columns: 32px minmax(0, 1fr) 150px 40px; align-items: center; gap: 12px; height: 54px; padding: 0 10px; border-radius: var(--r); transition: background 0.1s; }
 .member-row:hover { background: var(--hover); }
 .member-main { display: flex; flex-direction: column; min-width: 0; }
 .member-name { font-weight: 600; display: flex; align-items: center; gap: 8px; overflow: hidden; white-space: nowrap; }
@@ -637,7 +638,7 @@ select.input { cursor: pointer; padding-right: 28px; appearance: none; backgroun
 .team-card-main { flex: 1; display: flex; flex-direction: column; min-width: 0; white-space: nowrap; }
 .team-card-main > * { overflow: hidden; text-overflow: ellipsis; }
 
-.member-head { display: grid; grid-template-columns: minmax(0, 1fr) 150px 64px 40px; gap: 12px; padding: 0 10px; align-items: baseline; margin-bottom: 4px; }
+.member-head { display: grid; grid-template-columns: minmax(0, 1fr) 150px 40px; gap: 12px; padding: 0 10px; align-items: baseline; margin-bottom: 4px; }
 .member-head .section-title { margin: 0; }
 .member-head .section-title:nth-child(2) { padding-left: 12px; }
 .reveal { display: flex; justify-content: center; position: relative; }
@@ -781,3 +782,52 @@ select.input { cursor: pointer; padding-right: 28px; appearance: none; backgroun
   .host-last { display: none; }
   .host-row { grid-template-columns: 30px minmax(0, 1fr) auto; }
 }
+
+/* ============ team: tabs, problems, access matrix ============ */
+.team-tabs { display: flex; margin: 0 0 18px; }
+.team-tabs .segmented { flex: none; }
+
+.banner.problems { flex-direction: column; align-items: stretch; gap: 0; padding: 0; }
+.problems-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px 10px 14px; text-align: left; border-radius: var(--r); }
+.problems-head > svg:first-child { color: var(--warn); flex: none; }
+.problems-head:hover { background: color-mix(in srgb, var(--warn) 10%, transparent); }
+.problems-list { margin: 0; padding: 2px 14px 12px 40px; display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--text-2); }
+
+.matrix-wrap { overflow: auto; border: 1px solid var(--line); border-radius: var(--r); max-height: calc(100vh - 230px); }
+.matrix { border-collapse: separate; border-spacing: 0; font-size: 12.5px; min-width: 100%; }
+.matrix th, .matrix td { padding: 6px 10px; border-bottom: 1px solid var(--line); text-align: left; font-weight: 500; white-space: nowrap; }
+.matrix thead th { position: sticky; top: 0; z-index: 2; background: var(--bg); color: var(--text-2); }
+.matrix tbody th { position: sticky; left: 0; z-index: 1; background: var(--bg); }
+.matrix thead th.matrix-corner { left: 0; z-index: 3; min-width: 220px; }
+.matrix-member { min-width: 124px; }
+.matrix-member-inner { display: flex; align-items: center; gap: 8px; max-width: 160px; }
+.matrix-section th, .matrix-section td { background: var(--sidebar); color: var(--muted); font-size: 12px; font-weight: 600; padding-top: 8px; padding-bottom: 8px; }
+.matrix-section th { background: var(--sidebar) !important; }
+.matrix-record { display: flex; flex-direction: column; max-width: 260px; font-weight: 500; }
+.matrix tbody tr:not(.matrix-section):hover th, .matrix tbody tr:not(.matrix-section):hover td { background: var(--hover); }
+.matrix-bulk { height: 22px; padding: 0 8px; border-radius: 5px; color: var(--muted); font-size: 11.5px; font-weight: 550; border: 1px solid transparent; }
+.matrix-bulk:hover, .matrix-bulk.pressed { color: var(--text); border-color: var(--line-strong); background: var(--input); }
+
+.level-select, .level-pill { height: 24px; min-width: 92px; padding: 0 8px; border-radius: 6px; font-size: 12px; font-weight: 550; border: 1px solid transparent; }
+.level-pill { display: inline-flex; align-items: center; }
+.level-select { cursor: pointer; appearance: auto; background: transparent; color: inherit; transition: border-color 0.12s, background 0.12s; }
+.level-select:hover { border-color: var(--line-strong); }
+.level-select:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.level-select.busy { opacity: 0.5; cursor: progress; }
+.level-select option { background: var(--bg); color: var(--text); }
+.level-none { color: var(--muted); }
+.level-view { color: var(--text-2); background: var(--hover); }
+.level-secret { color: var(--warn); background: var(--warn-soft); }
+.level-edit { color: var(--accent); background: var(--accent-soft); }
+
+/* ============ host panel: passwords and own login ============ */
+.saved-password { display: inline-flex; align-items: center; gap: 2px; margin-top: 4px; }
+.saved-password .mono { margin-right: 6px; font-size: 12.5px; user-select: all; }
+.meta.details dd .saved-password { margin-top: 0; }
+.meta.details { font-size: 12.5px; gap: 8px 16px; }
+.meta.details dd { overflow-wrap: anywhere; }
+.own-login { border-top: 1px solid var(--line); padding-top: 14px; }
+.own-summary { display: flex; flex-direction: column; gap: 4px; min-width: 0; font-size: 12.5px; }
+.own-line { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 26px; }
+.own-line .saved-password { margin-top: 0; }
+.own-actions { display: flex; gap: 4px; margin-left: -10px; }

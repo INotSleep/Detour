@@ -4,11 +4,11 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use detour_core::model::{KeyAlgorithm, KeyView, VaultView};
+use detour_core::model::{KeyAlgorithm, KeyView, OwnLoginView, VaultView};
 use detour_core::ssh::{self, SessionEvent, SessionHandle};
 use detour_core::store::{MyId, Store, TeamEntry, VaultUpdate};
-use detour_core::team::state::{Coll, Role};
-use detour_core::team::{TeamView, VaultInfo};
+use detour_core::team::state::{Coll, Level, Role};
+use detour_core::team::{AccessChange, TeamView, VaultInfo};
 use detour_core::{Error, Result, SecretKind};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::{Channel, InvokeResponseBody};
@@ -94,6 +94,12 @@ fn vault_put(app: State<App>, update: VaultUpdate) -> Result<VaultView> {
 #[tauri::command]
 fn host_set_password(app: State<App>, vault_id: String, host_id: String, password: Option<String>) -> Result<()> {
     app.store.lock().map_err(poisoned)?.set_host_password_in(&vault_id, &host_id, password)
+}
+
+/// A saved password to show or copy: the shared one, or with `own` the person's own login for a team host.
+#[tauri::command]
+fn host_password(app: State<App>, vault_id: String, host_id: String, own: bool) -> Result<Option<String>> {
+    app.store.lock().map_err(poisoned)?.host_password_in(&vault_id, &host_id, own)
 }
 
 #[tauri::command]
@@ -187,13 +193,23 @@ async fn team_rename(app: State<'_, App>, id: String, name: String) -> Result<Te
 }
 
 #[tauri::command]
-async fn team_member_add(app: State<'_, App>, id: String, detour_id: String, name: String, role: Role, can_reveal: bool) -> Result<TeamView> {
-    app.store.lock().map_err(poisoned)?.team_add_member(&id, &detour_id, &name, role, can_reveal)
+async fn team_member_add(app: State<'_, App>, id: String, detour_id: String, name: String, role: Role, access: Level) -> Result<TeamView> {
+    app.store.lock().map_err(poisoned)?.team_add_member(&id, &detour_id, &name, role, access)
 }
 
 #[tauri::command]
-async fn team_member_update(app: State<'_, App>, id: String, member: String, role: Role, can_reveal: bool) -> Result<TeamView> {
-    app.store.lock().map_err(poisoned)?.team_update_member(&id, &member, role, can_reveal)
+async fn team_member_update(app: State<'_, App>, id: String, member: String, role: Role) -> Result<TeamView> {
+    app.store.lock().map_err(poisoned)?.team_update_member(&id, &member, role)
+}
+
+#[tauri::command]
+async fn team_access_set(app: State<'_, App>, id: String, changes: Vec<AccessChange>) -> Result<TeamView> {
+    app.store.lock().map_err(poisoned)?.team_set_access(&id, &changes)
+}
+
+#[tauri::command]
+fn team_own_login_set(app: State<App>, id: String, host_id: String, login: Option<OwnLoginView>) -> Result<TeamView> {
+    app.store.lock().map_err(poisoned)?.team_own_login_set(&id, &host_id, login)
 }
 
 #[tauri::command]
@@ -342,6 +358,7 @@ pub fn builder<R: tauri::Runtime>(builder: tauri::Builder<R>, data_dir: std::pat
             vault_put,
             host_set_password,
             host_forget_key,
+            host_password,
             key_generate,
             key_import,
             key_export,
@@ -366,6 +383,8 @@ pub fn builder<R: tauri::Runtime>(builder: tauri::Builder<R>, data_dir: std::pat
             team_member_add,
             team_member_update,
             team_member_remove,
+            team_access_set,
+            team_own_login_set,
             team_resolve_field,
             team_resolve_deleted,
         ])

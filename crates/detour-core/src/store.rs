@@ -16,8 +16,9 @@ use age::secrecy::{ExposeSecret, SecretString};
 
 use crate::identity::{Identity, PublicIdentity};
 use crate::model::*;
-use crate::team::state::{Coll, Role};
-use crate::team::{TeamVault, TeamView, VaultInfo};
+use crate::team::log::Head;
+use crate::team::state::{Coll, Level, Role};
+use crate::team::{AccessChange, TeamVault, TeamView, VaultInfo};
 use crate::{Error, Result, SecretKind, keys, ssh};
 
 /// The personal vault's id in every vault-addressed call.
@@ -352,11 +353,15 @@ impl Store {
         Ok((id, v.device_id.clone().ok_or(Error::Locked)?))
     }
 
+    fn known_heads(&self, team: &str) -> BTreeMap<String, Head> {
+        self.state.as_ref().and_then(|s| s.vault.team_heads.get(team).cloned()).unwrap_or_default()
+    }
+
     fn open_teams(&mut self) {
         let Ok((me, device)) = self.member() else { return };
         let refs = self.state.as_ref().map(|s| s.vault.teams.clone()).unwrap_or_default();
         for r in refs {
-            match TeamVault::open(&r.path, &r.root, &me, &device) {
+            match TeamVault::open(&r.path, &r.root, &me, &device, self.known_heads(&r.id)) {
                 Ok(t) => {
                     self.team_errors.remove(&r.id);
                     self.teams.insert(r.id.clone(), t);
@@ -399,14 +404,27 @@ impl Store {
         }
     }
 
-    /// Team view with this device's last-login times filled in.
+    /// Team view with this person's last logins and own logins filled in.
     fn team_view(&self, id: &str) -> Result<TeamView> {
         let mut view = self.team(id)?.view();
-        let last = &self.unlocked()?.vault.team_last_connected;
+        let v = &self.unlocked()?.vault;
         for h in &mut view.data.hosts {
-            h.last_connected = last.get(&format!("{id}/{}", h.id)).copied();
+            let key = format!("{id}/{}", h.id);
+            h.last_connected = v.team_last_connected.get(&key).copied();
+            h.own = v.team_own.get(&key).map(OwnLoginView::from);
         }
         Ok(view)
+    }
+
+    /// Remembers what was read from a team, then returns its view.
+    fn after_team(&mut self, id: &str) -> Result<TeamView> {
+        let heads = self.team(id)?.known_heads().clone();
+        let v = self.vault_mut()?;
+        if v.team_heads.get(id) != Some(&heads) {
+            v.team_heads.insert(id.to_string(), heads);
+            self.save()?;
+        }
+        self.team_view(id)
     }
 
     pub fn teams(&self) -> Vec<TeamEntry> {
@@ -432,10 +450,11 @@ impl Store {
     /// Joins a vault after the user confirmed its creator (`root`, a Detour ID).
     pub fn join_team(&mut self, path: &str, root: &str) -> Result<TeamView> {
         let (me, device) = self.member()?;
-        let t = TeamVault::open(path, root, &me, &device)?;
-        if self.teams.contains_key(t.id()) {
+        let id = TeamVault::inspect(path)?.id;
+        if self.teams.contains_key(&id) {
             return Err(Error::AlreadyMember);
         }
+        let t = TeamVault::open(path, root, &me, &device, self.known_heads(&id))?;
         self.add_team(t)
     }
 
@@ -456,7 +475,7 @@ impl Store {
         self.vault_mut()?.teams.push(r);
         self.teams.insert(id.clone(), t);
         self.save()?;
-        self.team_view(&id)
+        self.after_team(&id)
     }
 
     /// Forgets a team on this device (the shared vault is untouched).
@@ -467,47 +486,81 @@ impl Store {
         self.save()
     }
 
-    /// Re-reads the team's storage (or retries opening it).
+    /// Re-reads the team's storage (or retries opening it), then does the housekeeping it calls for.
     pub fn sync_team(&mut self, id: &str) -> Result<TeamView> {
         if !self.teams.contains_key(id) {
             self.open_teams();
         }
-        self.team_mut(id)?.reload()?;
-        self.team_view(id)
+        let t = self.team_mut(id)?;
+        t.reload()?;
+        // Housekeeping is best effort: a read must not fail because a write could not happen.
+        let _ = t.maintain();
+        self.after_team(id)
     }
 
     pub fn team_put(&mut self, id: &str, update: VaultUpdate) -> Result<TeamView> {
         self.team_mut(id)?.put(update)?;
-        self.team_view(id)
+        self.after_team(id)
     }
 
     pub fn team_rename(&mut self, id: &str, name: &str) -> Result<TeamView> {
         self.team_mut(id)?.rename(name)?;
-        self.team_view(id)
+        self.after_team(id)
     }
 
-    pub fn team_add_member(&mut self, id: &str, detour_id: &str, name: &str, role: Role, can_reveal: bool) -> Result<TeamView> {
-        self.team_mut(id)?.add_member(detour_id, name, role, can_reveal)?;
-        self.team_view(id)
+    pub fn team_add_member(&mut self, id: &str, detour_id: &str, name: &str, role: Role, access: Level) -> Result<TeamView> {
+        self.team_mut(id)?.add_member(detour_id, name, role, access)?;
+        self.after_team(id)
     }
 
-    pub fn team_update_member(&mut self, id: &str, member: &str, role: Role, can_reveal: bool) -> Result<TeamView> {
-        self.team_mut(id)?.update_member(member, role, can_reveal)?;
-        self.team_view(id)
+    pub fn team_update_member(&mut self, id: &str, member: &str, role: Role) -> Result<TeamView> {
+        self.team_mut(id)?.update_member(member, role)?;
+        self.after_team(id)
     }
 
     pub fn team_remove_member(&mut self, id: &str, member: &str) -> Result<TeamView> {
         self.team_mut(id)?.remove_member(member)?;
-        self.team_view(id)
+        self.after_team(id)
+    }
+
+    pub fn team_set_access(&mut self, id: &str, changes: &[AccessChange]) -> Result<TeamView> {
+        self.team_mut(id)?.set_access(changes)?;
+        self.after_team(id)
     }
 
     pub fn team_resolve_field(&mut self, id: &str, coll: Coll, record: &str, field: &str, pick: usize) -> Result<TeamView> {
         self.team_mut(id)?.resolve_field(coll, record, field, pick)?;
-        self.team_view(id)
+        self.after_team(id)
     }
 
     pub fn team_resolve_deleted(&mut self, id: &str, coll: Coll, record: &str, keep: bool) -> Result<TeamView> {
         self.team_mut(id)?.resolve_deleted(coll, record, keep)?;
+        self.after_team(id)
+    }
+
+    /// Sets (or with `None` removes) this person's own login for a team host.
+    pub fn team_own_login_set(&mut self, id: &str, host_id: &str, login: Option<OwnLoginView>) -> Result<TeamView> {
+        if self.team(id)?.level(host_id) < Level::View {
+            return Err(not_found("host"));
+        }
+        let key = format!("{id}/{host_id}");
+        let v = self.vault_mut()?;
+        match login {
+            None => {
+                v.team_own.remove(&key);
+            }
+            Some(l) => {
+                if let Auth::Key { key_id } = &l.auth
+                    && !v.keys.iter().any(|k| &k.id == key_id)
+                {
+                    return Err(not_found("key"));
+                }
+                let kept = v.team_own.get(&key).and_then(|o| o.password.clone());
+                let password = l.new_password.filter(|p| !p.is_empty()).or(kept);
+                v.team_own.insert(key, OwnLogin { user: l.user, password: if l.auth == Auth::Password { password } else { None }, auth: l.auth });
+            }
+        }
+        self.save()?;
         self.team_view(id)
     }
 
@@ -515,6 +568,17 @@ impl Store {
 
     pub fn set_host_password_in(&mut self, vault: &str, host_id: &str, password: Option<String>) -> Result<()> {
         if vault == PERSONAL { self.set_host_password(host_id, password) } else { self.team_mut(vault)?.set_host_password(host_id, password) }
+    }
+
+    /// A saved password, for showing or copying: the shared one, or with `own` this person's own login.
+    pub fn host_password_in(&self, vault: &str, host_id: &str, own: bool) -> Result<Option<String>> {
+        if vault == PERSONAL {
+            return Ok(self.unlocked()?.vault.hosts.iter().find(|h| h.id == host_id).ok_or_else(|| not_found("host"))?.password.clone());
+        }
+        if own {
+            return Ok(self.unlocked()?.vault.team_own.get(&format!("{vault}/{host_id}")).and_then(|o| o.password.clone()));
+        }
+        self.team(vault)?.host_password(host_id)
     }
 
     pub fn generate_key_in(&mut self, vault: &str, name: &str, algorithm: KeyAlgorithm, passphrase: Option<&str>, remember: bool) -> Result<KeyView> {
@@ -533,7 +597,7 @@ impl Store {
         if vault == PERSONAL {
             return self.export_key(key_id, file_passphrase);
         }
-        keys::export(&self.team(vault)?.revealable_key(key_id)?, file_passphrase)
+        keys::export(&self.team(vault)?.secret_key(key_id)?, file_passphrase)
     }
 
     pub fn set_key_passphrase_in(&mut self, vault: &str, key_id: &str, current: Option<&str>, new: Option<&str>, remember: bool) -> Result<KeyView> {
@@ -541,21 +605,44 @@ impl Store {
             return self.set_key_passphrase(key_id, current, new, remember);
         }
         let t = self.team_mut(vault)?;
-        let entry = t.key(key_id).ok_or_else(|| not_found("key"))?;
+        let entry = t.secret_key(key_id)?;
         let updated = keys::change_passphrase(&entry, current, new, remember)?;
         t.replace_key(updated)
+    }
+
+    /// The login a team host is opened with: this person's own one if set,
+    /// otherwise the shared one if they may have it, otherwise asking for a password.
+    fn team_login(&self, vault: &str, host_id: &str) -> Result<(Host, Option<KeyEntry>)> {
+        let t = self.team(vault)?;
+        let mut host = t.host(host_id).ok_or_else(|| not_found("host"))?;
+        let v = &self.unlocked()?.vault;
+        if let Some(own) = v.team_own.get(&format!("{vault}/{host_id}")) {
+            let key = match &own.auth {
+                Auth::Key { key_id } => Some(v.keys.iter().find(|k| &k.id == key_id).ok_or_else(|| not_found("key"))?.clone()),
+                _ => None,
+            };
+            host.user = own.user.clone();
+            host.auth = own.auth.clone();
+            host.password = own.password.clone();
+            return Ok((host, key));
+        }
+        if t.level(host_id) < Level::Secret {
+            host.auth = Auth::Password;
+            host.password = None;
+            return Ok((host, None));
+        }
+        let key = match &host.auth {
+            Auth::Key { key_id } => Some(t.secret_key(key_id)?),
+            _ => None,
+        };
+        Ok((host, key))
     }
 
     pub fn connect_request_in(&self, vault: &str, host_id: &str, secret: Option<String>, trust_fingerprint: Option<String>) -> Result<ssh::ConnectRequest> {
         if vault == PERSONAL {
             return self.connect_request(host_id, secret, trust_fingerprint);
         }
-        let t = self.team(vault)?;
-        let host = t.host(host_id).ok_or_else(|| not_found("host"))?;
-        let key = match &host.auth {
-            Auth::Key { key_id } => Some(t.key(key_id).ok_or_else(|| not_found("key"))?),
-            _ => None,
-        };
+        let (host, key) = self.team_login(vault, host_id)?;
         let ep = endpoint(&host);
         let known = self.unlocked()?.vault.known_hosts.iter().find(|k| k.endpoint == ep).cloned();
         Ok(ssh::ConnectRequest { host, key, secret, known, trust_fingerprint })
@@ -574,20 +661,40 @@ impl Store {
         self.save()
     }
 
+    /// Saves a secret typed in during a login to wherever that login comes from.
     pub fn save_secret_in(&mut self, vault: &str, host_id: &str, kind: SecretKind, value: String) -> Result<()> {
         if vault == PERSONAL {
             return self.save_secret(host_id, kind, value);
         }
-        let t = self.team_mut(vault)?;
-        let host = t.host(host_id).ok_or_else(|| not_found("host"))?;
-        match (kind, &host.auth) {
-            (SecretKind::Password, _) => t.set_host_password(host_id, Some(value)),
-            (SecretKind::Passphrase, Auth::Key { key_id }) => {
-                let mut k = t.key(key_id).ok_or_else(|| not_found("key"))?;
+        let key = format!("{vault}/{host_id}");
+        let (host, _) = self.team_login(vault, host_id)?;
+        let own = self.unlocked()?.vault.team_own.get(&key).cloned();
+        let level = self.team(vault)?.level(host_id);
+        match (kind, own) {
+            (SecretKind::Password, Some(mut o)) => {
+                o.password = Some(value);
+                self.vault_mut()?.team_own.insert(key, o);
+                self.save()
+            }
+            (SecretKind::Passphrase, Some(OwnLogin { auth: Auth::Key { key_id }, .. })) => {
+                let k = self.vault_mut()?.keys.iter_mut().find(|k| k.id == key_id).ok_or_else(|| not_found("key"))?;
+                k.passphrase = Some(value);
+                self.save()
+            }
+            (SecretKind::Password, None) if level >= Level::Edit => self.team_mut(vault)?.set_host_password(host_id, Some(value)),
+            // Without the right to change the shared password, a typed one becomes this person's own login.
+            (SecretKind::Password, None) => {
+                self.vault_mut()?.team_own.insert(key, OwnLogin { user: host.user, auth: Auth::Password, password: Some(value) });
+                self.save()
+            }
+            (SecretKind::Passphrase, None) if level >= Level::Edit => {
+                let Auth::Key { key_id } = &host.auth else { return Err(not_found("key")) };
+                let t = self.team_mut(vault)?;
+                let mut k = t.secret_key(key_id)?;
                 k.passphrase = Some(value);
                 t.replace_key(k).map(|_| ())
             }
-            (SecretKind::Passphrase, _) => Err(not_found("key")),
+            _ => Err(Error::Forbidden),
         }
     }
 
@@ -636,7 +743,7 @@ mod tests {
     }
 
     fn host(id: &str, auth: Auth) -> HostView {
-        HostView { id: id.into(), group: "g".into(), label: id.into(), address: "127.0.0.1".into(), port: 22, user: "u".into(), auth, tags: vec![], last_connected: None, has_password: false, new_password: None }
+        HostView { id: id.into(), group: "g".into(), label: id.into(), address: "127.0.0.1".into(), port: 22, user: "u".into(), auth, tags: vec![], last_connected: None, has_password: false, new_password: None, own: None }
     }
 
     fn update(hosts: Vec<HostView>, keys: Vec<KeyView>) -> VaultUpdate {

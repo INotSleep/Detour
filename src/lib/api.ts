@@ -1,15 +1,14 @@
 // The only place the UI talks to the backend.
 //
-// In the Tauri window the personal vault, keys and SSH sessions go to
-// detour-core. Team vaults are still demo data (team sync is the next core
-// stage), and in a plain browser (vite dev) everything is demo data, so the UI
-// can be developed without the Rust side.
+// In the Tauri window everything goes to detour-core. In a plain browser
+// (vite dev) everything is demo data, so the UI can be developed without the
+// Rust side.
 
 import { Channel, invoke, isTauri } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { fakeKeyMaterial, parsePrivateKey } from "./keys";
 import { mockSecrets } from "./mockData";
-import type { ActivityItem, Conflict, Host, Role, Snippet, SshKey, Tunnel } from "./types";
+import type { ActivityItem, Coll, Conflict, Host, Level, OwnLogin, Problem, Role, Snippet, SshKey, Tunnel } from "./types";
 
 export interface CoreInfo {
   coreVersion: string;
@@ -74,10 +73,10 @@ function keyReason(reason: string) {
 
 /* ---------- shapes exchanged with detour-core ---------- */
 
-type HostView = Omit<Host, "vaultId" | "os" | "online">;
-type KeyView = Omit<SshKey, "vaultId">;
-type SnippetView = Omit<Snippet, "vaultId">;
-type TunnelView = Omit<Tunnel, "vaultId" | "state" | "error">;
+type HostView = Omit<Host, "vaultId" | "os" | "online" | "access">;
+type KeyView = Omit<SshKey, "vaultId" | "access">;
+type SnippetView = Omit<Snippet, "vaultId" | "access">;
+type TunnelView = Omit<Tunnel, "vaultId" | "state" | "error" | "access">;
 
 export interface VaultView {
   hosts: HostView[];
@@ -106,10 +105,10 @@ export function fromView(v: VaultView, vaultId = PERSONAL): PersonalData {
 
 export function toView(d: PersonalData): VaultView {
   return {
-    hosts: d.hosts.map(({ vaultId: _v, os: _o, online: _on, ...h }) => h),
-    keys: d.keys.map(({ vaultId: _v, ...k }) => k),
-    snippets: d.snippets.map(({ vaultId: _v, ...s }) => s),
-    tunnels: d.tunnels.map(({ vaultId: _v, state: _s, error: _e, ...t }) => t),
+    hosts: d.hosts.map(({ vaultId: _v, os: _o, online: _on, access: _a, own: _w, ...h }) => h),
+    keys: d.keys.map(({ vaultId: _v, access: _a, ...k }) => k),
+    snippets: d.snippets.map(({ vaultId: _v, access: _a, ...s }) => s),
+    tunnels: d.tunnels.map(({ vaultId: _v, state: _s, error: _e, access: _a, ...t }) => t),
   };
 }
 
@@ -123,12 +122,13 @@ export interface TeamView {
   joined: boolean;
   removed: boolean;
   myRole: Role | null;
-  canReveal: boolean;
-  members: { id: string; name: string; role: Role; canReveal: boolean; recovery: boolean; fingerprint: string; isYou: boolean }[];
+  members: { id: string; name: string; role: Role; recovery: boolean; fingerprint: string; isYou: boolean }[];
   data: VaultView;
+  /** Who has which access to the records you can see. */
+  access: { coll: Coll; record: string; member: string; level: Level }[];
   conflicts: Conflict[];
   activity: Omit<ActivityItem, "vaultId">[];
-  problems: { device: string; reason: string }[];
+  problems: Problem[];
 }
 
 export interface TeamEntry {
@@ -259,6 +259,12 @@ export const api = {
     else mockSecrets.hostPasswords.delete(host.id);
   },
 
+  /** A saved password to show or copy: the shared one, or with `own` your own login for a team host. */
+  async hostPassword(host: Host, own = false): Promise<string | null> {
+    if (api.usesCore(host.vaultId)) return invoke("host_password", { vaultId: host.vaultId, hostId: host.id, own });
+    return mockSecrets.hostPasswords.get(host.id) ?? null;
+  },
+
   async hostForgetKey(vaultId: string, hostId: string): Promise<void> {
     await invoke("host_forget_key", { vaultId, hostId });
   },
@@ -333,8 +339,11 @@ export const api = {
   teamSync: (id: string): Promise<TeamView> => invoke("team_sync", { id }),
   teamPut: (id: string, data: PersonalData): Promise<TeamView> => invoke("team_put", { id, update: toView(data) }),
   teamRename: (id: string, name: string): Promise<TeamView> => invoke("team_rename", { id, name }),
-  teamMemberAdd: (id: string, detourId: string, name: string, role: Role, canReveal: boolean): Promise<TeamView> => invoke("team_member_add", { id, detourId, name, role, canReveal }),
-  teamMemberUpdate: (id: string, member: string, role: Role, canReveal: boolean): Promise<TeamView> => invoke("team_member_update", { id, member, role, canReveal }),
+  teamMemberAdd: (id: string, detourId: string, name: string, role: Role, access: Level): Promise<TeamView> => invoke("team_member_add", { id, detourId, name, role, access }),
+  teamMemberUpdate: (id: string, member: string, role: Role): Promise<TeamView> => invoke("team_member_update", { id, member, role }),
+  teamAccessSet: (id: string, changes: { record: string; member: string; level: Level }[]): Promise<TeamView> => invoke("team_access_set", { id, changes }),
+  /** Sets or (with null) removes your own login for a team host. */
+  teamOwnLoginSet: (id: string, hostId: string, login: Omit<OwnLogin, "hasPassword"> | null): Promise<TeamView> => invoke("team_own_login_set", { id, hostId, login }),
   teamMemberRemove: (id: string, member: string): Promise<TeamView> => invoke("team_member_remove", { id, member }),
   teamResolveField: (id: string, coll: string, record: string, field: string, pick: number): Promise<TeamView> => invoke("team_resolve_field", { id, coll, record, field, pick }),
   teamResolveDeleted: (id: string, coll: string, record: string, keep: boolean): Promise<TeamView> => invoke("team_resolve_deleted", { id, coll, record, keep }),

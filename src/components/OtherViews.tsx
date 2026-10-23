@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Code, Ellipsis, Lock, Pencil, Play, Plus, Trash2 } from "lucide-react";
 import { api, errorText, isCoreError } from "../lib/api";
 import { uid, useStore } from "../lib/store";
-import { writable } from "../lib/teams";
+import { atLeast, writable } from "../lib/teams";
 import type { Snippet } from "../lib/types";
 import { Button, Empty, Field, IconButton, Menu, Modal, PageHeader, PasswordInput, Segmented } from "./ui";
 
@@ -10,7 +10,7 @@ import { Button, Empty, Field, IconButton, Menu, Modal, PageHeader, PasswordInpu
 
 export function SnippetsView() {
   const { ws, vault, update, toast, connect } = useStore();
-  const canEdit = writable(vault);
+  const canCreate = writable(vault);
   const [editing, setEditing] = useState<Snippet | "new" | null>(null);
   const snippets = ws.snippets.filter((s) => s.vaultId === vault.id);
   const hosts = ws.hosts.filter((h) => h.vaultId === vault.id);
@@ -23,13 +23,15 @@ export function SnippetsView() {
   return (
     <div className="page">
       <PageHeader title="Сниппеты" count={snippets.length || undefined}>
-        {canEdit && <Button variant="primary" icon={Plus} onClick={() => setEditing("new")}>Создать сниппет</Button>}
+        {canCreate && <Button variant="primary" icon={Plus} onClick={() => setEditing("new")}>Создать сниппет</Button>}
       </PageHeader>
 
-      {snippets.length === 0 && <Empty icon={Code} title="Нет сниппетов" action={canEdit ? <Button variant="primary" icon={Plus} onClick={() => setEditing("new")}>Создать сниппет</Button> : undefined} />}
+      {snippets.length === 0 && <Empty icon={Code} title="Нет сниппетов" action={canCreate ? <Button variant="primary" icon={Plus} onClick={() => setEditing("new")}>Создать сниппет</Button> : undefined} />}
 
       <div className="rows">
-        {snippets.map((s) => (
+        {snippets.map((s) => {
+          const canEdit = atLeast(s.access, "edit");
+          return (
           <div className="item-row" key={s.id} onDoubleClick={() => canEdit && setEditing(s)}>
             <span className="item-icon"><Code size={15} /></span>
             <div className="item-main">
@@ -55,7 +57,8 @@ export function SnippetsView() {
               )}
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
 
       {editing && <SnippetDialog snippet={editing === "new" ? null : editing} onClose={() => setEditing(null)} />}

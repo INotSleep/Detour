@@ -8,6 +8,11 @@
 //! The signature covers the exact body bytes, so no canonical JSON is needed.
 //! A device only ever writes its own directory, so storage never sees two
 //! writers on one file.
+//!
+//! A body carries encrypted parts. A data part is encrypted with a symmetric
+//! key and names it only by its id (a hash of the key), so the storage learns
+//! nothing but which entries share a key. A key drop is age-encrypted to one
+//! recipient and hands over keys; age hides who the recipient is.
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -15,8 +20,8 @@ use std::path::{Path, PathBuf};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
-use chacha20poly1305::aead::{Aead, KeyInit};
-use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
+use chacha20poly1305::aead::{Aead, KeyInit, Payload};
+use chacha20poly1305::{ChaCha20Poly1305, Key as AeadKey, Nonce};
 use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -24,7 +29,9 @@ use sha2::{Digest, Sha256};
 use crate::identity::{Identity, PublicIdentity};
 use crate::{Error, Result};
 
-pub const FORMAT: u32 = 1;
+pub const FORMAT: u32 = 2;
+
+pub type Key = [u8; 32];
 
 fn corrupt(what: impl Into<String>) -> Error {
     Error::Internal { message: format!("team vault: {}", what.into()) }
@@ -44,13 +51,20 @@ impl Hlc {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum Kind {
-    /// Payload: epoch keys, age-encrypted to their recipients.
-    Keys,
-    /// Payload: `Vec<Op>` encrypted with the epoch key.
-    Data,
+/// The last entry of a device: its sequence number and file hash.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Head {
+    pub seq: u64,
+    pub hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "t", rename_all = "camelCase")]
+pub enum Part {
+    /// Encrypted with the key whose id is `kid`.
+    Data { kid: String, ct: String },
+    /// Keys for one recipient, age-encrypted.
+    Drop { ct: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,11 +79,10 @@ pub struct Body {
     /// Hash of this device's previous log file.
     pub prev: Option<String>,
     pub hlc: Hlc,
-    /// Highest sequence number read from every device when this was written.
-    pub seen: BTreeMap<String, u64>,
-    pub kind: Kind,
-    pub epoch: u32,
-    pub payload: String,
+    /// Head of every device the author had read when writing this.
+    pub seen: BTreeMap<String, Head>,
+    /// Empty for an acknowledgement.
+    pub parts: Vec<Part>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -86,50 +99,57 @@ pub struct Entry {
     pub hash: String,
 }
 
-/// Every epoch key the reader can open, by epoch number.
-pub type EpochKeys = BTreeMap<u32, [u8; 32]>;
-
-#[derive(Serialize, Deserialize)]
-struct KeysPayload {
-    keys: BTreeMap<u32, String>,
-}
-
-pub fn new_epoch_key() -> [u8; 32] {
+pub fn new_key() -> Key {
     rand::rng().random()
 }
 
-pub fn seal_keys(keys: &EpochKeys, recipients: &[PublicIdentity]) -> Result<String> {
-    let payload = KeysPayload { keys: keys.iter().map(|(e, k)| (*e, B64.encode(k))).collect() };
-    let plain = serde_json::to_vec(&payload)?;
-    let rs: Vec<age::x25519::Recipient> = recipients.iter().map(PublicIdentity::recipient).collect();
-    let enc = age::Encryptor::with_recipients(rs.iter().map(|r| r as &dyn age::Recipient)).map_err(|e| corrupt(e.to_string()))?;
+/// Public id of a key: lets a reader find the key without the storage learning it.
+pub fn key_id(key: &Key) -> String {
+    let mut h = Sha256::new();
+    h.update(b"detour key id v2");
+    h.update(key);
+    B64.encode(&h.finalize()[..16])
+}
+
+#[derive(Serialize, Deserialize)]
+struct DropPayload {
+    keys: Vec<String>,
+}
+
+pub fn seal_drop(keys: &[Key], to: &PublicIdentity) -> Result<Part> {
+    let plain = serde_json::to_vec(&DropPayload { keys: keys.iter().map(|k| B64.encode(k)).collect() })?;
+    let r = to.recipient();
+    let enc = age::Encryptor::with_recipients(std::iter::once(&r as &dyn age::Recipient)).map_err(|e| corrupt(e.to_string()))?;
     let mut out = Vec::new();
     let mut w = enc.wrap_output(&mut out)?;
     w.write_all(&plain)?;
     w.finish()?;
-    Ok(B64.encode(out))
+    Ok(Part::Drop { ct: B64.encode(out) })
 }
 
-/// `None` when the keys were not addressed to `me`.
-pub fn open_keys(payload: &str, me: &Identity) -> Option<EpochKeys> {
-    let ct = B64.decode(payload).ok()?;
-    let plain = age::decrypt(&me.age, &ct).ok()?;
-    let p: KeysPayload = serde_json::from_slice(&plain).ok()?;
-    p.keys.into_iter().map(|(e, k)| Some((e, B64.decode(k).ok()?.try_into().ok()?))).collect()
+/// `None` when the drop is not addressed to `me`.
+pub fn open_drop(ct: &str, me: &Identity) -> Option<Vec<Key>> {
+    let raw = B64.decode(ct).ok()?;
+    let plain = age::decrypt(&me.age, &raw).ok()?;
+    let p: DropPayload = serde_json::from_slice(&plain).ok()?;
+    p.keys.into_iter().map(|k| B64.decode(k).ok()?.try_into().ok()).collect()
 }
 
-pub fn seal_data(key: &[u8; 32], plain: &[u8]) -> Result<String> {
+pub fn seal_data(key: &Key, plain: &[u8]) -> Result<Part> {
+    let kid = key_id(key);
     let nonce: [u8; 12] = rand::rng().random();
-    let ct = ChaCha20Poly1305::new(Key::from_slice(key)).encrypt(Nonce::from_slice(&nonce), plain).map_err(|_| corrupt("encrypt"))?;
-    Ok(B64.encode([nonce.as_slice(), &ct].concat()))
+    let ct = ChaCha20Poly1305::new(AeadKey::from_slice(key))
+        .encrypt(Nonce::from_slice(&nonce), Payload { msg: plain, aad: kid.as_bytes() })
+        .map_err(|_| corrupt("encrypt"))?;
+    Ok(Part::Data { ct: B64.encode([nonce.as_slice(), &ct].concat()), kid })
 }
 
-pub fn open_data(key: &[u8; 32], payload: &str) -> Option<Vec<u8>> {
-    let raw = B64.decode(payload).ok()?;
+pub fn open_data(key: &Key, kid: &str, ct: &str) -> Option<Vec<u8>> {
+    let raw = B64.decode(ct).ok()?;
     if raw.len() < 12 {
         return None;
     }
-    ChaCha20Poly1305::new(Key::from_slice(key)).decrypt(Nonce::from_slice(&raw[..12]), &raw[12..]).ok()
+    ChaCha20Poly1305::new(AeadKey::from_slice(key)).decrypt(Nonce::from_slice(&raw[..12]), Payload { msg: &raw[12..], aad: kid.as_bytes() }).ok()
 }
 
 pub fn sign(body: &Body, me: &Identity) -> Result<Vec<u8>> {
@@ -167,6 +187,43 @@ pub struct VaultMeta {
     pub root: String,
 }
 
+/// A file in the vault folder that is not an entry at its own path.
+#[derive(Debug, Clone)]
+pub struct Extra {
+    /// Relative to the vault root, with `/`.
+    pub path: String,
+    /// Left behind by a sync tool or by us (temp files): not a problem by itself.
+    pub debris: bool,
+    /// Set for files inside a device directory, which may be a second version of an entry.
+    pub device: Option<String>,
+    pub bytes: Option<Vec<u8>>,
+}
+
+/// Everything found in the vault folder.
+#[derive(Debug, Default)]
+pub struct Scan {
+    /// Device -> entries in sequence order (file name = sequence number).
+    pub logs: BTreeMap<String, Vec<(u64, Vec<u8>)>>,
+    pub extras: Vec<Extra>,
+}
+
+/// Names sync tools and editors leave around, and our own temp files.
+fn is_debris(name: &str) -> bool {
+    const EXACT: [&str; 9] = [".stfolder", ".stignore", ".stversions", "desktop.ini", ".DS_Store", "Thumbs.db", ".dropbox", ".dropbox.cache", ".git"];
+    EXACT.contains(&name)
+        || name.starts_with(".syncthing.")
+        || name.starts_with("~syncthing~")
+        || name.ends_with(".tmp")
+        || name.contains(".sync-conflict-")
+        || name.contains("(conflicted copy")
+        || name.starts_with("._")
+}
+
+/// Directories whose contents are a sync tool's business.
+fn is_debris_dir(name: &str) -> bool {
+    matches!(name, ".stversions" | ".dropbox.cache" | ".git" | ".stfolder")
+}
+
 /// A team vault in a plain directory (Syncthing, Dropbox, SMB, a Git checkout...).
 #[derive(Debug, Clone)]
 pub struct Folder {
@@ -191,38 +248,63 @@ impl Folder {
         if !p.exists() {
             return Ok(None);
         }
-        Ok(Some(serde_json::from_slice(&std::fs::read(p)?).map_err(|_| corrupt("vault.json"))?))
+        let meta: VaultMeta = serde_json::from_slice(&std::fs::read(p)?).map_err(|_| corrupt("vault.json"))?;
+        if meta.format != FORMAT {
+            return Err(Error::NotATeamVault);
+        }
+        Ok(Some(meta))
     }
 
     pub fn write_meta(&self, meta: &VaultMeta) -> Result<()> {
         write_new(&self.root.join("vault.json"), &serde_json::to_vec_pretty(meta)?)
     }
 
-    /// All log files: device -> files in sequence order (file name = sequence number).
-    pub fn read_logs(&self) -> Result<BTreeMap<String, Vec<(u64, Vec<u8>)>>> {
-        let mut out = BTreeMap::new();
+    /// Reads every file in the folder and sorts it into entries and everything else.
+    pub fn scan(&self) -> Result<Scan> {
+        let mut scan = Scan::default();
+        for item in std::fs::read_dir(&self.root)? {
+            let item = item?;
+            let name = item.file_name().to_string_lossy().to_string();
+            let is_dir = item.file_type()?.is_dir();
+            match (name.as_str(), is_dir) {
+                ("vault.json", false) | ("ops", true) => {}
+                _ if is_dir && is_debris_dir(&name) => {}
+                _ => self.extra(&mut scan, &item.path(), is_debris(&name), None)?,
+            }
+        }
         let ops = self.root.join("ops");
         if !ops.is_dir() {
-            return Ok(out);
+            return Ok(scan);
         }
         for dev in std::fs::read_dir(ops)? {
             let dev = dev?;
+            let name = dev.file_name().to_string_lossy().to_string();
             if !dev.file_type()?.is_dir() {
+                self.extra(&mut scan, &dev.path(), is_debris(&name), None)?;
                 continue;
             }
-            let name = dev.file_name().to_string_lossy().to_string();
             let mut files = Vec::new();
             for f in std::fs::read_dir(dev.path())? {
                 let f = f?;
                 let fname = f.file_name().to_string_lossy().to_string();
-                // Sync tools leave temp and conflict copies around; only `<seq>.json` counts.
-                let Some(seq) = fname.strip_suffix(".json").and_then(|s| s.parse::<u64>().ok()) else { continue };
-                files.push((seq, std::fs::read(f.path())?));
+                let seq = fname.strip_suffix(".json").and_then(|s| s.parse::<u64>().ok());
+                match seq {
+                    Some(seq) if fname == format!("{seq:08}.json") && f.file_type()?.is_file() => files.push((seq, std::fs::read(f.path())?)),
+                    _ => self.extra(&mut scan, &f.path(), is_debris(&fname), Some(name.clone()))?,
+                }
             }
             files.sort_by_key(|(s, _)| *s);
-            out.insert(name, files);
+            scan.logs.insert(name, files);
         }
-        Ok(out)
+        Ok(scan)
+    }
+
+    fn extra(&self, scan: &mut Scan, path: &Path, debris: bool, device: Option<String>) -> Result<()> {
+        let rel = path.strip_prefix(&self.root).unwrap_or(path).to_string_lossy().replace('\\', "/");
+        // Only a file inside a device directory can be a competing version of an entry.
+        let bytes = if device.is_some() && path.is_file() { std::fs::read(path).ok() } else { None };
+        scan.extras.push(Extra { path: rel, debris, device, bytes });
+        Ok(())
     }
 
     pub fn write_log(&self, device: &str, seq: u64, bytes: &[u8]) -> Result<()> {

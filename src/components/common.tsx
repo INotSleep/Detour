@@ -67,7 +67,6 @@ export const roleLabel: Record<Role, string> = {
   owner: "Владелец",
   admin: "Админ",
   member: "Участник",
-  readOnly: "Только чтение",
 };
 
 export function authLabel(host: Host, keyName?: string): string {

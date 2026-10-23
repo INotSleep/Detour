@@ -22,7 +22,7 @@ interface Props {
 type Question = HostKeyQuestion & { answer: (a: HostKeyAnswer) => void };
 
 export function TerminalView({ host, active, initialCommand, onStatus, onExit }: Props) {
-  const { settings, ws, update, toast } = useStore();
+  const { settings, ws, update, toast, applyTeamView } = useStore();
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -72,7 +72,9 @@ export function TerminalView({ host, active, initialCommand, onStatus, onExit }:
           run: async () => {
             try {
               await api.secretSave(host, kind, value);
-              update((w) =>
+              // In a team the secret may have gone to your own login rather than the shared one: ask the core.
+              if (host.access !== undefined && api.real) applyTeamView(await api.teamSync(host.vaultId));
+              else update((w) =>
                 kind === "password"
                   ? { ...w, hosts: w.hosts.map((h) => (h.id === host.id ? { ...h, hasPassword: true } : h)) }
                   : { ...w, keys: w.keys.map((k) => (k.id === key?.id ? { ...k, passphraseSaved: true } : k)) },
