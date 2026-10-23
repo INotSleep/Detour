@@ -65,6 +65,14 @@ Installers for macOS, Windows and Linux are on the [Releases](https://github.com
 
 The interface is in English and Russian.
 
+## Code signing
+
+Free code signing provided by [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+
+Signed builds are made by GitHub Actions from this repository. Committers, reviewers and approvers: [INotSleep](https://github.com/INotSleep).
+
+Detour sends nothing to anyone except the servers, repositories and folders you set up yourself, and GitHub releases when it checks for updates (this can be turned off in Settings).
+
 ## Build from source
 
 Requirements: Node 20+, Rust (stable), and the [Tauri prerequisites](https://tauri.app/start/prerequisites/) for your system.

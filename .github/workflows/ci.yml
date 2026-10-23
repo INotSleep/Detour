@@ -1,4 +1,4 @@
-# Tests on every push and pull request. Installers for macOS, Windows and Linux
+# Tests on every push and pull request that touches code. Installers for macOS, Windows and Linux
 # on a tag `v*` (into a draft release) or when run by hand: macOS minutes are
 # expensive on private repositories.
 name: CI
@@ -7,7 +7,10 @@ on:
   push:
     branches: [main, master]
     tags: ["v*"]
+    # Docs alone need no build. Tags are built whatever changed.
+    paths-ignore: ["**.md", "docs/**", "LICENSE", "NOTICE"]
   pull_request:
+    paths-ignore: ["**.md", "docs/**", "LICENSE", "NOTICE"]
   workflow_dispatch:
 
 concurrency:
