@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeftRight, Code, FolderOpen, KeyRound, Plus, Server, Settings as SettingsIcon, Users, X } from "lucide-react";
+import { LangContext, lang as currentLang, resolveLang, setLang, tr, useT } from "./i18n";
 import { api, errorText, fromView, type CoreInfo, type SyncInfo, type TeamView, type VaultView } from "./lib/api";
 import { applyTeamEntries, applyTeamView, dataOf, removeVault, writable } from "./lib/teams";
 import { mockWorkspace } from "./lib/mockData";
@@ -30,16 +31,16 @@ interface Session {
   command?: string;
 }
 
-const sectionMeta: Record<Section, { title: string; icon: typeof Server }> = {
-  hosts: { title: "Хосты", icon: Server },
-  keys: { title: "Ключи", icon: KeyRound },
-  snippets: { title: "Сниппеты", icon: Code },
-  tunnels: { title: "Туннели", icon: ArrowLeftRight },
-  team: { title: "Команда", icon: Users },
-  settings: { title: "Настройки", icon: SettingsIcon },
+const sectionIcon: Record<Section, typeof Server> = {
+  hosts: Server,
+  keys: KeyRound,
+  snippets: Code,
+  tunnels: ArrowLeftRight,
+  team: Users,
+  settings: SettingsIcon,
 };
 
-const defaultSettings: Settings = { theme: "dark", fontSize: 13, scrollback: 5000, autoLockMinutes: 15, clipboard: "ssh", autoUpdate: true };
+const defaultSettings: Settings = { theme: "dark", language: "system", fontSize: 13, scrollback: 5000, autoLockMinutes: 15, clipboard: "ssh", autoUpdate: true };
 const SETTINGS_KEY = "detour.settings";
 
 /** Settings of this device, kept in the webview's storage. */
@@ -58,7 +59,7 @@ function loadSettings(): Settings {
 type Phase = "loading" | "setup" | "locked" | "ready";
 
 const emptyWorkspace = (): Workspace => ({
-  vaults: [{ id: "personal", name: "Личное", kind: "personal", sync: { type: "local" }, syncStatus: "synced", conflicts: [] }],
+  vaults: [{ id: "personal", name: tr().app.personal, kind: "personal", sync: { type: "local" }, syncStatus: "synced", conflicts: [] }],
   hosts: [],
   members: [],
   keys: [],
@@ -70,7 +71,7 @@ const emptyWorkspace = (): Workspace => ({
 
 /** The real personal vault and teams from detour-core; demo data in a plain browser. */
 async function loadWorkspace(view: VaultView | null): Promise<Workspace> {
-  if (!api.real) return structuredClone(mockWorkspace);
+  if (!api.real) return mockWorkspace();
   const personal = fromView(view ?? (await api.vaultGet()));
   const ws = { ...emptyWorkspace(), ...personal };
   return applyTeamEntries(ws, await api.teamsList());
@@ -196,7 +197,7 @@ export default function App() {
     try {
       const info = await checkForUpdate();
       setUpdateState(info ? { kind: "available", info } : { kind: "latest" });
-      if (info && quiet) toaster.push({ text: `Доступна версия ${info.version}`, duration: 15000, action: { label: "Обновить", run: () => void installUpdate() } });
+      if (info && quiet) toaster.push({ text: tr().app.updateAvailable(info.version), duration: 15000, action: { label: tr().app.update, run: () => void installUpdate() } });
     } catch (e) {
       // A check at start that fails says nothing; one asked for says why.
       setUpdateState(quiet ? { kind: "idle" } : { kind: "error", text: updateErrorText(e) });
@@ -264,7 +265,7 @@ export default function App() {
       }
       if (json === prev) continue;
       lastSaved.current.set(v.id, json);
-      const fail = (e: unknown) => toaster.push({ text: `Не удалось сохранить: ${errorText(e)}`, tone: "error" });
+      const fail = (e: unknown) => toaster.push({ text: tr().common.saveFailed(errorText(e)), tone: "error" });
       if (v.kind === "personal") {
         api
           .vaultPut(data)
@@ -337,6 +338,13 @@ export default function App() {
       clearInterval(timer);
     };
   }, [phase, settings.autoLockMinutes, lock]);
+
+  // Text follows the language right away: set it before anything below renders.
+  const lang = resolveLang(settings.language);
+  if (currentLang() !== lang) setLang(lang);
+  useEffect(() => {
+    setWs((cur) => cur && { ...cur, vaults: cur.vaults.map((v) => (v.kind === "personal" ? { ...v, name: tr().app.personal } : v)) });
+  }, [lang]);
 
   useEffect(() => {
     const apply = () => {
@@ -420,82 +428,96 @@ export default function App() {
   }, [ws, vaultId, section, settings, coreInfo, connect, openFiles, toaster.push, lock, applyView, sync, refreshPersonal, updateState, checkUpdate, installUpdate]);
 
   if (phase === "loading") return null;
-  if (!store) return <LockScreen mode={phase === "setup" ? "setup" : "unlock"} onUnlocked={(v) => void unlocked(v)} />;
+  if (!store)
+    return (
+      <LangContext.Provider value={lang}>
+        <LockScreen mode={phase === "setup" ? "setup" : "unlock"} onUnlocked={(v) => void unlocked(v)} />
+      </LangContext.Provider>
+    );
 
   const conflictVault = ws!.vaults.find((v) => v.id === conflictVaultId);
-  const Home = section === "team" && store.vault.kind === "personal" ? { ...sectionMeta.team, title: "Команды" } : sectionMeta[section];
-
   return (
-    <StoreContext.Provider value={store}>
-      <div className="app" inert={phase !== "ready"}>
-        <Sidebar homeActive={activeId === "home"} />
+    <LangContext.Provider value={lang}>
+      <StoreContext.Provider value={store}>
+        <div className="app" inert={phase !== "ready"}>
+          <Sidebar homeActive={activeId === "home"} />
 
-        <main className="main">
-          {sessions.length > 0 && (
-            <div className="tabbar">
-              <button className={`tab ${activeId === "home" ? "active" : ""}`} onClick={() => setActiveId("home")}>
-                <Home.icon size={14} />
-                <span className="tab-label">{Home.title}</span>
-              </button>
-              {sessions.map((s) => (
-                <div
-                  key={s.id}
-                  role="tab"
-                  tabIndex={0}
-                  aria-selected={activeId === s.id}
-                  className={`tab ${activeId === s.id ? "active" : ""}`}
-                  onClick={() => setActiveId(s.id)}
-                  onAuxClick={(e) => e.button === 1 && closeSession(s.id)}
-                >
-                  <span className={`session-dot ${s.status}`} />
-                  {s.kind === "files" && <FolderOpen size={13} className="tab-kind" />}
-                  <span className="tab-label">{s.title}</span>
-                  <button
-                    className="tab-close"
-                    aria-label="Закрыть"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      closeSession(s.id);
-                    }}
+          <main className="main">
+            {sessions.length > 0 && (
+              <div className="tabbar">
+                <HomeTab section={section} personal={store.vault.kind === "personal"} active={activeId === "home"} onClick={() => setActiveId("home")} />
+                {sessions.map((s) => (
+                  <div
+                    key={s.id}
+                    role="tab"
+                    tabIndex={0}
+                    aria-selected={activeId === s.id}
+                    className={`tab ${activeId === s.id ? "active" : ""}`}
+                    onClick={() => setActiveId(s.id)}
+                    onAuxClick={(e) => e.button === 1 && closeSession(s.id)}
                   >
-                    <X size={12} />
-                  </button>
-                </div>
-              ))}
-              <IconButton icon={Plus} label="Новое подключение · Ctrl K" className="tab-new" onClick={() => setPalette(true)} />
-            </div>
-          )}
+                    <span className={`session-dot ${s.status}`} />
+                    {s.kind === "files" && <FolderOpen size={13} className="tab-kind" />}
+                    <span className="tab-label">{s.title}</span>
+                    <button
+                      className="tab-close"
+                      aria-label={tr().common.close}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        closeSession(s.id);
+                      }}
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                ))}
+                <IconButton icon={Plus} label={tr().app.newConnection} className="tab-new" onClick={() => setPalette(true)} />
+              </div>
+            )}
 
-          <div className="content">
-            <div className={`view ${activeId === "home" ? "" : "hidden"}`}>
-              {section === "hosts" && <HostsView key={vaultId} />}
-              {section === "keys" && <KeysView />}
-              {section === "snippets" && <SnippetsView />}
-              {section === "tunnels" && <TunnelsView />}
-              {section === "team" && <TeamsView />}
-              {section === "settings" && <SettingsView />}
+            <div className="content">
+              <div className={`view ${activeId === "home" ? "" : "hidden"}`}>
+                {section === "hosts" && <HostsView key={vaultId} />}
+                {section === "keys" && <KeysView />}
+                {section === "snippets" && <SnippetsView />}
+                {section === "tunnels" && <TunnelsView />}
+                {section === "team" && <TeamsView />}
+                {section === "settings" && <SettingsView />}
+              </div>
+              {sessions.map((s) => {
+                const host = ws!.hosts.find((h) => h.id === s.hostId);
+                if (!host) return null;
+                return (
+                  <div key={s.id} className={`view ${activeId === s.id ? "" : "hidden"}`}>
+                    {s.kind === "files" ? (
+                      <FilesView host={host} active={activeId === s.id} onStatus={(st) => setStatus(s.id, st)} onClose={() => closeSession(s.id)} />
+                    ) : (
+                      <TerminalTab host={host} active={activeId === s.id} initialCommand={s.command} onStatus={(st) => setStatus(s.id, st)} onExit={() => closeSession(s.id)} />
+                    )}
+                  </div>
+                );
+              })}
             </div>
-            {sessions.map((s) => {
-              const host = ws!.hosts.find((h) => h.id === s.hostId);
-              if (!host) return null;
-              return (
-                <div key={s.id} className={`view ${activeId === s.id ? "" : "hidden"}`}>
-                  {s.kind === "files" ? (
-                    <FilesView host={host} active={activeId === s.id} onStatus={(st) => setStatus(s.id, st)} onClose={() => closeSession(s.id)} />
-                  ) : (
-                    <TerminalTab host={host} active={activeId === s.id} initialCommand={s.command} onStatus={(st) => setStatus(s.id, st)} onExit={() => closeSession(s.id)} />
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </main>
-      </div>
+          </main>
+        </div>
 
-      {palette && <CommandPalette onClose={() => setPalette(false)} />}
-      {conflictVault && conflictVault.conflicts.length > 0 && <ConflictDialog vault={conflictVault} onClose={() => setConflictVaultId(null)} />}
-      {toaster.view}
-      {phase === "locked" && <LockScreen mode="unlock" onUnlocked={(v) => void unlocked(v)} />}
-    </StoreContext.Provider>
+        {palette && <CommandPalette onClose={() => setPalette(false)} />}
+        {conflictVault && conflictVault.conflicts.length > 0 && <ConflictDialog vault={conflictVault} onClose={() => setConflictVaultId(null)} />}
+        {toaster.view}
+        {phase === "locked" && <LockScreen mode="unlock" onUnlocked={(v) => void unlocked(v)} />}
+      </StoreContext.Provider>
+    </LangContext.Provider>
+  );
+}
+
+/** The first tab: the section open in the sidebar. */
+function HomeTab({ section, personal, active, onClick }: { section: Section; personal: boolean; active: boolean; onClick: () => void }) {
+  const t = useT().app.section;
+  const Icon = sectionIcon[section];
+  return (
+    <button className={`tab ${active ? "active" : ""}`} onClick={onClick}>
+      <Icon size={14} />
+      <span className="tab-label">{section === "team" && personal ? t.teams : t[section]}</span>
+    </button>
   );
 }

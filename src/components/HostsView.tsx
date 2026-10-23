@@ -3,14 +3,16 @@ import { ChevronRight, CopyPlus, Download, Ellipsis, FolderOpen, Plus, Search, S
 import { api, errorText } from "../lib/api";
 import { copyText, formatAgo, sshCommand, uid, useStore } from "../lib/store";
 import type { Host } from "../lib/types";
-import { HostIcon, authLabel } from "./common";
+import { HostIcon, authLabel, groupLabel, isNoGroup } from "./common";
 import { atLeast, writable } from "../lib/teams";
 import { OwnLoginSection, SavedPassword } from "./HostLogin";
 import { Button, Empty, IconButton, Menu, Modal, PageHeader } from "./ui";
 import { HostFields, applyDraft, draftFromHost, draftInvalid, emptyDraft, useHostDraft } from "./HostForm";
 import { ImportDialog } from "./ImportDialog";
+import { useT } from "../i18n";
 
 export function HostsView() {
+  const t = useT();
   const { ws, vault, update, toast, connect, openFiles, resolveConflicts } = useStore();
   const conflicted = new Set(vault.conflicts.filter((c) => c.coll === "host").map((c) => c.record));
   const canCreate = writable(vault);
@@ -21,7 +23,7 @@ export function HostsView() {
   const [importing, setImporting] = useState(false);
 
   const hosts = ws.hosts.filter((h) => h.vaultId === vault.id);
-  const groupNames = [...new Set(hosts.map((h) => h.group))];
+  const groupNames = [...new Set(hosts.map((h) => h.group).filter((g) => !isNoGroup(g)))];
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -31,7 +33,10 @@ export function HostsView() {
 
   const groups = useMemo(() => {
     const map = new Map<string, Host[]>();
-    for (const h of filtered) map.set(h.group, [...(map.get(h.group) ?? []), h]);
+    for (const h of filtered) {
+      const g = isNoGroup(h.group) ? "" : h.group;
+      map.set(g, [...(map.get(g) ?? []), h]);
+    }
     return [...map.entries()];
   }, [filtered]);
 
@@ -44,8 +49,8 @@ export function HostsView() {
     update((w) => ({ ...w, hosts: w.hosts.filter((x) => x.id !== h.id) }));
     if (selectedId === h.id) setSelectedId(null);
     toast({
-      text: `«${h.label}» удалён`,
-      action: { label: "Вернуть", run: () => update((w) => ({ ...w, hosts: [...w.hosts.slice(0, index), h, ...w.hosts.slice(index)] })) },
+      text: t.hosts.removed(h.label),
+      action: { label: t.hosts.restore, run: () => update((w) => ({ ...w, hosts: [...w.hosts.slice(0, index), h, ...w.hosts.slice(index)] })) },
     });
   };
 
@@ -53,12 +58,12 @@ export function HostsView() {
     const copy: Host = { ...h, id: uid("h"), label: `${h.label}-copy`, lastConnected: undefined, hasPassword: false };
     update((w) => ({ ...w, hosts: [...w.hosts, copy] }));
     setSelectedId(copy.id);
-    toast({ text: `Создана копия «${h.label}»`, tone: "success" });
+    toast({ text: t.hosts.duplicated(h.label), tone: "success" });
   };
 
   const copyCmd = async (h: Host) => {
     const ok = await copyText(sshCommand(h));
-    toast(ok ? { text: "Команда ssh скопирована", tone: "success" } : { text: "Не удалось скопировать", tone: "error" });
+    toast(ok ? { text: t.hosts.sshCommandCopied, tone: "success" } : { text: t.common.copyFailed, tone: "error" });
   };
 
   const toggleGroup = (g: string) =>
@@ -72,35 +77,35 @@ export function HostsView() {
     <div className={`split ${selected ? "with-panel" : ""}`}>
       <div className="split-main">
         <div className="page">
-          <PageHeader title="Хосты" count={hosts.length || undefined}>
+          <PageHeader title={t.hosts.title} count={hosts.length || undefined}>
             {hosts.length > 0 && (
               <label className="search">
                 <Search size={14} />
-                <input placeholder="Поиск" value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === "Escape" && setQuery("")} />
-                {query && <IconButton icon={X} label="Очистить" size={13} onClick={() => setQuery("")} />}
+                <input placeholder={t.common.search} value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === "Escape" && setQuery("")} />
+                {query && <IconButton icon={X} label={t.hosts.clearSearch} size={13} onClick={() => setQuery("")} />}
               </label>
             )}
             {vault.kind === "personal" && (
-              <Menu trigger={(open, isOpen) => <IconButton icon={Ellipsis} label="Ещё" className={isOpen ? "pressed" : ""} onClick={open} />} items={[{ label: "Импорт из ~/.ssh", icon: Download, onSelect: () => setImporting(true) }]} />
+              <Menu trigger={(open, isOpen) => <IconButton icon={Ellipsis} label={t.hosts.more} className={isOpen ? "pressed" : ""} onClick={open} />} items={[{ label: t.hosts.importSsh, icon: Download, onSelect: () => setImporting(true) }]} />
             )}
-            {canCreate && <Button variant="primary" icon={Plus} onClick={() => setCreating(true)}>Добавить хост</Button>}
+            {canCreate && <Button variant="primary" icon={Plus} onClick={() => setCreating(true)}>{t.hosts.addHost}</Button>}
           </PageHeader>
 
           {hosts.length === 0 && (
             <Empty
               icon={Server}
-              title="Нет хостов"
+              title={t.hosts.empty}
               action={
                 canCreate ? (
                   <div className="row-buttons">
-                    {vault.kind === "personal" && <Button icon={Download} onClick={() => setImporting(true)}>Импорт из ~/.ssh</Button>}
-                    <Button variant="primary" icon={Plus} onClick={() => setCreating(true)}>Добавить хост</Button>
+                    {vault.kind === "personal" && <Button icon={Download} onClick={() => setImporting(true)}>{t.hosts.importSsh}</Button>}
+                    <Button variant="primary" icon={Plus} onClick={() => setCreating(true)}>{t.hosts.addHost}</Button>
                   </div>
                 ) : undefined
               }
             />
           )}
-          {hosts.length > 0 && filtered.length === 0 && <Empty icon={Search} title={`Ничего не найдено по «${query}»`} />}
+          {hosts.length > 0 && filtered.length === 0 && <Empty icon={Search} title={t.hosts.noMatch(query)} />}
 
           {groups.map(([group, list]) => {
             const isCollapsed = collapsed.has(group) && !query;
@@ -108,7 +113,7 @@ export function HostsView() {
               <section className="group" key={group}>
                 <button className="group-head" onClick={() => toggleGroup(group)} aria-expanded={!isCollapsed}>
                   <ChevronRight size={14} className={`chev ${isCollapsed ? "" : "open"}`} />
-                  {group}
+                  {groupLabel(group)}
                   <span className="count">{list.length}</span>
                 </button>
                 {!isCollapsed && (
@@ -135,7 +140,7 @@ export function HostsView() {
                           </span>
                         </div>
                         <div className="host-tags">
-                          {h.tags.map((t) => <span className="tag" key={t}>{t}</span>)}
+                          {h.tags.map((tag) => <span className="tag" key={tag}>{tag}</span>)}
                         </div>
                         {conflicted.has(h.id) ? (
                           <button
@@ -145,7 +150,7 @@ export function HostsView() {
                               resolveConflicts();
                             }}
                           >
-                            <TriangleAlert size={12} /> Конфликт
+                            <TriangleAlert size={12} /> {t.hosts.conflict}
                           </button>
                         ) : (
                           <span className="host-last">{formatAgo(h.lastConnected)}</span>
@@ -160,15 +165,15 @@ export function HostsView() {
                               connect(h.id);
                             }}
                           >
-                            Подключиться
+                            {t.common.connect}
                           </Button>
                           <Menu
-                            trigger={(toggle, open) => <IconButton icon={Ellipsis} label="Ещё" className={open ? "pressed" : ""} onClick={toggle} />}
+                            trigger={(toggle, open) => <IconButton icon={Ellipsis} label={t.hosts.more} className={open ? "pressed" : ""} onClick={toggle} />}
                             items={[
-                              { label: "Файлы", icon: FolderOpen, onSelect: () => openFiles(h.id) },
-                              { label: "Копировать команду ssh", icon: Terminal, onSelect: () => copyCmd(h) },
-                              ...(canCreate ? [{ label: "Дублировать", icon: CopyPlus, onSelect: () => duplicate(h) }] : []),
-                              ...(atLeast(h.access, "edit") ? [{ label: "Удалить", icon: Trash2, danger: true, hint: "Del", onSelect: () => remove(h) }] : []),
+                              { label: t.hosts.files, icon: FolderOpen, onSelect: () => openFiles(h.id) },
+                              { label: t.hosts.copySshCommand, icon: Terminal, onSelect: () => copyCmd(h) },
+                              ...(canCreate ? [{ label: t.hosts.duplicate, icon: CopyPlus, onSelect: () => duplicate(h) }] : []),
+                              ...(atLeast(h.access, "edit") ? [{ label: t.common.delete, icon: Trash2, danger: true, hint: "Del", onSelect: () => remove(h) }] : []),
                             ]}
                           />
                         </div>
@@ -193,6 +198,7 @@ export function HostsView() {
 }
 
 function HostPanel({ host, groups, onClose, onDelete, onCopy }: { host: Host; groups: string[]; onClose: () => void; onDelete: () => void; onCopy: () => void }) {
+  const t = useT();
   const { ws, vault, update, toast, connect, openFiles, resolveConflicts } = useStore();
   // A team host's shared key must be a team key: teammates don't have your personal ones.
   const keys = ws.keys.filter((k) => k.vaultId === vault.id);
@@ -211,14 +217,14 @@ function HostPanel({ host, groups, onClose, onDelete, onCopy }: { host: Host; gr
     if (invalid) return;
     const typed = draft.authType === "password" && draft.password ? draft.password : null;
     update((w) => ({ ...w, hosts: w.hosts.map((h) => (h.id === host.id ? withPassword({ ...h, ...applyDraft(draft) }, typed) : h)) }));
-    toast({ text: "Сохранено", tone: "success" });
+    toast({ text: t.hosts.panel.saved, tone: "success" });
   };
 
   const forgetPassword = async () => {
     try {
       await api.hostSetPassword(host, null);
       update((w) => ({ ...w, hosts: w.hosts.map((h) => (h.id === host.id ? { ...h, hasPassword: false } : h)) }));
-      toast({ text: "Пароль удалён из vault", tone: "success" });
+      toast({ text: t.hosts.panel.passwordForgotten, tone: "success" });
     } catch (e) {
       toast({ text: errorText(e), tone: "error" });
     }
@@ -230,25 +236,25 @@ function HostPanel({ host, groups, onClose, onDelete, onCopy }: { host: Host; gr
         <HostIcon host={host} size={36} />
         <div className="panel-title">
           <h2>{host.label}</h2>
-          {host.online !== undefined && <span className={`status-text ${host.online ? "on" : "off"}`}>{host.online ? "В сети" : "Недоступен"}</span>}
+          {host.online !== undefined && <span className={`status-text ${host.online ? "on" : "off"}`}>{host.online ? t.hosts.panel.online : t.hosts.panel.offline}</span>}
         </div>
-        <IconButton icon={X} label="Закрыть" tipSide="left" onClick={onClose} />
+        <IconButton icon={X} label={t.common.close} tipSide="left" onClick={onClose} />
       </div>
 
       {conflict && (
         <button className="banner warn banner-btn" onClick={() => resolveConflicts()}>
           <TriangleAlert size={15} />
-          <span className="grow">{conflict.kind === "deleted" ? "Удалён, но его изменили" : "Изменён несколькими участниками"}</span>
-          <span className="sidebar-alert-action">Решить</span>
+          <span className="grow">{conflict.kind === "deleted" ? t.hosts.panel.conflictDeleted : t.hosts.panel.conflictEdited}</span>
+          <span className="sidebar-alert-action">{t.hosts.panel.resolve}</span>
         </button>
       )}
 
       <div className="panel-connect">
         <Button variant="primary" icon={SquareTerminal} onClick={() => connect(host.id)}>
-          Подключиться
+          {t.common.connect}
         </Button>
         <Button icon={FolderOpen} onClick={() => openFiles(host.id)}>
-          Файлы
+          {t.hosts.files}
         </Button>
       </div>
 
@@ -267,8 +273,8 @@ function HostPanel({ host, groups, onClose, onDelete, onCopy }: { host: Host; gr
         )}
         {dirty && (
           <div className="panel-save">
-            <Button type="button" variant="ghost" onClick={() => setDraft(initial)}>Отменить</Button>
-            <Button type="submit" variant="primary">Сохранить</Button>
+            <Button type="button" variant="ghost" onClick={() => setDraft(initial)}>{t.hosts.panel.discard}</Button>
+            <Button type="submit" variant="primary">{t.common.save}</Button>
           </div>
         )}
       </form>
@@ -280,15 +286,15 @@ function HostPanel({ host, groups, onClose, onDelete, onCopy }: { host: Host; gr
       <dl className="meta">
         {host.lastConnected && (
           <>
-            <dt>Последний вход</dt>
+            <dt>{t.hosts.panel.lastConnected}</dt>
             <dd>{formatAgo(host.lastConnected)}</dd>
           </>
         )}
       </dl>
 
       <div className="panel-foot">
-        <Button variant="ghost" icon={Terminal} onClick={onCopy}>Копировать ssh</Button>
-        {canEdit && <Button variant="ghost" icon={Trash2} className="danger-text" onClick={onDelete}>Удалить</Button>}
+        <Button variant="ghost" icon={Terminal} onClick={onCopy}>{t.hosts.panel.copySsh}</Button>
+        {canEdit && <Button variant="ghost" icon={Trash2} className="danger-text" onClick={onDelete}>{t.common.delete}</Button>}
       </div>
     </aside>
   );
@@ -296,38 +302,39 @@ function HostPanel({ host, groups, onClose, onDelete, onCopy }: { host: Host; gr
 
 /** What a member who may not edit the host sees of it. */
 function HostDetails({ host, shared, keyName }: { host: Host; shared: boolean; keyName?: string }) {
+  const t = useT();
   const { ws } = useStore();
   const p = host.proxy;
   const via = p?.type === "jump" ? ws.hosts.find((h) => h.id === p.hostId)?.label ?? "?" : p ? `${p.type === "socks5" ? "SOCKS5" : "HTTP"} ${p.address}:${p.port}` : null;
   return (
     <dl className="meta details">
-      <dt>Адрес</dt>
+      <dt>{t.hosts.form.address}</dt>
       <dd className="mono">{host.address}{host.port !== 22 && `:${host.port}`}</dd>
-      <dt>Пользователь</dt>
+      <dt>{t.hosts.form.user}</dt>
       <dd className="mono">{host.user}</dd>
       {shared && (
         <>
-          <dt>Вход</dt>
+          <dt>{t.hosts.form.auth}</dt>
           <dd>{authLabel(host, keyName)}</dd>
         </>
       )}
       {shared && host.auth.type === "password" && host.hasPassword && (
         <>
-          <dt>Пароль</dt>
+          <dt>{t.common.password}</dt>
           <dd><SavedPassword host={host} /></dd>
         </>
       )}
       {via && (
         <>
-          <dt>Через</dt>
+          <dt>{t.hosts.details.via}</dt>
           <dd className="mono">{via}</dd>
         </>
       )}
-      <dt>Группа</dt>
-      <dd>{host.group}</dd>
+      <dt>{t.hosts.form.group}</dt>
+      <dd>{groupLabel(host.group)}</dd>
       {host.tags.length > 0 && (
         <>
-          <dt>Теги</dt>
+          <dt>{t.hosts.form.tags}</dt>
           <dd>{host.tags.join(", ")}</dd>
         </>
       )}
@@ -336,6 +343,7 @@ function HostDetails({ host, shared, keyName }: { host: Host; shared: boolean; k
 }
 
 function NewHostDialog({ groups, onClose, onCreated }: { groups: string[]; onClose: () => void; onCreated: (h: Host) => void }) {
+  const t = useT();
   const { ws, vault, update, toast, connect } = useStore();
   const keys = ws.keys.filter((k) => k.vaultId === vault.id);
   const { draft, set, touched, setTouched } = useHostDraft(emptyDraft(keys, groups[0] ?? ""));
@@ -356,20 +364,20 @@ function NewHostDialog({ groups, onClose, onCreated }: { groups: string[]; onClo
     );
     update((w) => ({ ...w, hosts: [...w.hosts, host] }));
     onCreated(host);
-    toast({ text: `«${host.label}» добавлен`, tone: "success", action: { label: "Подключиться", run: () => connect(host.id) } });
+    toast({ text: t.hosts.newHost.added(host.label), tone: "success", action: { label: t.common.connect, run: () => connect(host.id) } });
     onClose();
   };
 
   return (
     <Modal
-      title="Новый хост"
+      title={t.hosts.newHost.title}
       width={480}
       onClose={onClose}
       onSubmit={submit}
       footer={
         <>
-          <Button type="button" variant="ghost" onClick={onClose}>Отмена</Button>
-          <Button type="submit" variant="primary">Добавить</Button>
+          <Button type="button" variant="ghost" onClick={onClose}>{t.common.cancel}</Button>
+          <Button type="submit" variant="primary">{t.common.add}</Button>
         </>
       }
     >

@@ -1,22 +1,24 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowLeftRight, Check, ChevronsUpDown, Code, KeyRound, LogIn, Plus, Search, Server, Settings, TriangleAlert, Users } from "lucide-react";
-import { formatAgo, plural, useStore, type Section } from "../lib/store";
+import { useT } from "../i18n";
+import { formatAgo, useStore, type Section } from "../lib/store";
 import type { Vault } from "../lib/types";
-import { VaultAvatar, syncStatusText } from "./common";
+import { VaultAvatar } from "./common";
 import { Kbd } from "./ui";
 import { CreateTeamDialog, JoinTeamDialog } from "./TeamDialogs";
 import { syncErrorText } from "./SyncSettings";
 
-const nav: { id: Section; label: string; icon: typeof Server }[] = [
-  { id: "hosts", label: "Хосты", icon: Server },
-  { id: "keys", label: "Ключи", icon: KeyRound },
-  { id: "snippets", label: "Сниппеты", icon: Code },
-  { id: "tunnels", label: "Туннели", icon: ArrowLeftRight },
-  { id: "team", label: "Команда", icon: Users },
+const nav: { id: Exclude<Section, "settings">; icon: typeof Server }[] = [
+  { id: "hosts", icon: Server },
+  { id: "keys", icon: KeyRound },
+  { id: "snippets", icon: Code },
+  { id: "tunnels", icon: ArrowLeftRight },
+  { id: "team", icon: Users },
 ];
 
 export function Sidebar({ homeActive }: { homeActive: boolean }) {
   const { ws, vault, section, navigate, openPalette, resolveConflicts } = useStore();
+  const t = useT().app;
   const conflictHost = new Set(vault.conflicts.map((c) => c.record)).size === 1 && vault.conflicts[0]!.coll === "host" ? ws.hosts.find((h) => h.id === vault.conflicts[0]!.record) : null;
 
   const counts: Partial<Record<Section, number>> = {
@@ -35,23 +37,23 @@ export function Sidebar({ homeActive }: { homeActive: boolean }) {
         <button className="sidebar-alert" onClick={() => resolveConflicts()}>
           <TriangleAlert size={15} />
           <span className="grow ellipsis">
-            {conflictHost ? `Конфликт: ${conflictHost.label}` : `${vault.conflicts.length} ${plural(vault.conflicts.length, "конфликт", "конфликта", "конфликтов")}`}
+            {conflictHost ? t.conflictWith(conflictHost.label) : t.conflicts(vault.conflicts.length)}
           </span>
-          <span className="sidebar-alert-action">Решить</span>
+          <span className="sidebar-alert-action">{t.resolve}</span>
         </button>
       )}
 
       <button className="quick" onClick={openPalette}>
         <Search size={14} />
-        <span>Подключиться</span>
+        <span>{t.quickConnect}</span>
         <Kbd>Ctrl K</Kbd>
       </button>
 
       <nav className="nav">
-        {nav.map(({ id, label, icon: Icon }) => (
+        {nav.map(({ id, icon: Icon }) => (
           <button key={id} className={`nav-item ${section === id && homeActive ? "active" : ""}`} onClick={() => navigate(id)}>
             <Icon size={16} />
-            <span>{id === "team" && vault.kind === "personal" ? "Команды" : label}</span>
+            <span>{id === "team" && vault.kind === "personal" ? t.section.teams : t.section[id]}</span>
             {!!counts[id] && <span className="nav-count">{counts[id]}</span>}
           </button>
         ))}
@@ -62,7 +64,7 @@ export function Sidebar({ homeActive }: { homeActive: boolean }) {
       <nav className="nav">
         <button className={`nav-item ${section === "settings" && homeActive ? "active" : ""}`} onClick={() => navigate("settings")}>
           <Settings size={16} />
-          <span>Настройки</span>
+          <span>{t.section.settings}</span>
         </button>
       </nav>
     </aside>
@@ -71,6 +73,8 @@ export function Sidebar({ homeActive }: { homeActive: boolean }) {
 
 function VaultSwitcher() {
   const { ws, vault, setVault, navigate, sync } = useStore();
+  const all = useT();
+  const t = all.app;
   const [open, setOpen] = useState(false);
   const [dialog, setDialog] = useState<"create" | "join" | null>(null);
   const ref = useRef<HTMLDivElement>(null);
@@ -101,13 +105,13 @@ function VaultSwitcher() {
           {vault.kind === "team" && (
             <span className={`vault-sync ${vault.removed || vault.remoteError ? "conflict" : vault.pending ? "syncing" : vault.syncStatus}`}>
               <span className="dot" />
-              {vault.syncStatus === "syncing" || vault.syncStatus === "offline" ? syncStatusText[vault.syncStatus] : vault.removed ? "Вы удалены" : vault.joined === false ? "Ждёт добавления" : vault.remoteError ? "Нет связи с репозиторием" : vault.pending ? "Не отправлено" : formatAgo(vault.lastSync)}
+              {vault.syncStatus === "syncing" || vault.syncStatus === "offline" ? all.common.syncStatus[vault.syncStatus] : vault.removed ? t.removedFromTeam : vault.joined === false ? t.waitingToBeAdded : vault.remoteError ? t.repoUnreachable : vault.pending ? t.notSent : formatAgo(vault.lastSync)}
             </span>
           )}
           {vault.kind === "personal" && sync?.enabled && (
             <span className={`vault-sync ${sync.error ? "conflict" : sync.pending ? "syncing" : "synced"}`}>
               <span className="dot" />
-              {sync.error ? syncErrorText(sync) : sync.pending ? "Не отправлено" : formatAgo(sync.syncedAt ?? undefined)}
+              {sync.error ? syncErrorText(sync) : sync.pending ? t.notSent : formatAgo(sync.syncedAt ?? undefined)}
             </span>
           )}
         </span>
@@ -120,16 +124,16 @@ function VaultSwitcher() {
             <button key={v.id} className="menu-row" onClick={() => pick(v)}>
               <VaultAvatar vault={v} size={20} />
               <span className="grow">{v.name}</span>
-              {v.conflicts.length > 0 && v.id !== vault.id && <span className="chip warn">Конфликт</span>}
+              {v.conflicts.length > 0 && v.id !== vault.id && <span className="chip warn">{t.conflict}</span>}
               {v.id === vault.id && <Check size={14} className="accent" />}
             </button>
           ))}
           <div className="menu-sep" />
           <button className="menu-row" onClick={() => { setOpen(false); setDialog("create"); }}>
-            <Plus size={15} className="muted" /> Создать команду
+            <Plus size={15} className="muted" /> {t.createTeam}
           </button>
           <button className="menu-row" onClick={() => { setOpen(false); setDialog("join"); }}>
-            <LogIn size={15} className="muted" /> Подключить команду
+            <LogIn size={15} className="muted" /> {t.joinTeam}
           </button>
         </div>
       )}

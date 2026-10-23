@@ -1,3 +1,4 @@
+import { tr } from "../i18n";
 import { createContext, useContext } from "react";
 import type { Settings, Vault, Workspace } from "./types";
 import type { CoreInfo, SyncInfo, TeamView } from "./api";
@@ -76,28 +77,12 @@ export function sshCommand(h: { user: string; address: string; port: number }) {
   return `ssh ${h.port !== 22 ? `-p ${h.port} ` : ""}${h.user}@${h.address}`;
 }
 
-/** "5 мин назад", "вчера", "3 дня назад", "14 мар 2026". */
+/** "5 min ago", "yesterday", "3 days ago", "Mar 14, 2026". */
 export function formatAgo(ms?: number): string {
   if (!ms) return "";
-  const min = Math.floor((Date.now() - ms) / 60_000);
-  if (min < 1) return "только что";
-  if (min < 60) return `${min} мин назад`;
-  const h = Math.floor(min / 60);
-  if (h < 24) return `${h} ч назад`;
-  const d = Math.floor(h / 24);
-  if (d === 1) return "вчера";
-  if (d < 7) return `${d} ${plural(d, "день", "дня", "дней")} назад`;
-  return formatDate(ms);
+  return tr().common.ago(Math.floor((Date.now() - ms) / 60_000)) ?? formatDate(ms);
 }
 
 export function formatDate(ms: number): string {
-  return new Date(ms).toLocaleDateString("ru-RU", { day: "numeric", month: "short", year: "numeric" }).replace(" г.", "");
-}
-
-export function plural(n: number, one: string, few: string, many: string) {
-  const m10 = n % 10;
-  const m100 = n % 100;
-  if (m10 === 1 && m100 !== 11) return one;
-  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
-  return many;
+  return tr().common.date(new Date(ms));
 }

@@ -2,10 +2,11 @@ import { useRef, useState } from "react";
 import { Copy, Download, Ellipsis, FileUp, KeyRound, Lock, Plus, Trash2, Upload } from "lucide-react";
 import { api, errorText, isCoreError } from "../lib/api";
 import { parsePrivateKey, suggestKeyName } from "../lib/keys";
-import { copyText, formatDate, plural, useStore } from "../lib/store";
+import { copyText, formatDate, useStore } from "../lib/store";
 import type { SshKey, Workspace } from "../lib/types";
 import { atLeast, writable } from "../lib/teams";
 import { Button, Checkbox, ConfirmDialog, Empty, Field, IconButton, Menu, Modal, PageHeader, PasswordInput, Segmented } from "./ui";
+import { useT } from "../i18n";
 
 type Dialog = { kind: "create" } | { kind: "import" } | { kind: "export"; key: SshKey } | { kind: "passphrase"; key: SshKey } | { kind: "delete"; key: SshKey };
 
@@ -16,6 +17,7 @@ export function algorithmLabel(k: Pick<SshKey, "algorithm" | "bits">) {
 }
 
 export function KeysView() {
+  const t = useT();
   const { ws, vault, update, toast } = useStore();
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const canCreate = writable(vault);
@@ -24,12 +26,12 @@ export function KeysView() {
   const usage = (k: SshKey) => ws.hosts.filter((h) => h.auth.type === "key" && h.auth.keyId === k.id).length;
 
   const copyPublic = async (k: SshKey) =>
-    toast((await copyText(k.publicKey)) ? { text: `Публичный ключ «${k.name}» скопирован`, tone: "success" } : { text: "Не удалось скопировать", tone: "error" });
+    toast((await copyText(k.publicKey)) ? { text: t.keys.publicCopied(k.name), tone: "success" } : { text: t.common.copyFailed, tone: "error" });
 
   const savePublic = async (k: SshKey) => {
     try {
       const where = await api.saveTextFile(`${k.name}.pub`, `${k.publicKey}\n`);
-      if (where) toast({ text: `Сохранено: ${where}`, tone: "success" });
+      if (where) toast({ text: t.keys.saved(where), tone: "success" });
     } catch (e) {
       toast({ text: errorText(e), tone: "error" });
     }
@@ -37,7 +39,7 @@ export function KeysView() {
 
   const remove = (k: SshKey) => {
     update((w) => ({ ...w, keys: w.keys.filter((x) => x.id !== k.id) }));
-    toast({ text: `Ключ «${k.name}» удалён`, action: { label: "Вернуть", run: () => update((w) => ({ ...w, keys: [...w.keys, k] })) } });
+    toast({ text: t.keys.removed(k.name), action: { label: t.keys.restore, run: () => update((w) => ({ ...w, keys: [...w.keys, k] })) } });
   };
 
   const create = () => setDialog({ kind: "create" });
@@ -45,12 +47,12 @@ export function KeysView() {
 
   return (
     <div className="page">
-      <PageHeader title="Ключи" count={keys.length || undefined}>
-        {canCreate && <Button icon={Upload} onClick={() => setDialog({ kind: "import" })}>Импортировать</Button>}
-        {canCreate && <Button variant="primary" icon={Plus} onClick={create}>Создать ключ</Button>}
+      <PageHeader title={t.keys.title} count={keys.length || undefined}>
+        {canCreate && <Button icon={Upload} onClick={() => setDialog({ kind: "import" })}>{t.keys.import}</Button>}
+        {canCreate && <Button variant="primary" icon={Plus} onClick={create}>{t.keys.createKey}</Button>}
       </PageHeader>
 
-      {keys.length === 0 && <Empty icon={KeyRound} title="Нет ключей" action={canCreate ? <Button variant="primary" icon={Plus} onClick={create}>Создать ключ</Button> : undefined} />}
+      {keys.length === 0 && <Empty icon={KeyRound} title={t.keys.empty} action={canCreate ? <Button variant="primary" icon={Plus} onClick={create}>{t.keys.createKey}</Button> : undefined} />}
 
       <div className="rows">
         {keys.map((k) => {
@@ -64,24 +66,24 @@ export function KeysView() {
                   <span className="chip">{algorithmLabel(k)}</span>
                   {k.hasPassphrase && (
                     <span className="chip">
-                      <Lock size={10} /> {k.passphraseSaved ? "пароль сохранён" : "с паролем"}
+                      <Lock size={10} /> {k.passphraseSaved ? t.keys.passphraseSaved : t.keys.withPassphrase}
                     </span>
                   )}
                 </span>
                 <span className="item-sub mono">{k.fingerprint}</span>
               </div>
-              <span className="item-meta">{n ? `${n} ${plural(n, "хост", "хоста", "хостов")}` : formatDate(k.createdAt)}</span>
+              <span className="item-meta">{n ? t.common.hostCount(n) : formatDate(k.createdAt)}</span>
               <div className="row-actions visible">
-                <IconButton icon={Copy} label="Копировать публичный ключ" tipSide="left" onClick={() => copyPublic(k)} />
+                <IconButton icon={Copy} label={t.keys.copyPublic} tipSide="left" onClick={() => copyPublic(k)} />
                 <Menu
-                  trigger={(toggle, open) => <IconButton icon={Ellipsis} label="Ещё" className={open ? "pressed" : ""} onClick={toggle} />}
+                  trigger={(toggle, open) => <IconButton icon={Ellipsis} label={t.keys.more} className={open ? "pressed" : ""} onClick={toggle} />}
                   items={[
-                    { label: "Сохранить публичный ключ", icon: Download, onSelect: () => savePublic(k) },
-                    ...(atLeast(k.access, "secret") ? [{ label: "Экспортировать приватный ключ", icon: FileUp, onSelect: () => setDialog({ kind: "export", key: k }) }] : []),
+                    { label: t.keys.savePublic, icon: Download, onSelect: () => savePublic(k) },
+                    ...(atLeast(k.access, "secret") ? [{ label: t.keys.exportPrivate, icon: FileUp, onSelect: () => setDialog({ kind: "export", key: k }) }] : []),
                     ...(atLeast(k.access, "edit")
                       ? [
-                          { label: k.hasPassphrase ? "Изменить пароль ключа" : "Задать пароль ключа", icon: Lock, onSelect: () => setDialog({ kind: "passphrase", key: k }) },
-                          { label: "Удалить", icon: Trash2, danger: true, onSelect: () => (n ? setDialog({ kind: "delete", key: k }) : remove(k)) },
+                          { label: k.hasPassphrase ? t.keys.changePassphrase : t.keys.setPassphrase, icon: Lock, onSelect: () => setDialog({ kind: "passphrase", key: k }) },
+                          { label: t.common.delete, icon: Trash2, danger: true, onSelect: () => (n ? setDialog({ kind: "delete", key: k }) : remove(k)) },
                         ]
                       : []),
                   ]}
@@ -98,9 +100,9 @@ export function KeysView() {
       {dialog?.kind === "passphrase" && <PassphraseDialog keyItem={dialog.key} onClose={close} />}
       {dialog?.kind === "delete" && (
         <ConfirmDialog
-          title={`Удалить «${dialog.key.name}»?`}
-          body={`Ключ используется в ${usage(dialog.key)} ${plural(usage(dialog.key), "хосте", "хостах", "хостах")}, они перестанут подключаться.`}
-          confirm="Удалить"
+          title={t.keys.deleteConfirm.title(dialog.key.name)}
+          body={t.keys.deleteConfirm.body(usage(dialog.key))}
+          confirm={t.common.delete}
           onConfirm={() => remove(dialog.key)}
           onClose={close}
         />
@@ -112,14 +114,15 @@ export function KeysView() {
 /* ---------- passphrase fields shared by create / import ---------- */
 
 function PassphraseFields({ value, onChange, remember, onRemember, placeholder, error }: { value: string; onChange: (v: string) => void; remember: boolean; onRemember: (v: boolean) => void; placeholder: string; error?: string | null }) {
+  const t = useT();
   return (
     <>
-      <Field label="Пароль ключа" error={error}>
+      <Field label={t.keys.passphrase} error={error}>
         <PasswordInput value={value} onChange={onChange} placeholder={placeholder} invalid={!!error} />
       </Field>
       {value && (
         <Checkbox checked={remember} onChange={onRemember}>
-          Сохранить пароль в vault
+          {t.keys.savePassphrase}
         </Checkbox>
       )}
     </>
@@ -131,6 +134,7 @@ const addKey = (k: SshKey) => (w: Workspace) => ({ ...w, keys: [...w.keys, k] })
 /* ---------- create ---------- */
 
 function CreateKeyDialog({ onClose }: { onClose: () => void }) {
+  const t = useT();
   const { vault, update, toast } = useStore();
   const [name, setName] = useState(vault.kind === "team" ? `${vault.name.toLowerCase().replace(/\s+/g, "-")}-key` : "id_ed25519");
   const [algorithm, setAlgorithm] = useState<"ed25519" | "rsa">("ed25519");
@@ -144,7 +148,7 @@ function CreateKeyDialog({ onClose }: { onClose: () => void }) {
     try {
       const key = await api.keyGenerate(vault.id, name.trim(), algorithm, passphrase || null, remember);
       update(addKey(key));
-      toast({ text: `Ключ «${key.name}» создан`, tone: "success", action: { label: "Копировать публичный", run: () => void copyText(key.publicKey) } });
+      toast({ text: t.keys.create.created(key.name), tone: "success", action: { label: t.keys.create.copyPublic, run: () => void copyText(key.publicKey) } });
       onClose();
     } catch (e) {
       toast({ text: errorText(e), tone: "error" });
@@ -154,23 +158,23 @@ function CreateKeyDialog({ onClose }: { onClose: () => void }) {
 
   return (
     <Modal
-      title="Новый ключ"
+      title={t.keys.create.title}
       onClose={onClose}
       onSubmit={submit}
       footer={
         <>
-          <Button type="button" variant="ghost" onClick={onClose}>Отмена</Button>
-          <Button type="submit" variant="primary" disabled={!name.trim()} loading={busy}>Создать</Button>
+          <Button type="button" variant="ghost" onClick={onClose}>{t.common.cancel}</Button>
+          <Button type="submit" variant="primary" disabled={!name.trim()} loading={busy}>{t.common.create}</Button>
         </>
       }
     >
-      <Field label="Название">
+      <Field label={t.keys.name}>
         <input className="input mono" value={name} onChange={(e) => setName(e.target.value)} />
       </Field>
-      <Field label="Тип">
+      <Field label={t.keys.create.type}>
         <Segmented value={algorithm} onChange={setAlgorithm} options={[{ value: "ed25519", label: "Ed25519" }, { value: "rsa", label: "RSA 4096" }]} />
       </Field>
-      <PassphraseFields value={passphrase} onChange={setPassphrase} remember={remember} onRemember={setRemember} placeholder="Без пароля" />
+      <PassphraseFields value={passphrase} onChange={setPassphrase} remember={remember} onRemember={setRemember} placeholder={t.keys.noPassphrase} />
     </Modal>
   );
 }
@@ -178,6 +182,7 @@ function CreateKeyDialog({ onClose }: { onClose: () => void }) {
 /* ---------- import ---------- */
 
 function ImportKeyDialog({ onClose }: { onClose: () => void }) {
+  const t = useT();
   const { vault, update, toast } = useStore();
   const [text, setText] = useState("");
   const [fileName, setFileName] = useState<string | null>(null);
@@ -194,8 +199,8 @@ function ImportKeyDialog({ onClose }: { onClose: () => void }) {
   const parsed = parsePrivateKey(text);
   const autoName = text ? suggestKeyName(text, fileName ?? undefined) : "";
 
-  const setKeyText = (t: string, file: string | null) => {
-    setText(t);
+  const setKeyText = (value: string, file: string | null) => {
+    setText(value);
     setFileName(file);
     setKeyError(null);
     setPassError(null);
@@ -203,7 +208,7 @@ function ImportKeyDialog({ onClose }: { onClose: () => void }) {
 
   const load = async (file: File) => {
     if (file.size > 64 * 1024) {
-      toast({ text: "Файл слишком большой для ключа", tone: "error" });
+      toast({ text: t.keys.importDialog.fileTooBig, tone: "error" });
       return;
     }
     setKeyText(await file.text(), file.name);
@@ -217,12 +222,12 @@ function ImportKeyDialog({ onClose }: { onClose: () => void }) {
     try {
       const key = await api.keyImport(vault.id, name.trim() || autoName, text, passphrase || null, remember);
       update(addKey(key));
-      toast({ text: `Ключ «${key.name}» импортирован`, tone: "success" });
+      toast({ text: t.keys.importDialog.imported(key.name), tone: "success" });
       onClose();
     } catch (e) {
       setBusy(false);
-      if (isCoreError(e) && e.kind === "passphraseRequired") setPassError("Ключ защищён паролем, введите его");
-      else if (isCoreError(e) && e.kind === "wrongPassphrase") setPassError("Неверный пароль ключа");
+      if (isCoreError(e) && e.kind === "passphraseRequired") setPassError(t.keys.importDialog.passphraseRequired);
+      else if (isCoreError(e) && e.kind === "wrongPassphrase") setPassError(t.common.errors.wrongPassphrase);
       else setKeyError(errorText(e));
     }
   };
@@ -231,14 +236,14 @@ function ImportKeyDialog({ onClose }: { onClose: () => void }) {
 
   return (
     <Modal
-      title="Импорт ключа"
+      title={t.keys.importDialog.title}
       width={520}
       onClose={onClose}
       onSubmit={submit}
       footer={
         <>
-          <Button type="button" variant="ghost" onClick={onClose}>Отмена</Button>
-          <Button type="submit" variant="primary" disabled={!text.trim()} loading={busy}>Импортировать</Button>
+          <Button type="button" variant="ghost" onClick={onClose}>{t.common.cancel}</Button>
+          <Button type="submit" variant="primary" disabled={!text.trim()} loading={busy}>{t.keys.import}</Button>
         </>
       }
     >
@@ -266,8 +271,8 @@ function ImportKeyDialog({ onClose }: { onClose: () => void }) {
           spellCheck={false}
         />
         <div className="dropzone-bar">
-          <Button type="button" size="sm" icon={FileUp} onClick={() => fileRef.current?.click()}>Выбрать файл</Button>
-          <span className="muted small ellipsis">{fileName ?? "или перетащите файл сюда"}</span>
+          <Button type="button" size="sm" icon={FileUp} onClick={() => fileRef.current?.click()}>{t.keys.importDialog.chooseFile}</Button>
+          <span className="muted small ellipsis">{fileName ?? t.keys.importDialog.orDrop}</span>
           <input
             ref={fileRef}
             type="file"
@@ -281,9 +286,9 @@ function ImportKeyDialog({ onClose }: { onClose: () => void }) {
         </div>
       </div>
       {shownKeyError && <span className="field-error">{shownKeyError}</span>}
-      {!shownKeyError && parsed.ok && <span className="ok-text small">{parsed.algorithm === "rsa" ? "RSA" : "OpenSSH"} ключ</span>}
+      {!shownKeyError && parsed.ok && <span className="ok-text small">{t.keys.importDialog.detected(parsed.algorithm === "rsa" ? "RSA" : "OpenSSH")}</span>}
 
-      <Field label="Название">
+      <Field label={t.keys.name}>
         <input className="input mono" value={name} onChange={(e) => setName(e.target.value)} placeholder={autoName || "my-key"} />
       </Field>
       <PassphraseFields
@@ -294,7 +299,7 @@ function ImportKeyDialog({ onClose }: { onClose: () => void }) {
         }}
         remember={remember}
         onRemember={setRemember}
-        placeholder="Если ключ защищён паролем"
+        placeholder={t.keys.importDialog.passphrasePlaceholder}
         error={passError}
       />
     </Modal>
@@ -304,6 +309,7 @@ function ImportKeyDialog({ onClose }: { onClose: () => void }) {
 /* ---------- export ---------- */
 
 function ExportKeyDialog({ keyItem, onClose }: { keyItem: SshKey; onClose: () => void }) {
+  const t = useT();
   const { toast } = useStore();
   const [passphrase, setPassphrase] = useState("");
   const [busy, setBusy] = useState(false);
@@ -316,7 +322,7 @@ function ExportKeyDialog({ keyItem, onClose }: { keyItem: SshKey; onClose: () =>
       const where = await api.saveTextFile(keyItem.name, contents);
       setBusy(false);
       if (!where) return;
-      toast({ text: `Сохранено: ${where}`, tone: "success" });
+      toast({ text: t.keys.saved(where), tone: "success" });
       onClose();
     } catch (e) {
       setBusy(false);
@@ -326,21 +332,21 @@ function ExportKeyDialog({ keyItem, onClose }: { keyItem: SshKey; onClose: () =>
 
   return (
     <Modal
-      title={`Экспорт «${keyItem.name}»`}
+      title={t.keys.export.title(keyItem.name)}
       onClose={onClose}
       onSubmit={submit}
       footer={
         <>
-          <Button type="button" variant="ghost" onClick={onClose}>Отмена</Button>
-          <Button type="submit" variant="primary" icon={Download} loading={busy}>Сохранить файл</Button>
+          <Button type="button" variant="ghost" onClick={onClose}>{t.common.cancel}</Button>
+          <Button type="submit" variant="primary" icon={Download} loading={busy}>{t.keys.export.saveFile}</Button>
         </>
       }
     >
       {keyItem.hasPassphrase ? (
-        <div className="modal-text">Файл будет защищён текущим паролем ключа.</div>
+        <div className="modal-text">{t.keys.export.keepsPassphrase}</div>
       ) : (
-        <Field label="Пароль для файла">
-          <PasswordInput value={passphrase} onChange={setPassphrase} placeholder="Без пароля" />
+        <Field label={t.keys.export.filePassphrase}>
+          <PasswordInput value={passphrase} onChange={setPassphrase} placeholder={t.keys.noPassphrase} />
         </Field>
       )}
     </Modal>
@@ -350,6 +356,7 @@ function ExportKeyDialog({ keyItem, onClose }: { keyItem: SshKey; onClose: () =>
 /* ---------- passphrase ---------- */
 
 function PassphraseDialog({ keyItem, onClose }: { keyItem: SshKey; onClose: () => void }) {
+  const t = useT();
   const { update, toast } = useStore();
   const needsCurrent = keyItem.hasPassphrase && !keyItem.passphraseSaved;
   const [current, setCurrent] = useState("");
@@ -370,44 +377,44 @@ function PassphraseDialog({ keyItem, onClose }: { keyItem: SshKey; onClose: () =
     try {
       const updated = await api.keySetPassphrase(keyItem, current || null, next || null, remember);
       update((w) => ({ ...w, keys: w.keys.map((k) => (k.id === keyItem.id ? updated : k)) }));
-      toast({ text: removing ? "Пароль ключа снят" : "Пароль ключа изменён", tone: "success" });
+      toast({ text: removing ? t.keys.passphraseDialog.removed : t.keys.passphraseDialog.changed, tone: "success" });
       onClose();
     } catch (e) {
       setBusy(false);
-      if (isCoreError(e) && (e.kind === "wrongPassphrase" || e.kind === "passphraseRequired")) setCurrentError("Неверный текущий пароль");
+      if (isCoreError(e) && (e.kind === "wrongPassphrase" || e.kind === "passphraseRequired")) setCurrentError(t.keys.passphraseDialog.wrongCurrent);
       else toast({ text: errorText(e), tone: "error" });
     }
   };
 
   return (
     <Modal
-      title={`Пароль ключа «${keyItem.name}»`}
+      title={t.keys.passphraseDialog.title(keyItem.name)}
       onClose={onClose}
       onSubmit={submit}
       footer={
         <>
-          <Button type="button" variant="ghost" onClick={onClose}>Отмена</Button>
+          <Button type="button" variant="ghost" onClick={onClose}>{t.common.cancel}</Button>
           <Button type="submit" variant={removing ? "danger" : "primary"} loading={busy} disabled={(!keyItem.hasPassphrase && !next) || (needsCurrent && !current)}>
-            {removing ? "Снять пароль" : "Сохранить"}
+            {removing ? t.keys.passphraseDialog.remove : t.common.save}
           </Button>
         </>
       }
     >
       {needsCurrent && (
-        <Field label="Текущий пароль" error={currentError}>
+        <Field label={t.keys.passphraseDialog.current} error={currentError}>
           <PasswordInput value={current} onChange={(v) => { setCurrent(v); setCurrentError(null); }} invalid={!!currentError} autoFocus />
         </Field>
       )}
-      <Field label="Новый пароль">
-        <PasswordInput value={next} onChange={setNext} placeholder={keyItem.hasPassphrase ? "Пусто: снять пароль" : ""} />
+      <Field label={t.keys.passphraseDialog.next}>
+        <PasswordInput value={next} onChange={setNext} placeholder={keyItem.hasPassphrase ? t.keys.passphraseDialog.emptyRemoves : ""} />
       </Field>
       {next && (
         <>
-          <Field label="Ещё раз" error={showErrors && mismatch ? "Пароли не совпадают" : null}>
+          <Field label={t.keys.passphraseDialog.repeat} error={showErrors && mismatch ? t.keys.passphraseDialog.mismatch : null}>
             <PasswordInput value={repeat} onChange={setRepeat} invalid={showErrors && mismatch} />
           </Field>
           <Checkbox checked={remember} onChange={setRemember}>
-            Сохранить пароль в vault
+            {t.keys.savePassphrase}
           </Checkbox>
         </>
       )}

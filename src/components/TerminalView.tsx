@@ -10,6 +10,7 @@ import { runRealSession, type HostKeyAnswer, type HostKeyQuestion } from "../lib
 import { api, errorText, type SecretKind } from "../lib/api";
 import { mockSecrets } from "../lib/mockData";
 import { useStore } from "../lib/store";
+import { tr, useT } from "../i18n";
 import { Button, IconButton } from "./ui";
 
 export type SplitDir = "row" | "col";
@@ -134,12 +135,13 @@ export function TerminalView({ host, active, initialCommand, onStatus, onExit, o
     const key = host.auth.type === "key" ? ws.keys.find((k) => k.id === (host.auth as { keyId: string }).keyId) : undefined;
 
     // Offer to keep a secret the user typed in, once it proved correct.
-    const offerSave = (kind: SecretKind, value: string) =>
+    const offerSave = (kind: SecretKind, value: string) => {
+      const t = tr();
       toast({
-        text: kind === "password" ? `Сохранить пароль для «${host.label}»?` : `Сохранить пароль ключа «${key?.name}»?`,
+        text: kind === "password" ? t.terminal.offerSave.password(host.label) : t.terminal.offerSave.passphrase(key?.name ?? ""),
         duration: 15000,
         action: {
-          label: "Сохранить",
+          label: t.common.save,
           run: async () => {
             try {
               await api.secretSave(host, kind, value);
@@ -150,7 +152,7 @@ export function TerminalView({ host, active, initialCommand, onStatus, onExit, o
                   ? { ...w, hosts: w.hosts.map((h) => (h.id === host.id ? { ...h, hasPassword: true } : h)) }
                   : { ...w, keys: w.keys.map((k) => (k.id === key?.id ? { ...k, passphraseSaved: true } : k)) },
               );
-              toast({ text: "Сохранено в vault", tone: "success" });
+              toast({ text: tr().terminal.offerSave.saved, tone: "success" });
               termRef.current?.focus();
             } catch (e) {
               toast({ text: errorText(e), tone: "error" });
@@ -158,6 +160,7 @@ export function TerminalView({ host, active, initialCommand, onStatus, onExit, o
           },
         },
       });
+    };
 
     let stop: () => void;
     if (api.usesCore(host.vaultId)) {
@@ -263,6 +266,8 @@ export function TerminalView({ host, active, initialCommand, onStatus, onExit, o
 function SearchBar({ search, onClose }: { search: SearchAddon; onClose: () => void }) {
   const [query, setQuery] = useState("");
   const [result, setResult] = useState<{ index: number; count: number } | null>(null);
+  const t = useT();
+  const s = t.terminal.search;
 
   useEffect(() => {
     const sub = search.onDidChangeResults((r) => setResult(r.resultCount ? { index: r.resultIndex, count: r.resultCount } : null));
@@ -287,7 +292,7 @@ function SearchBar({ search, onClose }: { search: SearchAddon; onClose: () => vo
         className="term-search-input"
         autoFocus
         value={query}
-        placeholder="Найти"
+        placeholder={s.placeholder}
         spellCheck={false}
         onChange={(e) => {
           setQuery(e.target.value);
@@ -299,10 +304,10 @@ function SearchBar({ search, onClose }: { search: SearchAddon; onClose: () => vo
           if (e.key === "Enter") find(!e.shiftKey);
         }}
       />
-      <span className={`term-search-count ${query && !result ? "err-text" : ""}`}>{query ? (result ? `${result.index + 1} из ${result.count}` : "Нет") : ""}</span>
-      <IconButton icon={ChevronUp} label="Предыдущее · Shift+Enter" disabled={!result} onClick={() => find(false)} />
-      <IconButton icon={ChevronDown} label="Следующее · Enter" disabled={!result} onClick={() => find(true)} />
-      <IconButton icon={X} label="Закрыть · Esc" onClick={onClose} />
+      <span className={`term-search-count ${query && !result ? "err-text" : ""}`}>{query ? (result ? s.count(result.index + 1, result.count) : s.none) : ""}</span>
+      <IconButton icon={ChevronUp} label={s.prev} disabled={!result} onClick={() => find(false)} />
+      <IconButton icon={ChevronDown} label={s.next} disabled={!result} onClick={() => find(true)} />
+      <IconButton icon={X} label={s.close} onClick={onClose} />
     </div>
   );
 }
@@ -329,6 +334,7 @@ function TerminalMenu({
   onSearch: () => void;
   onSplit: (dir: SplitDir) => void;
 }) {
+  const t = useT();
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState(at);
   useEffect(() => {
@@ -361,16 +367,18 @@ function TerminalMenu({
 
   return (
     <div ref={ref} className="menu term-menu" role="menu" style={{ top: pos.y, left: pos.x }} onMouseDown={(e) => e.stopPropagation()}>
-      {item("Копировать", Copy, shortcuts[0], onCopy, !canCopy)}
-      {item("Вставить", ClipboardPaste, shortcuts[1], onPaste)}
-      {item("Найти", Search, "Ctrl Shift F", onSearch)}
-      {splitDirs.includes("row") && item("Разделить вправо", Columns2, "Ctrl Shift D", () => onSplit("row"))}
-      {splitDirs.includes("col") && item("Разделить вниз", Rows2, "Ctrl Shift E", () => onSplit("col"))}
+      {item(t.common.copy, Copy, shortcuts[0], onCopy, !canCopy)}
+      {item(t.common.paste, ClipboardPaste, shortcuts[1], onPaste)}
+      {item(t.terminal.menu.find, Search, "Ctrl Shift F", onSearch)}
+      {splitDirs.includes("row") && item(t.terminal.menu.splitRight, Columns2, "Ctrl Shift D", () => onSplit("row"))}
+      {splitDirs.includes("col") && item(t.terminal.menu.splitDown, Rows2, "Ctrl Shift E", () => onSplit("col"))}
     </div>
   );
 }
 
 function HostKeyCard({ host, question }: { host: Host; question: Question }) {
+  const t = useT();
+  const k = t.terminal.hostKey;
   const changed = question.kind === "changed";
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -383,35 +391,35 @@ function HostKeyCard({ host, question }: { host: Host; question: Question }) {
 
   return (
     <div className="hostkey-backdrop" onMouseDown={(e) => e.stopPropagation()}>
-      <div className={`hostkey-card ${changed ? "danger" : ""}`} role="alertdialog" aria-label="Ключ хоста">
+      <div className={`hostkey-card ${changed ? "danger" : ""}`} role="alertdialog" aria-label={k.label}>
         <div className="hostkey-head">
           {changed ? <ShieldAlert size={20} /> : <ShieldQuestion size={20} />}
-          <h2>{changed ? "Ключ хоста изменился" : "Новый хост"}</h2>
+          <h2>{changed ? k.changed : k.unknown}</h2>
         </div>
         <div className="hostkey-host mono">{question.via ? `${host.label} · ` : ""}{host.address}:{host.port}</div>
         {question.kind === "unknown" ? (
           <dl className="hostkey-fp">
-            <dt>Отпечаток</dt>
+            <dt>{k.fingerprint}</dt>
             <dd className="mono">{question.fingerprint}</dd>
           </dl>
         ) : (
           <dl className="hostkey-fp">
-            <dt>Был</dt>
+            <dt>{k.was}</dt>
             <dd className="mono">{question.expected}</dd>
-            <dt>Сейчас</dt>
+            <dt>{k.now}</dt>
             <dd className="mono">{question.actual}</dd>
           </dl>
         )}
         <div className="hostkey-actions">
           {changed ? (
             <>
-              <Button variant="ghost" className="danger-text" onClick={() => question.answer("replace")}>Заменить ключ</Button>
-              <Button variant="primary" autoFocus onClick={() => question.answer("cancel")}>Отменить</Button>
+              <Button variant="ghost" className="danger-text" onClick={() => question.answer("replace")}>{k.replace}</Button>
+              <Button variant="primary" autoFocus onClick={() => question.answer("cancel")}>{k.stop}</Button>
             </>
           ) : (
             <>
-              <Button variant="ghost" onClick={() => question.answer("cancel")}>Отмена</Button>
-              <Button variant="primary" autoFocus onClick={() => question.answer("trust")}>Доверять и подключиться</Button>
+              <Button variant="ghost" onClick={() => question.answer("cancel")}>{t.common.cancel}</Button>
+              <Button variant="primary" autoFocus onClick={() => question.answer("trust")}>{k.trust}</Button>
             </>
           )}
         </div>

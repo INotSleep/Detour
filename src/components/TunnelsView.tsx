@@ -1,10 +1,11 @@
 import { useRef, useState } from "react";
 import { ArrowLeftRight, ArrowRight, Copy, Ellipsis, Globe, Laptop, Loader2, Pencil, Plus, RotateCw, Server, ShieldQuestion, Trash2, type LucideIcon } from "lucide-react";
 import { api, errorText, isCoreError, trustMore, type SecretKind } from "../lib/api";
-import { copyText, plural, sleep, uid, useStore } from "../lib/store";
+import { copyText, sleep, uid, useStore } from "../lib/store";
 import type { Host, Tunnel } from "../lib/types";
 import { atLeast, writable } from "../lib/teams";
 import { Button, Checkbox, Empty, Field, IconButton, Menu, Modal, PageHeader, PasswordInput, Switch } from "./ui";
+import { tr, useT } from "../i18n";
 
 /* ---------- route ---------- */
 
@@ -16,16 +17,17 @@ interface RouteNode {
 
 function routeOf(kind: Tunnel["kind"], bindPort: number | string, via: string, target?: string): RouteNode[] {
   const port = bindPort || "…";
-  const me = "Этот компьютер";
+  const tx = tr().tunnels.route;
+  const me = tx.thisComputer;
   if (kind === "local") {
     // A service on the server itself is shown as the server's own port, not as a separate "localhost" hop.
     const onServer = target?.match(/^(?:localhost|127\.0\.0\.1):(\d+)$/);
     const from = { icon: Laptop, title: me, sub: `localhost:${port}` };
-    if (onServer) return [from, { icon: Server, title: via || "…", sub: `порт ${onServer[1]}` }];
+    if (onServer) return [from, { icon: Server, title: via || "…", sub: tx.port(onServer[1]!) }];
     return [from, { icon: Server, title: via || "…" }, { icon: Server, title: target || "…" }];
   }
-  if (kind === "remote") return [{ icon: Server, title: via || "…", sub: `порт ${port}` }, { icon: Laptop, title: me, sub: target || "…" }];
-  return [{ icon: Laptop, title: me, sub: `SOCKS5 localhost:${port}` }, { icon: Server, title: via || "…" }, { icon: Globe, title: "любой адрес" }];
+  if (kind === "remote") return [{ icon: Server, title: via || "…", sub: tx.port(port) }, { icon: Laptop, title: me, sub: target || "…" }];
+  return [{ icon: Laptop, title: me, sub: `SOCKS5 localhost:${port}` }, { icon: Server, title: via || "…" }, { icon: Globe, title: tx.anyAddress }];
 }
 
 function Route({ nodes }: { nodes: RouteNode[] }) {
@@ -71,6 +73,8 @@ interface Answer {
 /* ---------- page ---------- */
 
 export function TunnelsView() {
+  // `t` names a tunnel throughout this file.
+  const tx = useT();
   const { ws, vault, update, toast, navigate } = useStore();
   const canCreate = writable(vault);
   const [editing, setEditing] = useState<Tunnel | "new" | null>(null);
@@ -103,8 +107,8 @@ export function TunnelsView() {
     const now = latest.current;
     const via = now.hosts.find((h) => h.id === t.viaHostId);
     const busy = t.kind !== "remote" && now.tunnels.find((o) => o.id !== t.id && o.kind !== "remote" && o.state === "on" && o.bindPort === t.bindPort);
-    if (!via || via.online === false) return patch(t.id, { state: "error", error: `${via?.label ?? "Сервер"} не отвечает` });
-    if (busy) return patch(t.id, { state: "error", error: `Порт ${t.bindPort} занят «${busy.name}»` });
+    if (!via || via.online === false) return patch(t.id, { state: "error", error: tx.common.errors.unreachable(via?.label ?? tx.tunnels.server) });
+    if (busy) return patch(t.id, { state: "error", error: tx.tunnels.portTaken(t.bindPort, busy.name) });
     patch(t.id, { state: "on" });
   };
 
@@ -160,30 +164,30 @@ export function TunnelsView() {
   const remove = (t: Tunnel) => {
     stop(t);
     update((w) => ({ ...w, tunnels: w.tunnels.filter((x) => x.id !== t.id) }));
-    toast({ text: `«${t.name}» удалён`, action: { label: "Вернуть", run: () => update((w) => ({ ...w, tunnels: [...w.tunnels, { ...t, state: "off", error: undefined }] })) } });
+    toast({ text: tx.tunnels.removed(t.name), action: { label: tx.tunnels.restore, run: () => update((w) => ({ ...w, tunnels: [...w.tunnels, { ...t, state: "off", error: undefined }] })) } });
   };
 
   const copy = async (t: Tunnel) => {
     const text = endpoint(t);
-    toast((await copyText(text)) ? { text: `Скопировано: ${text}`, tone: "success" } : { text: "Не удалось скопировать", tone: "error" });
+    toast((await copyText(text)) ? { text: tx.tunnels.copied(text), tone: "success" } : { text: tx.common.copyFailed, tone: "error" });
   };
 
   if (hosts.length === 0) {
     return (
       <div className="page">
-        <PageHeader title="Туннели" />
-        <Empty icon={ArrowLeftRight} title="Для туннеля нужен хост" action={<Button variant="primary" icon={Plus} onClick={() => navigate("hosts")}>К хостам</Button>} />
+        <PageHeader title={tx.tunnels.title} />
+        <Empty icon={ArrowLeftRight} title={tx.tunnels.needHost} action={<Button variant="primary" icon={Plus} onClick={() => navigate("hosts")}>{tx.tunnels.toHosts}</Button>} />
       </div>
     );
   }
 
   return (
     <div className="page">
-      <PageHeader title="Туннели" count={tunnels.length || undefined}>
-        {canCreate && <Button variant="primary" icon={Plus} onClick={() => setEditing("new")}>Создать туннель</Button>}
+      <PageHeader title={tx.tunnels.title} count={tunnels.length || undefined}>
+        {canCreate && <Button variant="primary" icon={Plus} onClick={() => setEditing("new")}>{tx.tunnels.createTunnel}</Button>}
       </PageHeader>
 
-      {tunnels.length === 0 && <Empty icon={ArrowLeftRight} title="Нет туннелей" action={canCreate ? <Button variant="primary" icon={Plus} onClick={() => setEditing("new")}>Создать туннель</Button> : undefined} />}
+      {tunnels.length === 0 && <Empty icon={ArrowLeftRight} title={tx.tunnels.empty} action={canCreate ? <Button variant="primary" icon={Plus} onClick={() => setEditing("new")}>{tx.tunnels.createTunnel}</Button> : undefined} />}
 
       <div className="rows">
         {tunnels.map((t) => {
@@ -191,7 +195,7 @@ export function TunnelsView() {
           const canEdit = atLeast(t.access, "edit");
           return (
             <div className={`item-row tunnel-row ${t.state}`} key={t.id} onDoubleClick={() => canEdit && setEditing(t)}>
-              <Switch label={t.state === "on" ? "Закрыть туннель" : "Открыть туннель"} checked={t.state === "on" || t.state === "starting"} busy={t.state === "starting"} onChange={() => toggle(t.id)} />
+              <Switch label={t.state === "on" ? tx.tunnels.close : tx.tunnels.open} checked={t.state === "on" || t.state === "starting"} busy={t.state === "starting"} onChange={() => toggle(t.id)} />
               <div className="item-main">
                 <span className="item-title">{t.name}</span>
                 <Route nodes={routeOf(t.kind, t.bindPort, via?.label ?? "?", t.target)} />
@@ -199,29 +203,29 @@ export function TunnelsView() {
 
               <div className="tunnel-status">
                 {t.state === "starting" && (
-                  <span className="muted"><Loader2 size={13} className="spin" /> Открывается</span>
+                  <span className="muted"><Loader2 size={13} className="spin" /> {tx.tunnels.opening}</span>
                 )}
                 {t.state === "on" && (
                   <>
-                    <span className="ok-text">Открыт</span>
-                    {!!t.connections && <span className="muted small">{t.connections} {plural(t.connections, "подключение", "подключения", "подключений")}</span>}
+                    <span className="ok-text">{tx.tunnels.isOpen}</span>
+                    {!!t.connections && <span className="muted small">{tx.tunnels.connections(t.connections)}</span>}
                     <Button size="sm" variant="ghost" icon={Copy} onClick={() => copy(t)}>{endpoint(t)}</Button>
                   </>
                 )}
                 {t.state === "error" && (
                   <>
                     <span className="err-text">{t.error}</span>
-                    <Button size="sm" icon={RotateCw} onClick={() => start(t)}>Повторить</Button>
+                    <Button size="sm" icon={RotateCw} onClick={() => start(t)}>{tx.common.retry}</Button>
                   </>
                 )}
               </div>
 
               {canEdit ? (
                 <Menu
-                  trigger={(open, isOpen) => <IconButton icon={Ellipsis} label="Ещё" className={isOpen ? "pressed" : ""} onClick={open} />}
+                  trigger={(open, isOpen) => <IconButton icon={Ellipsis} label={tx.tunnels.more} className={isOpen ? "pressed" : ""} onClick={open} />}
                   items={[
-                    { label: "Изменить", icon: Pencil, onSelect: () => setEditing(t) },
-                    { label: "Удалить", icon: Trash2, danger: true, onSelect: () => remove(t) },
+                    { label: tx.common.edit, icon: Pencil, onSelect: () => setEditing(t) },
+                    { label: tx.common.delete, icon: Trash2, danger: true, onSelect: () => remove(t) },
                   ]}
                 />
               ) : (
@@ -283,38 +287,40 @@ export function TunnelsView() {
 /* ---------- what a login asks for ---------- */
 
 function SecretDialog({ ask, onClose, onAnswer }: { ask: Extract<Ask, { kind: "secret" }>; onClose: () => void; onAnswer: (secret: string, remember: boolean) => void }) {
+  const tx = useT();
   const [value, setValue] = useState("");
   const [remember, setRemember] = useState(true);
   return (
     <Modal
-      title={`«${ask.tunnel.name}»`}
+      title={tx.tunnels.secret.title(ask.tunnel.name)}
       onClose={onClose}
       onSubmit={() => value && onAnswer(value, remember)}
       footer={
         <>
-          <Button type="button" variant="ghost" onClick={onClose}>Отмена</Button>
-          <Button type="submit" variant="primary" disabled={!value}>Открыть туннель</Button>
+          <Button type="button" variant="ghost" onClick={onClose}>{tx.common.cancel}</Button>
+          <Button type="submit" variant="primary" disabled={!value}>{tx.tunnels.open}</Button>
         </>
       }
     >
       <Field label={ask.text} error={ask.error}>
         <PasswordInput value={value} onChange={setValue} invalid={!!ask.error} autoFocus />
       </Field>
-      <Checkbox checked={remember} onChange={setRemember}>Сохранить в vault</Checkbox>
+      <Checkbox checked={remember} onChange={setRemember}>{tx.tunnels.secret.saveToVault}</Checkbox>
     </Modal>
   );
 }
 
 function TrustDialog({ ask, onClose, onTrust }: { ask: Extract<Ask, { kind: "trust" }>; onClose: () => void; onTrust: () => void }) {
+  const tx = useT();
   return (
     <Modal
-      title="Новый хост"
+      title={tx.tunnels.trust.title}
       onClose={onClose}
       onSubmit={onTrust}
       footer={
         <>
-          <Button type="button" variant="ghost" onClick={onClose}>Отмена</Button>
-          <Button type="submit" variant="primary">Доверять и открыть</Button>
+          <Button type="button" variant="ghost" onClick={onClose}>{tx.common.cancel}</Button>
+          <Button type="submit" variant="primary">{tx.tunnels.trust.trustAndOpen}</Button>
         </>
       }
     >
@@ -331,26 +337,28 @@ function TrustDialog({ ask, onClose, onTrust }: { ask: Extract<Ask, { kind: "tru
 
 /** What the login prompt asks for, in words. */
 function secretLabel(kind: SecretKind, via?: Host) {
-  return kind === "passphrase" ? "Пароль ключа" : via ? `Пароль ${via.user}@${via.address}` : "Пароль";
+  const tx = tr();
+  return kind === "passphrase" ? tx.tunnels.secret.passphrase : via ? tx.tunnels.secret.passwordFor(`${via.user}@${via.address}`) : tx.common.password;
 }
 
 function ChangedKeyDialog({ ask, onClose, onReplace }: { ask: Extract<Ask, { kind: "changed" }>; onClose: () => void; onReplace: () => void }) {
+  const tx = useT();
   return (
     <Modal
-      title="Ключ хоста изменился"
+      title={tx.tunnels.changed.title}
       onClose={onClose}
       footer={
         <>
-          <Button type="button" variant="ghost" className="danger-text" onClick={onReplace}>Заменить ключ</Button>
-          <Button type="button" variant="primary" autoFocus onClick={onClose}>Отменить</Button>
+          <Button type="button" variant="ghost" className="danger-text" onClick={onReplace}>{tx.tunnels.changed.replace}</Button>
+          <Button type="button" variant="primary" autoFocus onClick={onClose}>{tx.tunnels.changed.keep}</Button>
         </>
       }
     >
       <div className="hostkey-host mono">{ask.host}</div>
       <dl className="hostkey-fp">
-        <dt>Был</dt>
+        <dt>{tx.tunnels.changed.was}</dt>
         <dd className="mono">{ask.expected}</dd>
-        <dt>Сейчас</dt>
+        <dt>{tx.tunnels.changed.now}</dt>
         <dd className="mono">{ask.actual}</dd>
       </dl>
     </Modal>
@@ -359,10 +367,10 @@ function ChangedKeyDialog({ ask, onClose, onReplace }: { ask: Extract<Ask, { kin
 
 /* ---------- create / edit ---------- */
 
-const kinds: { value: Tunnel["kind"]; icon: LucideIcon; title: string }[] = [
-  { value: "local", icon: Laptop, title: "Сервис сервера у себя" },
-  { value: "remote", icon: Server, title: "Свой сервис на сервере" },
-  { value: "dynamic", icon: Globe, title: "Прокси через сервер" },
+const kinds: { value: Tunnel["kind"]; icon: LucideIcon }[] = [
+  { value: "local", icon: Laptop },
+  { value: "remote", icon: Server },
+  { value: "dynamic", icon: Globe },
 ];
 
 const portOk = (p: string) => Number(p) > 0 && Number(p) < 65536;
@@ -374,6 +382,7 @@ function splitTarget(target?: string): [string, string] {
 }
 
 function TunnelDialog({ tunnel, onClose, onSaved }: { tunnel: Tunnel | null; onClose: () => void; onSaved: (t: Tunnel, wasOn: boolean) => void }) {
+  const tx = useT();
   const { ws, vault, update, toast } = useStore();
   const hosts = ws.hosts.filter((h) => h.vaultId === vault.id);
   const [initHost, initPort] = splitTarget(tunnel?.target);
@@ -387,7 +396,7 @@ function TunnelDialog({ tunnel, onClose, onSaved }: { tunnel: Tunnel | null; onC
   const [name, setName] = useState(tunnel?.name ?? "");
   const [showErrors, setShowErrors] = useState(false);
 
-  const viaLabel = hosts.find((h) => h.id === via)?.label ?? "сервер";
+  const viaLabel = hosts.find((h) => h.id === via)?.label ?? tx.tunnels.dialog.serverFallback;
   // For "service → here" the local port follows the service port until edited by hand.
   const entryPort = kind === "local" && !inTouched ? outPort : inPort;
   const outHostOk = /^[^\s:]+$/.test(outHost.trim());
@@ -397,7 +406,7 @@ function TunnelDialog({ tunnel, onClose, onSaved }: { tunnel: Tunnel | null; onC
     outPort: kind !== "dynamic" && !portOk(outPort),
   };
   const autoName =
-    kind === "dynamic" ? `Прокси через ${viaLabel}` : kind === "remote" ? `localhost:${outPort || "…"} на ${viaLabel}` : `${outHost.trim() || "…"}:${outPort || "…"}`;
+    kind === "dynamic" ? tx.tunnels.dialog.proxyVia(viaLabel) : kind === "remote" ? tx.tunnels.dialog.onServer(`localhost:${outPort || "…"}`, viaLabel) : `${outHost.trim() || "…"}:${outPort || "…"}`;
 
   const pickKind = (k: Tunnel["kind"]) => {
     if (k === kind) return;
@@ -425,7 +434,7 @@ function TunnelDialog({ tunnel, onClose, onSaved }: { tunnel: Tunnel | null; onC
       state: "off",
     };
     update((w) => ({ ...w, tunnels: tunnel ? w.tunnels.map((t) => (t.id === tunnel.id ? saved : t)) : [...w.tunnels, saved] }));
-    toast({ text: tunnel ? "Сохранено" : `«${saved.name}» создан`, tone: "success" });
+    toast({ text: tunnel ? tx.tunnels.dialog.saved : tx.tunnels.dialog.created(saved.name), tone: "success" });
     onSaved(saved, wasOn);
     onClose();
   };
@@ -438,7 +447,7 @@ function TunnelDialog({ tunnel, onClose, onSaved }: { tunnel: Tunnel | null; onC
       value={value}
       inputMode="numeric"
       placeholder={placeholder}
-      aria-label="Порт"
+      aria-label={tx.tunnels.dialog.port}
       onChange={(e) => {
         onEdit?.();
         set(onlyDigits(e.target.value));
@@ -446,7 +455,7 @@ function TunnelDialog({ tunnel, onClose, onSaved }: { tunnel: Tunnel | null; onC
     />
   );
 
-  const here = { icon: Laptop, title: "Этот компьютер" };
+  const here = { icon: Laptop, title: tx.tunnels.route.thisComputer };
   const server = { icon: Server, title: viaLabel };
 
   const entry =
@@ -458,14 +467,14 @@ function TunnelDialog({ tunnel, onClose, onSaved }: { tunnel: Tunnel | null; onC
 
   return (
     <Modal
-      title={tunnel ? "Туннель" : "Новый туннель"}
+      title={tunnel ? tx.tunnels.dialog.title : tx.tunnels.dialog.newTitle}
       width={680}
       onClose={onClose}
       onSubmit={submit}
       footer={
         <>
-          <Button type="button" variant="ghost" onClick={onClose}>Отмена</Button>
-          <Button type="submit" variant="primary">{tunnel ? "Сохранить" : "Создать"}</Button>
+          <Button type="button" variant="ghost" onClick={onClose}>{tx.common.cancel}</Button>
+          <Button type="submit" variant="primary">{tunnel ? tx.common.save : tx.common.create}</Button>
         </>
       }
     >
@@ -473,12 +482,12 @@ function TunnelDialog({ tunnel, onClose, onSaved }: { tunnel: Tunnel | null; onC
         {kinds.map((k) => (
           <button type="button" role="radio" aria-checked={kind === k.value} key={k.value} className={`kind-card ${kind === k.value ? "on" : ""}`} onClick={() => pickKind(k.value)}>
             <k.icon size={16} />
-            <span className="kind-title">{k.title}</span>
+            <span className="kind-title">{tx.tunnels.kinds[k.value]}</span>
           </button>
         ))}
       </div>
 
-      <Field label="Сервер">
+      <Field label={tx.tunnels.dialog.server}>
         <HostSelect hosts={hosts} value={via} onChange={setVia} />
       </Field>
 
@@ -498,7 +507,7 @@ function TunnelDialog({ tunnel, onClose, onSaved }: { tunnel: Tunnel | null; onC
           <span className="endpoint-where"><exitWhere.icon size={14} /> {exitWhere.title}</span>
           <div className="endpoint-addr">
             {kind === "dynamic" ? (
-              <span className="endpoint-fixed muted">любой адрес : любой порт</span>
+              <span className="endpoint-fixed muted">{tx.tunnels.dialog.anyTarget}</span>
             ) : (
               <>
                 <input
@@ -506,7 +515,7 @@ function TunnelDialog({ tunnel, onClose, onSaved }: { tunnel: Tunnel | null; onC
                   value={outHost}
                   onChange={(e) => setOutHost(e.target.value)}
                   placeholder="localhost"
-                  aria-label="Адрес"
+                  aria-label={tx.tunnels.dialog.address}
                   spellCheck={false}
                 />
                 <span className="colon">:</span>
@@ -517,7 +526,7 @@ function TunnelDialog({ tunnel, onClose, onSaved }: { tunnel: Tunnel | null; onC
         </div>
       </div>
 
-      <Field label="Название">
+      <Field label={tx.tunnels.dialog.name}>
         <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder={autoName} />
       </Field>
     </Modal>
@@ -526,12 +535,13 @@ function TunnelDialog({ tunnel, onClose, onSaved }: { tunnel: Tunnel | null; onC
 
 
 function HostSelect({ hosts, value, onChange }: { hosts: Host[]; value: string; onChange: (id: string) => void }) {
+  const tx = useT();
   return (
     <select className="input" value={value} onChange={(e) => onChange(e.target.value)}>
       {hosts.map((h) => (
         <option key={h.id} value={h.id}>
           {h.label}
-          {h.online === false ? " (недоступен)" : ""}
+          {h.online === false ? ` (${tx.tunnels.dialog.unreachable})` : ""}
         </option>
       ))}
     </select>

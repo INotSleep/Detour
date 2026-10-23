@@ -3,26 +3,7 @@ import { api, errorText } from "../lib/api";
 import { formatAgo, useStore } from "../lib/store";
 import type { Coll, Conflict, Vault, Workspace } from "../lib/types";
 import { Button, Modal } from "./ui";
-
-const fieldLabel: Record<string, string> = {
-  label: "Название",
-  address: "Адрес",
-  port: "Порт",
-  user: "Пользователь",
-  group: "Группа",
-  tags: "Теги",
-  auth: "Вход",
-  password: "Пароль",
-  name: "Название",
-  command: "Команда",
-  bindPort: "Порт",
-  target: "Назначение",
-  viaHostId: "Через хост",
-  kind: "Тип",
-  passphrase: "Пароль ключа",
-};
-
-const collTitle: Record<Coll, string> = { host: "Хост", key: "Ключ", snippet: "Сниппет", tunnel: "Туннель" };
+import { tr, useT } from "../i18n";
 
 function recordName(ws: Workspace, coll: Coll, id: string) {
   const list = coll === "host" ? ws.hosts : coll === "key" ? ws.keys : coll === "snippet" ? ws.snippets : ws.tunnels;
@@ -31,15 +12,18 @@ function recordName(ws: Workspace, coll: Coll, id: string) {
 }
 
 function show(v: unknown): string {
-  if (Array.isArray(v)) return v.join(", ") || "пусто";
+  const empty = tr().teams.conflicts.empty;
+  if (Array.isArray(v)) return v.join(", ") || empty;
   if (v && typeof v === "object") return "type" in v ? String((v as { type: string }).type) : JSON.stringify(v);
-  if (v === null || v === undefined || v === "") return "пусто";
+  if (v === null || v === undefined || v === "") return empty;
   return String(v);
 }
 
 type Group = { coll: Coll; record: string; fields: Extract<Conflict, { kind: "field" }>[]; deleted?: Extract<Conflict, { kind: "deleted" }> };
 
 export function ConflictDialog({ vault, onClose }: { vault: Vault; onClose: () => void }) {
+  const t = useT();
+  const fieldLabel: Record<string, string> = t.teams.conflicts.field;
   const { ws, update, toast, applyTeamView } = useStore();
   const you = ws.members.find((m) => m.vaultId === vault.id && m.isYou)?.id;
 
@@ -58,7 +42,7 @@ export function ConflictDialog({ vault, onClose }: { vault: Vault; onClose: () =
   const [busy, setBusy] = useState<string | null>(null);
 
   const finish = () => {
-    toast({ text: "Конфликт решён", tone: "success" });
+    toast({ text: t.teams.conflicts.resolved, tone: "success" });
   };
 
   const applyFields = async (g: Group) => {
@@ -103,15 +87,15 @@ export function ConflictDialog({ vault, onClose }: { vault: Vault; onClose: () =
   }
 
   return (
-    <Modal title={`Конфликт · ${vault.name}`} width={620} onClose={onClose}>
+    <Modal title={t.teams.conflicts.title(vault.name)} width={620} onClose={onClose}>
       {groups.map((g) => (
         <section className="conflict-item" key={`${g.coll}/${g.record}`}>
           <div className="conflict-head">
             <div>
-              <div className="strong">{collTitle[g.coll]} «{recordName(ws, g.coll, g.record)}»</div>
+              <div className="strong">{t.teams.conflicts.record(t.teams.coll[g.coll], recordName(ws, g.coll, g.record))}</div>
               {g.deleted && (
                 <div className="muted small">
-                  {g.deleted.by === you ? "Вы удалили" : `Удалён: ${g.deleted.byName}`}, но его изменили · {formatAgo(g.deleted.at)}
+                  {g.deleted.by === you ? t.teams.conflicts.deletedByYou : t.teams.conflicts.deletedBy(g.deleted.byName)} · {formatAgo(g.deleted.at)}
                 </div>
               )}
             </div>
@@ -128,7 +112,7 @@ export function ConflictDialog({ vault, onClose }: { vault: Vault; onClose: () =
                       {f.values.map((v, i) => (
                         <button key={i} type="button" role="radio" aria-checked={picks[key] === i} className={`choice ${picks[key] === i ? "on" : ""}`} onClick={() => setPicks((p) => ({ ...p, [key]: i }))}>
                           <span className="choice-value mono">{show(v.value)}</span>
-                          <span className="choice-who">{v.author === you ? "Вы" : v.authorName} · {formatAgo(v.at)}</span>
+                          <span className="choice-who">{v.author === you ? t.common.you : v.authorName} · {formatAgo(v.at)}</span>
                         </button>
                       ))}
                     </div>
@@ -141,11 +125,11 @@ export function ConflictDialog({ vault, onClose }: { vault: Vault; onClose: () =
           <div className="conflict-actions">
             {g.deleted ? (
               <>
-                <Button variant="ghost" className="danger-text" loading={busy === g.record} onClick={() => resolveDeleted(g, false)}>Удалить</Button>
-                <Button variant="primary" loading={busy === g.record} onClick={() => resolveDeleted(g, true)}>Оставить</Button>
+                <Button variant="ghost" className="danger-text" loading={busy === g.record} onClick={() => resolveDeleted(g, false)}>{t.common.delete}</Button>
+                <Button variant="primary" loading={busy === g.record} onClick={() => resolveDeleted(g, true)}>{t.teams.conflicts.keep}</Button>
               </>
             ) : (
-              <Button variant="primary" loading={busy === g.record} onClick={() => applyFields(g)}>Применить</Button>
+              <Button variant="primary" loading={busy === g.record} onClick={() => applyFields(g)}>{t.teams.conflicts.apply}</Button>
             )}
           </div>
         </section>

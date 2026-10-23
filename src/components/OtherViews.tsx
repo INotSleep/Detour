@@ -1,17 +1,20 @@
 import { useState } from "react";
 import { Code, Download, Ellipsis, Lock, Pencil, Play, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { locale, useT } from "../i18n";
 import { api, errorText, isCoreError } from "../lib/api";
 import { uid, useStore } from "../lib/store";
 import { atLeast, writable } from "../lib/teams";
 import type { Snippet } from "../lib/types";
 import { Button, Empty, Field, IconButton, Menu, Modal, PageHeader, PasswordInput, Segmented, Switch } from "./ui";
 import { SyncSettings } from "./SyncSettings";
-import { NO_RELEASES } from "../lib/updates";
+import { isNoReleases } from "../lib/updates";
 
 /* ---------- snippets ---------- */
 
 export function SnippetsView() {
   const { ws, vault, update, toast, connect } = useStore();
+  const all = useT();
+  const t = all.settings.snippets;
   const canCreate = writable(vault);
   const [editing, setEditing] = useState<Snippet | "new" | null>(null);
   const snippets = ws.snippets.filter((s) => s.vaultId === vault.id);
@@ -19,16 +22,16 @@ export function SnippetsView() {
 
   const remove = (s: Snippet) => {
     update((w) => ({ ...w, snippets: w.snippets.filter((x) => x.id !== s.id) }));
-    toast({ text: `«${s.name}» удалён`, action: { label: "Вернуть", run: () => update((w) => ({ ...w, snippets: [...w.snippets, s] })) } });
+    toast({ text: t.removed(s.name), action: { label: t.restore, run: () => update((w) => ({ ...w, snippets: [...w.snippets, s] })) } });
   };
 
   return (
     <div className="page">
-      <PageHeader title="Сниппеты" count={snippets.length || undefined}>
-        {canCreate && <Button variant="primary" icon={Plus} onClick={() => setEditing("new")}>Создать сниппет</Button>}
+      <PageHeader title={t.title} count={snippets.length || undefined}>
+        {canCreate && <Button variant="primary" icon={Plus} onClick={() => setEditing("new")}>{t.create}</Button>}
       </PageHeader>
 
-      {snippets.length === 0 && <Empty icon={Code} title="Нет сниппетов" action={canCreate ? <Button variant="primary" icon={Plus} onClick={() => setEditing("new")}>Создать сниппет</Button> : undefined} />}
+      {snippets.length === 0 && <Empty icon={Code} title={t.empty} action={canCreate ? <Button variant="primary" icon={Plus} onClick={() => setEditing("new")}>{t.create}</Button> : undefined} />}
 
       <div className="rows">
         {snippets.map((s) => {
@@ -43,17 +46,17 @@ export function SnippetsView() {
             <div className="row-actions visible">
               {hosts.length > 0 && (
                 <Menu
-                  header="Запустить на"
-                  trigger={(toggle, open) => <Button size="sm" icon={Play} className={open ? "pressed" : ""} onClick={toggle}>Запустить</Button>}
-                  items={hosts.map((h) => ({ label: h.label, hint: h.online === false ? "недоступен" : undefined, onSelect: () => connect(h.id, s.command) }))}
+                  header={t.runOn}
+                  trigger={(toggle, open) => <Button size="sm" icon={Play} className={open ? "pressed" : ""} onClick={toggle}>{t.run}</Button>}
+                  items={hosts.map((h) => ({ label: h.label, hint: h.online === false ? t.unavailable : undefined, onSelect: () => connect(h.id, s.command) }))}
                 />
               )}
               {canEdit && (
                 <Menu
-                  trigger={(toggle, open) => <IconButton icon={Ellipsis} label="Ещё" className={open ? "pressed" : ""} onClick={toggle} />}
+                  trigger={(toggle, open) => <IconButton icon={Ellipsis} label={t.more} className={open ? "pressed" : ""} onClick={toggle} />}
                   items={[
-                    { label: "Изменить", icon: Pencil, onSelect: () => setEditing(s) },
-                    { label: "Удалить", icon: Trash2, danger: true, onSelect: () => remove(s) },
+                    { label: all.common.edit, icon: Pencil, onSelect: () => setEditing(s) },
+                    { label: all.common.delete, icon: Trash2, danger: true, onSelect: () => remove(s) },
                   ]}
                 />
               )}
@@ -70,6 +73,8 @@ export function SnippetsView() {
 
 function SnippetDialog({ snippet, onClose }: { snippet: Snippet | null; onClose: () => void }) {
   const { vault, update, toast } = useStore();
+  const all = useT();
+  const t = all.settings.snippets;
   const [name, setName] = useState(snippet?.name ?? "");
   const [command, setCommand] = useState(snippet?.command ?? "");
   const valid = name.trim() && command.trim();
@@ -78,31 +83,31 @@ function SnippetDialog({ snippet, onClose }: { snippet: Snippet | null; onClose:
     if (!valid) return;
     if (snippet) {
       update((w) => ({ ...w, snippets: w.snippets.map((s) => (s.id === snippet.id ? { ...s, name: name.trim(), command: command.trim() } : s)) }));
-      toast({ text: "Сохранено", tone: "success" });
+      toast({ text: t.saved, tone: "success" });
     } else {
       update((w) => ({ ...w, snippets: [...w.snippets, { id: uid("s"), vaultId: vault.id, name: name.trim(), command: command.trim() }] }));
-      toast({ text: `«${name.trim()}» создан`, tone: "success" });
+      toast({ text: t.created(name.trim()), tone: "success" });
     }
     onClose();
   };
 
   return (
     <Modal
-      title={snippet ? "Сниппет" : "Новый сниппет"}
+      title={snippet ? t.dialogTitle : t.newTitle}
       width={520}
       onClose={onClose}
       onSubmit={submit}
       footer={
         <>
-          <Button type="button" variant="ghost" onClick={onClose}>Отмена</Button>
-          <Button type="submit" variant="primary" disabled={!valid}>{snippet ? "Сохранить" : "Создать"}</Button>
+          <Button type="button" variant="ghost" onClick={onClose}>{all.common.cancel}</Button>
+          <Button type="submit" variant="primary" disabled={!valid}>{snippet ? all.common.save : all.common.create}</Button>
         </>
       }
     >
-      <Field label="Название">
-        <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Перезапуск nginx" />
+      <Field label={t.name}>
+        <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder={t.namePlaceholder} />
       </Field>
-      <Field label="Команда">
+      <Field label={t.command}>
         <textarea
           className="input mono textarea"
           rows={3}
@@ -121,36 +126,41 @@ function SnippetDialog({ snippet, onClose }: { snippet: Snippet | null; onClose:
 
 export function SettingsView() {
   const { settings, setSettings, coreInfo, lock, update_: update, checkUpdate, installUpdate } = useStore();
+  const t = useT().settings;
   const [changingMaster, setChangingMaster] = useState(false);
   return (
     <div className="page narrow">
-      <PageHeader title="Настройки" />
+      <PageHeader title={t.title} />
 
       <section className="settings-group">
-        <h3 className="section-title">Внешний вид</h3>
+        <h3 className="section-title">{t.appearance}</h3>
         <div className="setting">
-          <span>Тема</span>
-          <Segmented value={settings.theme} onChange={(theme) => setSettings({ theme })} options={[{ value: "system", label: "Как в системе" }, { value: "dark", label: "Тёмная" }, { value: "light", label: "Светлая" }]} />
+          <span>{t.theme}</span>
+          <Segmented value={settings.theme} onChange={(theme) => setSettings({ theme })} options={[{ value: "system", label: t.themes.system }, { value: "dark", label: t.themes.dark }, { value: "light", label: t.themes.light }]} />
+        </div>
+        <div className="setting">
+          <span>{t.language}</span>
+          <Segmented value={settings.language} onChange={(language) => setSettings({ language })} options={[{ value: "system", label: t.languages.system }, { value: "en", label: t.languages.en }, { value: "ru", label: t.languages.ru }]} />
         </div>
       </section>
 
       <section className="settings-group">
-        <h3 className="section-title">Терминал</h3>
+        <h3 className="section-title">{t.terminal}</h3>
         <div className="setting">
-          <span>Размер шрифта</span>
+          <span>{t.fontSize}</span>
           <select className="input input-sm" value={settings.fontSize} onChange={(e) => setSettings({ fontSize: Number(e.target.value) })}>
             {[11, 12, 13, 14, 15, 16, 18].map((n) => <option key={n} value={n}>{n}</option>)}
           </select>
         </div>
         <div className="setting">
-          <span>История прокрутки</span>
+          <span>{t.scrollback}</span>
           <select className="input input-sm" value={settings.scrollback} onChange={(e) => setSettings({ scrollback: Number(e.target.value) })}>
-            {[1000, 5000, 10000, 50000].map((n) => <option key={n} value={n}>{n.toLocaleString("ru-RU")} строк</option>)}
+            {[1000, 5000, 10000, 50000].map((n) => <option key={n} value={n}>{t.lines(n, n.toLocaleString(locale()))}</option>)}
           </select>
         </div>
         <div className="setting">
-          <span>Копирование и вставка</span>
-          <Segmented value={settings.clipboard} onChange={(clipboard) => setSettings({ clipboard })} options={[{ value: "ssh", label: "ПКМ, Ctrl+C и Ctrl+V" }, { value: "termius", label: "Ctrl+Shift+C и Ctrl+Shift+V" }]} />
+          <span>{t.clipboard}</span>
+          <Segmented value={settings.clipboard} onChange={(clipboard) => setSettings({ clipboard })} options={[{ value: "ssh", label: t.clipboardSsh }, { value: "termius", label: t.clipboardTermius }]} />
         </div>
       </section>
 
@@ -158,57 +168,57 @@ export function SettingsView() {
 
       {api.real && (
       <section className="settings-group">
-        <h3 className="section-title">Безопасность</h3>
+        <h3 className="section-title">{t.security}</h3>
         <div className="setting">
-          <span>Мастер-пароль</span>
-          <Button size="sm" onClick={() => setChangingMaster(true)}>Сменить</Button>
+          <span>{t.masterPassword}</span>
+          <Button size="sm" onClick={() => setChangingMaster(true)}>{t.change}</Button>
         </div>
         <div className="setting">
-          <span>Блокировать при бездействии</span>
+          <span>{t.autoLock}</span>
           <select className="input input-sm" value={settings.autoLockMinutes} onChange={(e) => setSettings({ autoLockMinutes: Number(e.target.value) })}>
-            <option value={5}>5 минут</option>
-            <option value={15}>15 минут</option>
-            <option value={60}>1 час</option>
-            <option value={0}>Никогда</option>
+            <option value={5}>{t.minutes(5)}</option>
+            <option value={15}>{t.minutes(15)}</option>
+            <option value={60}>{t.hour}</option>
+            <option value={0}>{t.never}</option>
           </select>
         </div>
         <div className="setting">
-          <span>Заблокировать сейчас</span>
-          <Button size="sm" icon={Lock} onClick={() => void lock()}>Заблокировать</Button>
+          <span>{t.lockNow}</span>
+          <Button size="sm" icon={Lock} onClick={() => void lock()}>{t.lock}</Button>
         </div>
       </section>
       )}
 
       <section className="settings-group">
-        <h3 className="section-title">О программе</h3>
+        <h3 className="section-title">{t.about}</h3>
         <div className="setting">
-          <span>Версия</span>
+          <span>{t.version}</span>
           <span className="muted mono">{coreInfo ? `${coreInfo.coreVersion} · ${coreInfo.os}` : "0.0.1"}</span>
         </div>
         <div className="setting">
-          <span>Лицензия</span>
+          <span>{t.license}</span>
           <span className="muted mono selectable">AGPL-3.0 · github.com/INotSleep/Detour</span>
         </div>
         {api.real && (
           <>
             <div className="setting">
-              <span>Обновления</span>
+              <span>{t.updates}</span>
               <div className="update-row">
-                {update.kind === "latest" && <span className="muted small">Последняя версия</span>}
-                {update.kind === "error" && <span className={`small ${update.text === NO_RELEASES ? "muted" : "err-text"}`}>{update.text}</span>}
-                {update.kind === "installing" && <span className="muted small">{update.share === null ? "Загрузка" : `Загрузка ${Math.round(update.share * 100)}%`}</span>}
+                {update.kind === "latest" && <span className="muted small">{t.latest}</span>}
+                {update.kind === "error" && <span className={`small ${isNoReleases(update.text) ? "muted" : "err-text"}`}>{update.text}</span>}
+                {update.kind === "installing" && <span className="muted small">{update.share === null ? t.downloading : t.downloadingShare(Math.round(update.share * 100))}</span>}
                 {update.kind === "available" || update.kind === "installing" ? (
                   <Button size="sm" variant="primary" icon={Download} loading={update.kind === "installing"} onClick={() => void installUpdate()}>
-                    Установить {update.info.version}
+                    {t.install(update.info.version)}
                   </Button>
                 ) : (
-                  <Button size="sm" icon={RefreshCw} loading={update.kind === "checking"} onClick={() => void checkUpdate()}>Проверить</Button>
+                  <Button size="sm" icon={RefreshCw} loading={update.kind === "checking"} onClick={() => void checkUpdate()}>{t.check}</Button>
                 )}
               </div>
             </div>
             <div className="setting">
-              <span>Проверять при запуске</span>
-              <Switch label="Проверять при запуске" checked={settings.autoUpdate} onChange={(autoUpdate) => setSettings({ autoUpdate })} />
+              <span>{t.checkAtStart}</span>
+              <Switch label={t.checkAtStart} checked={settings.autoUpdate} onChange={(autoUpdate) => setSettings({ autoUpdate })} />
             </div>
           </>
         )}
@@ -220,6 +230,8 @@ export function SettingsView() {
 
 function MasterPasswordDialog({ onClose }: { onClose: () => void }) {
   const { toast } = useStore();
+  const all = useT();
+  const t = all.settings.master;
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [repeat, setRepeat] = useState("");
@@ -228,16 +240,16 @@ function MasterPasswordDialog({ onClose }: { onClose: () => void }) {
 
   const submit = async () => {
     if (busy) return;
-    if (next.length < 8) return setError({ field: "next", text: "Минимум 8 символов" });
-    if (next !== repeat) return setError({ field: "repeat", text: "Пароли не совпадают" });
+    if (next.length < 8) return setError({ field: "next", text: t.minLength(8) });
+    if (next !== repeat) return setError({ field: "repeat", text: t.mismatch });
     setBusy(true);
     try {
       await api.vaultChangeMasterPassword(current, next);
-      toast({ text: "Мастер-пароль изменён", tone: "success" });
+      toast({ text: t.changed, tone: "success" });
       onClose();
     } catch (e) {
       setBusy(false);
-      setError(isCoreError(e) && e.kind === "wrongMasterPassword" ? { field: "current", text: "Неверный мастер-пароль" } : { field: "next", text: errorText(e) });
+      setError(isCoreError(e) && e.kind === "wrongMasterPassword" ? { field: "current", text: errorText(e) } : { field: "next", text: errorText(e) });
     }
   };
 
@@ -249,24 +261,24 @@ function MasterPasswordDialog({ onClose }: { onClose: () => void }) {
 
   return (
     <Modal
-      title="Смена мастер-пароля"
+      title={t.title}
       width={400}
       onClose={onClose}
       onSubmit={submit}
       footer={
         <>
-          <Button type="button" variant="ghost" onClick={onClose}>Отмена</Button>
-          <Button type="submit" variant="primary" loading={busy} disabled={!current || !next}>Сменить</Button>
+          <Button type="button" variant="ghost" onClick={onClose}>{all.common.cancel}</Button>
+          <Button type="submit" variant="primary" loading={busy} disabled={!current || !next}>{all.settings.change}</Button>
         </>
       }
     >
-      <Field label="Текущий" error={err("current")}>
+      <Field label={t.current} error={err("current")}>
         <PasswordInput value={current} onChange={edit(setCurrent)} invalid={!!err("current")} autoFocus />
       </Field>
-      <Field label="Новый" error={err("next")}>
+      <Field label={t.next} error={err("next")}>
         <PasswordInput value={next} onChange={edit(setNext)} invalid={!!err("next")} />
       </Field>
-      <Field label="Ещё раз" error={err("repeat")}>
+      <Field label={t.repeat} error={err("repeat")}>
         <PasswordInput value={repeat} onChange={edit(setRepeat)} invalid={!!err("repeat")} />
       </Field>
     </Modal>

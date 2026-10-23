@@ -1,5 +1,6 @@
 // Mock key material. Real generation, parsing and encryption move to detour-core (ssh-key crate).
 
+import { tr } from "../i18n";
 import type { SshKey } from "./types";
 
 const b64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -23,11 +24,11 @@ export type ParsedKey = { ok: true; algorithm: "ed25519" | "rsa" } | { ok: false
 /** Recognises the private key formats ssh-keygen and PuTTYgen (OpenSSH export) produce. */
 export function parsePrivateKey(text: string): ParsedKey {
   const t = text.trim();
-  if (!t) return { ok: false, error: "Вставьте ключ или выберите файл" };
-  if (/^(ssh-(ed25519|rsa)|ecdsa-sha2)/.test(t)) return { ok: false, error: "Это публичный ключ, нужен приватный" };
-  if (/PuTTY-User-Key-File/.test(t)) return { ok: false, error: "Формат PuTTY: экспортируйте ключ в OpenSSH" };
+  if (!t) return { ok: false, error: tr().common.errors.key.empty };
+  if (/^(ssh-(ed25519|rsa)|ecdsa-sha2)/.test(t)) return { ok: false, error: tr().common.errors.key.public };
+  if (/PuTTY-User-Key-File/.test(t)) return { ok: false, error: tr().common.errors.key.putty };
   const m = t.match(/-----BEGIN (OPENSSH|RSA|EC) PRIVATE KEY-----[\s\S]+-----END \1 PRIVATE KEY-----/);
-  if (!m) return { ok: false, error: "Не похоже на приватный ключ" };
+  if (!m) return { ok: false, error: tr().common.errors.key.notKey };
   return { ok: true, algorithm: m[1] === "RSA" ? "rsa" : "ed25519" };
 }
 

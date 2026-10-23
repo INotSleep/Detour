@@ -4,7 +4,7 @@ Open-source serverless SSH client (macOS, Windows, Linux) with E2E-encrypted Tea
 Stack: Tauri 2 + Rust (`crates/detour-core` — UI-agnostic core, `src-tauri` — thin shell) + React/TS + xterm.js.
 `detour-core` never depends on Tauri. The UI talks to the backend only through `src/lib/api.ts`.
 
-UI language: Russian for now. Discussions with the user are in Russian.
+UI languages: English and Russian. Every UI string lives in `src/i18n/<area>.ts` (`en` and `ru` of one shape, tsc checks both); components read it with `useT()`, other code with `tr()`. Never hard-code UI text or keep translated text at module scope. Discussions with the user are in Russian.
 
 ## UI/UX rules (mandatory)
 

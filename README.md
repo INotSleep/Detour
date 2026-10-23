@@ -63,7 +63,7 @@ The full design, including what cryptography can't protect against: [docs/teams.
 
 Installers for macOS, Windows and Linux are on the [Releases](https://github.com/INotSleep/Detour/releases/latest) page. Detour updates itself from there.
 
-The interface is in Russian for now.
+The interface is in English and Russian.
 
 ## Build from source
 

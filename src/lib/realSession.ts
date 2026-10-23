@@ -6,6 +6,7 @@ import type { Terminal } from "@xterm/xterm";
 import { api, errorText, isCoreError, trustMore, type SecretKind } from "./api";
 import type { SessionStatus } from "./fakeShell";
 import type { Host } from "./types";
+import { tr } from "../i18n";
 
 const C = { reset: "\x1b[0m", dim: "\x1b[2m", red: "\x1b[31m" };
 
@@ -39,7 +40,7 @@ export function runRealSession(term: Terminal, host: Host, opts: Options): () =>
   let commandSent = false;
 
   const fail = (message: string) => {
-    term.write(`${C.red}${message}${C.reset}\r\n${C.dim}Enter: повторить${C.reset}\r\n`);
+    term.write(`${C.red}${message}${C.reset}\r\n${C.dim}${tr().terminal.session.retry}${C.reset}\r\n`);
     mode = "failed";
     opts.onStatus("failed");
   };
@@ -68,7 +69,7 @@ export function runRealSession(term: Terminal, host: Host, opts: Options): () =>
               opts.onExit();
               return;
             }
-            term.write(`\r\n${C.dim}Соединение закрыто. Enter: переподключиться${C.reset}\r\n`);
+            term.write(`\r\n${C.dim}${tr().terminal.session.closed}${C.reset}\r\n`);
             mode = "failed";
             opts.onStatus("closed");
           },
@@ -102,14 +103,14 @@ export function runRealSession(term: Terminal, host: Host, opts: Options): () =>
       case "hostKeyUnknown": {
         const answer = await opts.askHostKey({ kind: "unknown", fingerprint: e.fingerprint, via: e.via });
         if (disposed) return;
-        if (answer !== "trust") return fail("Подключение отменено");
+        if (answer !== "trust") return fail(tr().terminal.session.cancelled);
         trust = trustMore(trust, e.fingerprint);
         return open();
       }
       case "hostKeyChanged": {
         const answer = await opts.askHostKey({ kind: "changed", expected: e.expected, actual: e.actual, via: e.via });
         if (disposed) return;
-        if (answer !== "replace") return fail("Подключение отменено: ключ хоста изменился");
+        if (answer !== "replace") return fail(tr().terminal.session.cancelledKeyChanged);
         await api.hostForgetKey(host.vaultId, e.via ?? host.id);
         // The user just saw the new key: trust it without asking again.
         trust = trustMore(trust, e.actual);
@@ -122,13 +123,13 @@ export function runRealSession(term: Terminal, host: Host, opts: Options): () =>
           attemptsLeft -= 1;
           secret = null;
           if (attemptsLeft > 0) {
-            term.write(e.secret === "password" ? "Permission denied, please try again.\r\n" : "Неверный пароль ключа.\r\n");
-            return askSecret(e.secret, secretPrompt || (e.secret === "password" ? `${host.user}@${host.address}'s password: ` : "Пароль ключа: "));
+            term.write(e.secret === "password" ? "Permission denied, please try again.\r\n" : `${tr().common.errors.wrongPassphrase}.\r\n`);
+            return askSecret(e.secret, secretPrompt || (e.secret === "password" ? `${host.user}@${host.address}'s password: ` : tr().terminal.session.passphrasePrompt));
           }
           attemptsLeft = MAX_SECRET_ATTEMPTS;
           return fail(`${host.user}@${host.address}: Permission denied`);
         }
-        return fail("Сервер не принял ключ");
+        return fail(tr().common.errors.keyRejected);
       default:
         return fail(errorText(e));
     }
@@ -170,7 +171,7 @@ export function runRealSession(term: Terminal, host: Host, opts: Options): () =>
         else if (ch === "\x03") {
           term.write("^C\r\n");
           secretBuf = "";
-          return fail("Подключение отменено");
+          return fail(tr().terminal.session.cancelled);
         } else if (ch >= " ") secretBuf += ch;
       }
       return;

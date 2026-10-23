@@ -1,10 +1,11 @@
 import { Fragment, useEffect, useState } from "react";
 import { ChevronRight, Copy, Ellipsis, Fingerprint, IdCard, LogIn, LogOut, Plus, RefreshCw, ShieldAlert, ShieldQuestion, TriangleAlert, UserMinus, UserPlus, Users, UserX } from "lucide-react";
 import { api, errorText, isCoreError, type CoreError, type PendingTeam } from "../lib/api";
-import { copyText, formatAgo, plural, sleep, useStore } from "../lib/store";
+import { copyText, formatAgo, sleep, useStore } from "../lib/store";
 import { atLeast, canManage, removeVault } from "../lib/teams";
 import type { ActivityItem, Coll, Level, Member, Problem, Role, Vault } from "../lib/types";
-import { Avatar, SyncIcon, VaultAvatar, roleLabel, syncStatusText, syncTarget } from "./common";
+import { tr, useT, type Dict } from "../i18n";
+import { Avatar, SyncIcon, VaultAvatar, syncTarget } from "./common";
 import { Button, ConfirmDialog, Empty, Field, IconButton, Menu, Modal, PageHeader, PasswordInput, Segmented } from "./ui";
 import { AddMemberDialog, CreateTeamDialog, JoinTeamDialog, MyIdDialog, useMyId } from "./TeamDialogs";
 
@@ -13,48 +14,44 @@ export function TeamsView() {
   return vault.kind === "team" ? <TeamPage vault={vault} /> : <TeamsOverview />;
 }
 
-const collName: Record<Coll, string> = { host: "Хост", key: "Ключ", snippet: "Сниппет", tunnel: "Туннель" };
-
-export const levelLabel: Record<Level, string> = { none: "Нет", view: "Видит", secret: "Секрет", edit: "Изменяет" };
-
 /** Levels a record of this kind can have. */
 const levelsFor = (coll: Coll): Level[] => (coll === "host" || coll === "key" ? ["none", "view", "secret", "edit"] : ["none", "view", "edit"]);
 
-function activityText(a: ActivityItem): string {
+function activityText(t: Dict, a: ActivityItem): string {
+  const x = t.teams.activity;
   switch (a.kind) {
-    case "created": return "Команда создана";
-    case "renamed": return `Команда переименована в «${a.name}»`;
-    case "memberAdded": return `${a.member} добавлен в команду`;
-    case "memberChanged": return `${a.member}: роль изменена`;
-    case "memberRemoved": return `${a.member} удалён из команды`;
-    case "accessChanged": return `${a.member}: ${levelLabel[a.level].toLowerCase()} · «${a.name}»`;
-    case "secretChanged": return `${a.coll === "key" ? "Ключ" : "Пароль"} «${a.name}» изменён`;
-    default: {
-      const verb = a.kind === "added" ? "добавлен" : a.kind === "changed" ? "изменён" : "удалён";
-      return `${collName[a.coll]} «${a.name}» ${verb}`;
-    }
+    case "created": return x.created;
+    case "renamed": return x.renamed(a.name);
+    case "memberAdded": return x.memberAdded(a.member);
+    case "memberChanged": return x.memberChanged(a.member);
+    case "memberRemoved": return x.memberRemoved(a.member);
+    case "accessChanged": return x.accessChanged(a.member, t.teams.level[a.level].toLowerCase(), a.name);
+    case "secretChanged": return a.coll === "key" ? x.keyChanged(a.name) : x.passwordChanged(a.name);
+    default: return x[a.kind](t.teams.coll[a.coll], a.name);
   }
 }
 
 /** Why a team's repository could not be reached, in words. */
 export function remoteErrorText(e: CoreError): string {
+  const t = tr().teams.remote;
   switch (e.kind) {
-    case "hostKeyChanged": return "Ключ сервера репозитория изменился";
-    case "unreachable": case "connect": case "io": return "Нет связи с репозиторием";
-    case "authFailed": return "Репозиторий не принял ключ";
-    case "needSecret": return "Ключ для репозитория защищён паролем: сохраните пароль ключа";
+    case "hostKeyChanged": return t.hostKeyChanged;
+    case "unreachable": case "connect": case "io": return t.unreachable;
+    case "authFailed": return t.authFailed;
+    case "needSecret": return t.needSecret;
     default: return errorText(e);
   }
 }
 
 export function problemText(p: Problem): string {
-  const who = p.kind === "unknownFile" ? "" : p.authorName || `устройство ${p.device.slice(0, 8)}`;
+  const t = tr().teams.problem;
+  const who = p.kind === "unknownFile" ? "" : p.authorName || t.device(p.device.slice(0, 8));
   switch (p.kind) {
-    case "rejected": return `Отклонено изменение: ${who}`;
-    case "missing": return `Хранилище не показывает изменение: ${who}`;
-    case "forked": return `Две версии одного изменения: ${who}`;
-    case "rolledBack": return `Хранилище откатило изменения: ${who}`;
-    case "unknownFile": return `Посторонний файл: ${p.path}`;
+    case "rejected": return t.rejected(who);
+    case "missing": return t.missing(who);
+    case "forked": return t.forked(who);
+    case "rolledBack": return t.rolledBack(who);
+    case "unknownFile": return t.unknownFile(p.path);
   }
 }
 
@@ -68,6 +65,7 @@ const memberRank = (m: Member) => (m.recovery ? 9 : m.isYou ? 0 : { owner: 1, ad
 const byRank = (a: Member, b: Member) => memberRank(a) - memberRank(b) || a.name.localeCompare(b.name);
 
 function TeamPage({ vault }: { vault: Vault }) {
+  const t = useT();
   const { ws, update, toast, applyTeamView, resolveConflicts, setVault, sync: personalSync } = useStore();
   // With sync on, leaving takes the team off all of this person's devices.
   const everywhere = !!personalSync?.enabled;
@@ -99,11 +97,11 @@ function TeamPage({ vault }: { vault: Vault }) {
         const failed = view.remote?.error;
         if (failed) {
           if (failed.kind !== "hostKeyUnknown") toast({ text: remoteErrorText(failed), tone: "error" });
-        } else toast(view.conflicts.length ? { text: "Есть конфликт", tone: "error", action: { label: "Решить", run: () => resolveConflicts(vault.id) } } : { text: "Синхронизировано", tone: "success" });
+        } else toast(view.conflicts.length ? { text: t.teams.page.conflictFound, tone: "error", action: { label: t.teams.page.resolve, run: () => resolveConflicts(vault.id) } } : { text: t.common.syncStatus.synced, tone: "success" });
       } else {
         await sleep(900);
         update((w) => ({ ...w, vaults: w.vaults.map((v) => (v.id === vault.id ? { ...v, lastSync: Date.now() } : v)) }));
-        toast({ text: "Синхронизировано", tone: "success" });
+        toast({ text: t.common.syncStatus.synced, tone: "success" });
       }
     } catch (e) {
       toast({ text: errorText(e), tone: "error" });
@@ -116,7 +114,7 @@ function TeamPage({ vault }: { vault: Vault }) {
     try {
       const view = await api.teamReplaceServerKey(vault.id, fingerprint);
       applyTeamView(view);
-      toast(view.remote?.error ? { text: remoteErrorText(view.remote.error), tone: "error" } : { text: "Ключ сервера заменён", tone: "success" });
+      toast(view.remote?.error ? { text: remoteErrorText(view.remote.error), tone: "error" } : { text: t.teams.page.serverKeyReplaced, tone: "success" });
     } catch (e) {
       toast({ text: errorText(e), tone: "error" });
     }
@@ -127,7 +125,7 @@ function TeamPage({ vault }: { vault: Vault }) {
     try {
       if (api.real) applyTeamView(await api.teamMemberUpdate(vault.id, m.id, role));
       else update((w) => ({ ...w, members: w.members.map((x) => (x.id === m.id && x.vaultId === vault.id ? { ...x, role } : x)) }));
-      toast({ text: `${m.name}: ${roleLabel[role].toLowerCase()}`, tone: "success" });
+      toast({ text: t.teams.members.roleChanged(m.name, t.common.role[role].toLowerCase()), tone: "success" });
     } catch (e) {
       toast({ text: errorText(e), tone: "error" });
     }
@@ -136,8 +134,8 @@ function TeamPage({ vault }: { vault: Vault }) {
   const removeMember = async (m: Member) => {
     try {
       if (api.real) applyTeamView(await api.teamMemberRemove(vault.id, m.id));
-      else update((w) => ({ ...w, members: w.members.filter((x) => !(x.id === m.id && x.vaultId === vault.id)), activity: [...w.activity, { vaultId: vault.id, authorName: "Вы", isYou: true, at: Date.now(), kind: "memberRemoved", member: m.name }] }));
-      toast({ text: `${m.name} удалён из команды`, tone: "success" });
+      else update((w) => ({ ...w, members: w.members.filter((x) => !(x.id === m.id && x.vaultId === vault.id)), activity: [...w.activity, { vaultId: vault.id, authorName: t.common.you, isYou: true, at: Date.now(), kind: "memberRemoved", member: m.name }] }));
+      toast({ text: t.teams.activity.memberRemoved(m.name), tone: "success" });
     } catch (e) {
       toast({ text: errorText(e), tone: "error" });
     }
@@ -148,24 +146,24 @@ function TeamPage({ vault }: { vault: Vault }) {
       if (api.real) await api.teamLeave(vault.id);
       setVault("personal");
       update((w) => removeVault(w, vault.id));
-      toast({ text: `«${vault.name}» убрана ${everywhere ? "со всех устройств" : "с этого устройства"}`, tone: "success" });
+      toast({ text: everywhere ? t.teams.leave.doneEverywhere(vault.name) : t.teams.leave.doneHere(vault.name), tone: "success" });
     } catch (e) {
       toast({ text: errorText(e), tone: "error" });
     }
   };
 
-  const copyMyId = async () => me && (await copyText(me.detourId)) && toast({ text: "Detour ID скопирован", tone: "success" });
+  const copyMyId = async () => me && (await copyText(me.detourId)) && toast({ text: t.teams.page.idCopied, tone: "success" });
 
   return (
     <div className={`page ${tab === "access" ? "wide" : ""}`}>
       <PageHeader title={vault.name}>
-        <Button icon={RefreshCw} loading={syncing} onClick={() => sync()}>{syncing ? "Синхронизация" : "Синхронизировать"}</Button>
-        {manage && <Button variant="primary" icon={UserPlus} onClick={() => setAdding(true)}>Добавить участника</Button>}
+        <Button icon={RefreshCw} loading={syncing} onClick={() => sync()}>{syncing ? t.teams.page.syncing : t.teams.page.sync}</Button>
+        {manage && <Button variant="primary" icon={UserPlus} onClick={() => setAdding(true)}>{t.teams.page.addMember}</Button>}
         <Menu
-          trigger={(toggle, open) => <IconButton icon={Ellipsis} label="Ещё" className={open ? "pressed" : ""} onClick={toggle} />}
+          trigger={(toggle, open) => <IconButton icon={Ellipsis} label={t.teams.more} className={open ? "pressed" : ""} onClick={toggle} />}
           items={[
-            ...(vault.stateFingerprint ? [{ label: "Отпечаток состояния", icon: Fingerprint, onSelect: () => setShowFingerprint(true) }] : []),
-            { label: everywhere ? "Убрать со всех устройств" : "Убрать с этого устройства", icon: LogOut, danger: true, onSelect: () => setLeaving(true) },
+            ...(vault.stateFingerprint ? [{ label: t.teams.page.stateFingerprint, icon: Fingerprint, onSelect: () => setShowFingerprint(true) }] : []),
+            { label: everywhere ? t.teams.leave.everywhere : t.teams.leave.here, icon: LogOut, danger: true, onSelect: () => setLeaving(true) },
           ]}
         />
       </PageHeader>
@@ -176,28 +174,28 @@ function TeamPage({ vault }: { vault: Vault }) {
         <span className="sep" />
         {vault.syncStatus === "conflict" ? (
           <button className="chip warn chip-btn" onClick={() => resolveConflicts(vault.id)}>
-            <TriangleAlert size={12} /> Конфликт · решить
+            <TriangleAlert size={12} /> {t.teams.page.resolveConflict}
           </button>
         ) : vault.remoteError ? (
           <span className="vault-sync conflict">
             <span className="dot" />
-            Нет связи
+            {t.teams.page.noConnection}
           </span>
         ) : (
           <span className={`vault-sync ${vault.syncStatus}`}>
             <span className="dot" />
-            {syncStatusText[vault.syncStatus]}
+            {t.common.syncStatus[vault.syncStatus]}
           </span>
         )}
         {!offline && !vault.remoteError && vault.lastSync && <span className="muted">· {formatAgo(vault.lastSync)}</span>}
-        {vault.pending && <span className="chip">Не отправлено</span>}
+        {vault.pending && <span className="chip">{t.teams.page.notSent}</span>}
       </div>
 
       {newServerKey && (
         <div className="banner info">
           <ShieldQuestion size={16} />
-          <span className="grow">Новый ключ сервера репозитория: <span className="mono">{newServerKey}</span></span>
-          <Button size="sm" variant="primary" loading={syncing} onClick={() => sync(newServerKey)}>Доверять</Button>
+          <span className="grow">{t.teams.page.newServerKey} <span className="mono">{newServerKey}</span></span>
+          <Button size="sm" variant="primary" loading={syncing} onClick={() => sync(newServerKey)}>{t.teams.page.trust}</Button>
         </div>
       )}
 
@@ -205,11 +203,11 @@ function TeamPage({ vault }: { vault: Vault }) {
         <div className="banner warn">
           <ShieldAlert size={16} />
           <span className="grow">
-            Ключ сервера репозитория изменился
-            <span className="banner-sub mono">Был {vault.remoteError.expected}</span>
-            <span className="banner-sub mono">Сейчас {vault.remoteError.actual}</span>
+            {t.teams.page.serverKeyChanged}
+            <span className="banner-sub mono">{t.teams.page.keyWas} {vault.remoteError.expected}</span>
+            <span className="banner-sub mono">{t.teams.page.keyNow} {vault.remoteError.actual}</span>
           </span>
-          <Button size="sm" variant="ghost" className="danger-text" loading={syncing} onClick={() => replaceKey(vault.remoteError?.kind === "hostKeyChanged" ? vault.remoteError.actual : "")}>Заменить ключ</Button>
+          <Button size="sm" variant="ghost" className="danger-text" loading={syncing} onClick={() => replaceKey(vault.remoteError?.kind === "hostKeyChanged" ? vault.remoteError.actual : "")}>{t.teams.page.replaceKey}</Button>
         </div>
       )}
 
@@ -218,9 +216,9 @@ function TeamPage({ vault }: { vault: Vault }) {
           <TriangleAlert size={16} />
           <span className="grow">{remoteErrorText(vault.remoteError)}</span>
           {tokenRejected ? (
-            <Button size="sm" variant="primary" onClick={() => setTokenDialog(true)}>Новый токен</Button>
+            <Button size="sm" variant="primary" onClick={() => setTokenDialog(true)}>{t.teams.page.newToken}</Button>
           ) : (
-            <Button size="sm" loading={syncing} onClick={() => sync()}>Повторить</Button>
+            <Button size="sm" loading={syncing} onClick={() => sync()}>{t.common.retry}</Button>
           )}
         </div>
       )}
@@ -228,25 +226,25 @@ function TeamPage({ vault }: { vault: Vault }) {
       {offline && (
         <div className="banner warn">
           <TriangleAlert size={16} />
-          <span className="grow">Папка недоступна</span>
-          <Button size="sm" loading={syncing} onClick={() => sync()}>Повторить</Button>
+          <span className="grow">{t.teams.page.folderUnavailable}</span>
+          <Button size="sm" loading={syncing} onClick={() => sync()}>{t.common.retry}</Button>
         </div>
       )}
 
       {!offline && vault.removed && (
         <div className="banner warn">
           <UserX size={16} />
-          <span className="grow">Вас удалили из команды</span>
-          <Button size="sm" onClick={leave}>{everywhere ? "Убрать со всех устройств" : "Убрать с устройства"}</Button>
+          <span className="grow">{t.teams.page.youWereRemoved}</span>
+          <Button size="sm" onClick={leave}>{everywhere ? t.teams.leave.everywhere : t.teams.leave.hereShort}</Button>
         </div>
       )}
 
       {!offline && vault.joined === false && !vault.removed && (
         <div className="banner info">
           <IdCard size={16} />
-          <span className="grow">Вас ещё не добавили. Отправьте свой Detour ID админу команды.</span>
-          <Button size="sm" icon={Copy} onClick={copyMyId}>Копировать ID</Button>
-          <Button size="sm" variant="primary" loading={syncing} onClick={() => sync()}>Проверить</Button>
+          <span className="grow">{t.teams.page.notAddedYet}</span>
+          <Button size="sm" icon={Copy} onClick={copyMyId}>{t.teams.page.copyId}</Button>
+          <Button size="sm" variant="primary" loading={syncing} onClick={() => sync()}>{t.teams.page.check}</Button>
         </div>
       )}
 
@@ -254,9 +252,7 @@ function TeamPage({ vault }: { vault: Vault }) {
         <div className="banner warn problems">
           <button className="problems-head" onClick={() => setShowProblems((s) => !s)} aria-expanded={showProblems}>
             <ShieldAlert size={16} />
-            <span className="grow">
-              {problems.length} {plural(problems.length, "проблема", "проблемы", "проблем")} с хранилищем
-            </span>
+            <span className="grow">{t.teams.problem.banner(problems.length)}</span>
             <ChevronRight size={14} className={`chev ${showProblems ? "open" : ""}`} />
           </button>
           {showProblems && (
@@ -270,7 +266,7 @@ function TeamPage({ vault }: { vault: Vault }) {
       {vault.joined && !offline && (
         <>
           <div className="team-tabs">
-            <Segmented value={tab} onChange={setTab} options={[{ value: "members", label: "Участники" }, { value: "access", label: "Доступ" }]} />
+            <Segmented value={tab} onChange={setTab} options={[{ value: "members", label: t.teams.page.tabMembers }, { value: "access", label: t.teams.page.tabAccess }]} />
           </div>
 
           {tab === "access" ? (
@@ -280,9 +276,9 @@ function TeamPage({ vault }: { vault: Vault }) {
               <section>
                 <div className="member-head">
                   <h3 className="section-title">
-                    Участники <span className="count">{members.length}</span>
+                    {t.teams.members.title} <span className="count">{members.length}</span>
                   </h3>
-                  <span className="section-title">Роль</span>
+                  <span className="section-title">{t.teams.members.role}</span>
                   <span />
                 </div>
                 <div className="rows">
@@ -293,25 +289,25 @@ function TeamPage({ vault }: { vault: Vault }) {
                         <Avatar member={m} size={32} />
                         <div className="member-main">
                           <span className="member-name">
-                            {m.recovery ? "Ключ восстановления" : m.name}
-                            {m.isYou && <span className="chip">вы</span>}
+                            {m.recovery ? t.teams.members.recoveryKey : m.name}
+                            {m.isYou && <span className="chip">{t.common.you.toLowerCase()}</span>}
                           </span>
                           <span className="member-sub mono">{m.fingerprint}</span>
                         </div>
                         {editable ? (
                           <select className="input input-sm role-select" value={m.role} onChange={(e) => changeRole(m, e.target.value as Role)}>
-                            {vault.myRole === "owner" && <option value="owner">Владелец</option>}
-                            {vault.myRole === "owner" && <option value="admin">Админ</option>}
-                            <option value="member">Участник</option>
+                            {vault.myRole === "owner" && <option value="owner">{t.common.role.owner}</option>}
+                            {vault.myRole === "owner" && <option value="admin">{t.common.role.admin}</option>}
+                            <option value="member">{t.common.role.member}</option>
                           </select>
                         ) : (
-                          <span className="member-role">{roleLabel[m.role]}</span>
+                          <span className="member-role">{t.common.role[m.role]}</span>
                         )}
                         <div className="member-actions">
                           {editable && (
                             <Menu
-                              trigger={(toggle, open) => <IconButton icon={Ellipsis} label="Ещё" className={open ? "pressed" : ""} onClick={toggle} />}
-                              items={[{ label: "Удалить из команды", icon: UserMinus, danger: true, onSelect: () => setRemoving(m) }]}
+                              trigger={(toggle, open) => <IconButton icon={Ellipsis} label={t.teams.more} className={open ? "pressed" : ""} onClick={toggle} />}
+                              items={[{ label: t.teams.members.removeFromTeam, icon: UserMinus, danger: true, onSelect: () => setRemoving(m) }]}
                             />
                           )}
                         </div>
@@ -322,16 +318,16 @@ function TeamPage({ vault }: { vault: Vault }) {
               </section>
 
               <section>
-                <h3 className="section-title">Активность</h3>
+                <h3 className="section-title">{t.teams.activity.title}</h3>
                 {activity.length === 0 ? (
-                  <div className="muted small">Пока пусто</div>
+                  <div className="muted small">{t.teams.activity.empty}</div>
                 ) : (
                   <div className="feed">
                     {activity.slice(0, 30).map((a, i) => (
                       <div className="feed-item" key={i}>
                         <div>
-                          <div className="strong-ish">{activityText(a)}</div>
-                          <div className="muted small">{a.isYou ? "Вы" : a.authorName} · {formatAgo(a.at)}</div>
+                          <div className="strong-ish">{activityText(t, a)}</div>
+                          <div className="muted small">{a.isYou ? t.common.you : a.authorName} · {formatAgo(a.at)}</div>
                         </div>
                       </div>
                     ))}
@@ -347,9 +343,9 @@ function TeamPage({ vault }: { vault: Vault }) {
       {tokenDialog && <TokenDialog vault={vault} onClose={() => setTokenDialog(false)} />}
       {removing && (
         <ConfirmDialog
-          title={`Удалить ${removing.name}?`}
-          body="Новые изменения команды станут для него недоступны."
-          confirm="Удалить"
+          title={t.teams.members.removeTitle(removing.name)}
+          body={t.teams.members.removeBody}
+          confirm={t.teams.members.removeConfirm}
           onConfirm={() => removeMember(removing)}
           onClose={() => setRemoving(null)}
         />
@@ -357,9 +353,9 @@ function TeamPage({ vault }: { vault: Vault }) {
       {showFingerprint && vault.stateFingerprint && <FingerprintDialog code={vault.stateFingerprint} onClose={() => setShowFingerprint(false)} />}
       {leaving && (
         <ConfirmDialog
-          title={`Убрать «${vault.name}» ${everywhere ? "со всех ваших устройств" : "с этого устройства"}?`}
-          body="Хранилище команды и ваше участие останутся, подключить снова можно в любой момент."
-          confirm="Убрать"
+          title={everywhere ? t.teams.leave.confirmEverywhere(vault.name) : t.teams.leave.confirmHere(vault.name)}
+          body={t.teams.leave.body}
+          confirm={t.common.remove}
           onConfirm={leave}
           onClose={() => setLeaving(false)}
         />
@@ -370,6 +366,7 @@ function TeamPage({ vault }: { vault: Vault }) {
 
 /** A new HTTPS token for a team's repository. */
 export function TokenDialog({ vault, onClose }: { vault: Vault; onClose: () => void }) {
+  const t = useT();
   const { toast, applyTeamView } = useStore();
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
@@ -386,7 +383,7 @@ export function TokenDialog({ vault, onClose }: { vault: Vault; onClose: () => v
         setBusy(false);
         return;
       }
-      toast({ text: "Токен заменён", tone: "success" });
+      toast({ text: t.teams.token.replaced, tone: "success" });
       onClose();
     } catch (e) {
       setError(errorText(e));
@@ -396,17 +393,17 @@ export function TokenDialog({ vault, onClose }: { vault: Vault; onClose: () => v
 
   return (
     <Modal
-      title="Токен доступа к репозиторию"
+      title={t.teams.token.title}
       onClose={onClose}
       onSubmit={submit}
       footer={
         <>
-          <Button type="button" variant="ghost" onClick={onClose}>Отмена</Button>
-          <Button type="submit" variant="primary" loading={busy} disabled={!token.trim()}>Сохранить</Button>
+          <Button type="button" variant="ghost" onClick={onClose}>{t.common.cancel}</Button>
+          <Button type="submit" variant="primary" loading={busy} disabled={!token.trim()}>{t.common.save}</Button>
         </>
       }
     >
-      <Field label="Новый токен" error={error}>
+      <Field label={t.teams.token.label} error={error}>
         <PasswordInput value={token} onChange={(v) => { setToken(v); setError(null); }} invalid={!!error} autoFocus />
       </Field>
     </Modal>
@@ -422,16 +419,17 @@ interface Row {
 }
 
 function AccessMatrix({ vault }: { vault: Vault }) {
+  const t = useT();
   const { ws, update, toast, applyTeamView } = useStore();
   const [busy, setBusy] = useState<Set<string>>(new Set());
   const members = ws.members.filter((m) => m.vaultId === vault.id && !m.recovery).sort(byRank);
   const mine = <T extends { vaultId: string }>(xs: T[]) => xs.filter((x) => x.vaultId === vault.id);
   const sections: [Coll, string, Row[]][] = (
     [
-      ["host", "Хосты", mine(ws.hosts).map((h) => ({ id: h.id, name: h.label, sub: `${h.user}@${h.address}` }))],
-      ["key", "Ключи", mine(ws.keys).map((k) => ({ id: k.id, name: k.name }))],
-      ["snippet", "Сниппеты", mine(ws.snippets).map((s) => ({ id: s.id, name: s.name }))],
-      ["tunnel", "Туннели", mine(ws.tunnels).map((t) => ({ id: t.id, name: t.name }))],
+      ["host", t.teams.collPlural.host, mine(ws.hosts).map((h) => ({ id: h.id, name: h.label, sub: `${h.user}@${h.address}` }))],
+      ["key", t.teams.collPlural.key, mine(ws.keys).map((k) => ({ id: k.id, name: k.name }))],
+      ["snippet", t.teams.collPlural.snippet, mine(ws.snippets).map((s) => ({ id: s.id, name: s.name }))],
+      ["tunnel", t.teams.collPlural.tunnel, mine(ws.tunnels).map((x) => ({ id: x.id, name: x.name }))],
     ] as [Coll, string, Row[]][]
   ).filter(([, , rows]) => rows.length > 0);
 
@@ -465,7 +463,7 @@ function AccessMatrix({ vault }: { vault: Vault }) {
           ],
         }));
       }
-      if (changes.length > 1) toast({ text: `Доступ изменён: ${changes.length}`, tone: "success" });
+      if (changes.length > 1) toast({ text: t.teams.access.changed(changes.length), tone: "success" });
     } catch (e) {
       toast({ text: errorText(e), tone: "error" });
     }
@@ -475,7 +473,7 @@ function AccessMatrix({ vault }: { vault: Vault }) {
   const bulk = (coll: Coll, rows: Row[], m: Member, level: Level) =>
     apply(rows.filter((r) => choices(coll, r.id, m).includes(level) && levelOf(r.id, m.id) !== level).map((r) => ({ coll, record: r.id, member: m.id, level })));
 
-  if (sections.length === 0) return <Empty icon={Users} title="Нет записей" />;
+  if (sections.length === 0) return <Empty icon={Users} title={t.teams.access.empty} />;
 
   return (
     <div className="matrix-wrap">
@@ -487,7 +485,7 @@ function AccessMatrix({ vault }: { vault: Vault }) {
               <th key={m.id} className="matrix-member">
                 <div className="matrix-member-inner" title={m.name}>
                   <Avatar member={m} size={22} />
-                  <span className="ellipsis">{m.isYou ? "Вы" : m.name}</span>
+                  <span className="ellipsis">{m.isYou ? t.common.you : m.name}</span>
                 </div>
               </th>
             ))}
@@ -505,8 +503,8 @@ function AccessMatrix({ vault }: { vault: Vault }) {
                       {options.length > 0 && (
                         <Menu
                           header={`${title}: ${m.name}`}
-                          trigger={(toggle, open) => <button className={`matrix-bulk ${open ? "pressed" : ""}`} onClick={toggle}>Всем</button>}
-                          items={options.map((l) => ({ label: levelLabel[l], onSelect: () => bulk(coll, rows, m, l) }))}
+                          trigger={(toggle, open) => <button className={`matrix-bulk ${open ? "pressed" : ""}`} onClick={toggle}>{t.teams.access.all}</button>}
+                          items={options.map((l) => ({ label: t.teams.level[l], onSelect: () => bulk(coll, rows, m, l) }))}
                         />
                       )}
                     </td>
@@ -535,10 +533,10 @@ function AccessMatrix({ vault }: { vault: Vault }) {
                             aria-label={`${r.name}: ${m.name}`}
                             onChange={(e) => apply([{ coll, record: r.id, member: m.id, level: e.target.value as Level }])}
                           >
-                            {options.map((l) => <option key={l} value={l}>{levelLabel[l]}</option>)}
+                            {options.map((l) => <option key={l} value={l}>{t.teams.level[l]}</option>)}
                           </select>
                         ) : (
-                          <span className={`level-pill level-${level}`}>{levelLabel[level]}</span>
+                          <span className={`level-pill level-${level}`}>{t.teams.level[level]}</span>
                         )}
                       </td>
                     );
@@ -554,6 +552,7 @@ function AccessMatrix({ vault }: { vault: Vault }) {
 }
 
 function TeamsOverview() {
+  const t = useT();
   const { ws, setVault, navigate, sync } = useStore();
   const [dialog, setDialog] = useState<"create" | "join" | "id" | null>(null);
   const teams = ws.vaults.filter((v) => v.kind === "team");
@@ -566,36 +565,37 @@ function TeamsOverview() {
 
   return (
     <div className="page">
-      <PageHeader title="Команды">
-        <Button icon={IdCard} onClick={() => setDialog("id")}>Мой Detour ID</Button>
-        <Button icon={LogIn} onClick={() => setDialog("join")}>Подключить</Button>
-        <Button variant="primary" icon={Plus} onClick={() => setDialog("create")}>Создать команду</Button>
+      <PageHeader title={t.teams.overview.title}>
+        <Button icon={IdCard} onClick={() => setDialog("id")}>{t.teams.overview.myId}</Button>
+        <Button icon={LogIn} onClick={() => setDialog("join")}>{t.teams.overview.join}</Button>
+        <Button variant="primary" icon={Plus} onClick={() => setDialog("create")}>{t.teams.overview.create}</Button>
       </PageHeader>
 
-      {teams.length === 0 && pending.length === 0 && <Empty icon={Users} title="Вы пока не в команде" />}
+      {teams.length === 0 && pending.length === 0 && <Empty icon={Users} title={t.teams.overview.empty} />}
 
       <div className="team-cards">
-        {teams.map((t) => {
-          const count = ws.members.filter((m) => m.vaultId === t.id && !m.recovery).length;
-          const hosts = ws.hosts.filter((h) => h.vaultId === t.id).length;
-          const status = t.syncStatus === "offline" ? "Папка недоступна" : t.remoteError ? "Нет связи с репозиторием" : t.removed ? "Вы удалены" : t.joined === false ? "Ждёт добавления" : t.problems?.length ? "Проблемы с хранилищем" : t.syncStatus === "conflict" ? "Конфликт" : null;
+        {teams.map((team) => {
+          const count = ws.members.filter((m) => m.vaultId === team.id && !m.recovery).length;
+          const hosts = ws.hosts.filter((h) => h.vaultId === team.id).length;
+          const st = t.teams.overview.status;
+          const status = team.syncStatus === "offline" ? st.folderUnavailable : team.remoteError ? st.unreachable : team.removed ? st.removed : team.joined === false ? st.waiting : team.problems?.length ? st.problems : team.syncStatus === "conflict" ? t.common.syncStatus.conflict : null;
           return (
             <button
-              key={t.id}
+              key={team.id}
               className="team-card"
               onClick={() => {
-                setVault(t.id);
+                setVault(team.id);
                 navigate("team");
               }}
             >
-              <VaultAvatar vault={t} size={36} />
+              <VaultAvatar vault={team} size={36} />
               <div className="team-card-main">
-                <span className="strong">{t.name}</span>
+                <span className="strong">{team.name}</span>
                 <span className="muted small">
-                  {count} {plural(count, "участник", "участника", "участников")} · {hosts} {plural(hosts, "хост", "хоста", "хостов")}
+                  {t.teams.overview.memberCount(count)} · {t.common.hostCount(hosts)}
                 </span>
               </div>
-              {status && <span className={`vault-sync ${t.removed || t.problems?.length ? "conflict" : t.syncStatus === "synced" ? "offline" : t.syncStatus}`}><span className="dot" />{status}</span>}
+              {status && <span className={`vault-sync ${team.removed || team.problems?.length ? "conflict" : team.syncStatus === "synced" ? "offline" : team.syncStatus}`}><span className="dot" />{status}</span>}
             </button>
           );
         })}
@@ -603,7 +603,7 @@ function TeamsOverview() {
 
       {pending.length > 0 && (
         <>
-          <h3 className="section-title pending-title">На других устройствах</h3>
+          <h3 className="section-title pending-title">{t.teams.overview.onOtherDevices}</h3>
           <div className="team-cards">
             {pending.map((p) => (
               <PendingTeamCard key={p.teamId} team={p} onChanged={() => api.teamsPending().then(setPending).catch(() => {})} />
@@ -621,6 +621,7 @@ function TeamsOverview() {
 
 /** A team joined on another device of this person: one in Git joins by itself, one in a folder needs the folder here. */
 function PendingTeamCard({ team, onChanged }: { team: PendingTeam; onChanged: () => void }) {
+  const t = useT();
   const { toast, applyTeamView } = useStore();
   const [busy, setBusy] = useState(false);
   const [removing, setRemoving] = useState(false);
@@ -631,10 +632,10 @@ function PendingTeamCard({ team, onChanged }: { team: PendingTeam; onChanged: ()
     setBusy(true);
     try {
       applyTeamView(await api.teamJoinLinked(team.teamId, path));
-      toast({ text: `Команда «${team.name}» подключена`, tone: "success" });
+      toast({ text: t.teams.join.joined(team.name), tone: "success" });
       onChanged();
     } catch (e) {
-      toast({ text: isCoreError(e) && e.kind === "notATeamVault" ? "В этой папке другая команда" : errorText(e), tone: "error" });
+      toast({ text: isCoreError(e) && e.kind === "notATeamVault" ? t.teams.pending.otherTeam : errorText(e), tone: "error" });
     } finally {
       setBusy(false);
     }
@@ -644,20 +645,20 @@ function PendingTeamCard({ team, onChanged }: { team: PendingTeam; onChanged: ()
     <div className="team-card pending">
       <span className="pending-avatar"><Users size={16} /></span>
       <div className="team-card-main">
-        <span className="strong">{team.name || "Команда"}</span>
+        <span className="strong">{team.name || t.teams.pending.fallbackName}</span>
         <span className={`small ${team.error ? "err-text" : "muted"}`}>
-          {team.url ? (team.error ? remoteErrorText(team.error) : "Подключается") : "Не подключена"}
+          {team.url ? (team.error ? remoteErrorText(team.error) : t.teams.pending.connecting) : t.teams.pending.notConnected}
         </span>
       </div>
-      {!team.url && <Button size="sm" variant="primary" loading={busy} onClick={() => void pickFolder()}>Выбрать папку</Button>}
+      {!team.url && <Button size="sm" variant="primary" loading={busy} onClick={() => void pickFolder()}>{t.teams.pending.chooseFolder}</Button>}
       <Menu
-        trigger={(open, isOpen) => <IconButton icon={Ellipsis} label="Ещё" className={isOpen ? "pressed" : ""} onClick={open} />}
-        items={[{ label: "Убрать со всех устройств", icon: LogOut, danger: true, onSelect: () => setRemoving(true) }]}
+        trigger={(open, isOpen) => <IconButton icon={Ellipsis} label={t.teams.more} className={isOpen ? "pressed" : ""} onClick={open} />}
+        items={[{ label: t.teams.leave.everywhere, icon: LogOut, danger: true, onSelect: () => setRemoving(true) }]}
       />
       {removing && (
         <ConfirmDialog
-          title={`Убрать «${team.name}» со всех устройств?`}
-          confirm="Убрать"
+          title={t.teams.pending.removeTitle(team.name)}
+          confirm={t.common.remove}
           onClose={() => setRemoving(false)}
           onConfirm={async () => {
             try {
@@ -675,22 +676,23 @@ function PendingTeamCard({ team, onChanged }: { team: PendingTeam; onChanged: ()
 
 /** The team's state fingerprint, to read out and compare with other members after both synced. */
 function FingerprintDialog({ code, onClose }: { code: string; onClose: () => void }) {
+  const t = useT();
   const { toast } = useStore();
   return (
     <Modal
-      title="Отпечаток состояния"
+      title={t.teams.page.stateFingerprint}
       width={400}
       onClose={onClose}
       onSubmit={onClose}
       footer={
         <>
-          <Button type="button" icon={Copy} onClick={async () => toast((await copyText(code)) ? { text: "Отпечаток скопирован", tone: "success" } : { text: "Не удалось скопировать", tone: "error" })}>Копировать</Button>
-          <Button type="submit" variant="primary">Готово</Button>
+          <Button type="button" icon={Copy} onClick={async () => toast((await copyText(code)) ? { text: t.teams.fingerprint.copied, tone: "success" } : { text: t.common.copyFailed, tone: "error" })}>{t.common.copy}</Button>
+          <Button type="submit" variant="primary">{t.common.done}</Button>
         </>
       }
     >
       <div className="pair-code mono">{code}</div>
-      <div className="muted small center">Совпадает у всех, кто синхронизировался</div>
+      <div className="muted small center">{t.teams.fingerprint.hint}</div>
     </Modal>
   );
 }

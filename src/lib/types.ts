@@ -1,5 +1,6 @@
 // Mirrors crates/detour-core/src/model.rs and team/*. Fields marked "mock"
 // exist only for demo data.
+import type { LangSetting } from "../i18n";
 
 export type VaultKind = "personal" | "team";
 
@@ -199,6 +200,7 @@ export interface Workspace {
 
 export interface Settings {
   theme: "dark" | "light" | "system";
+  language: LangSetting;
   fontSize: number;
   scrollback: number;
   autoLockMinutes: number;

@@ -1,3 +1,4 @@
+import { tr } from "../i18n";
 import type { Workspace } from "./types";
 import { fakePrivateKey } from "./keys";
 
@@ -6,9 +7,12 @@ const H = 60;
 const D = 24 * H;
 
 // Fake workspace for the mockup. Replaced piece by piece as features move into detour-core.
-export const mockWorkspace: Workspace = {
+/** The demo workspace, in the current language. */
+export const mockWorkspace = (): Workspace => {
+  const t = tr().demo;
+  return {
   vaults: [
-    { id: "personal", name: "Личное", kind: "personal", sync: { type: "local" }, syncStatus: "synced", lastSync: ago(0), conflicts: [] },
+    { id: "personal", name: tr().app.personal, kind: "personal", sync: { type: "local" }, syncStatus: "synced", lastSync: ago(0), conflicts: [] },
     {
       id: "acme",
       name: "Acme Infra",
@@ -40,7 +44,7 @@ export const mockWorkspace: Workspace = {
           record: "h21",
           field: "address",
           values: [
-            { value: "10.10.0.53", author: "m6", authorName: "Владислав", at: ago(70) },
+            { value: "10.10.0.53", author: "m6", authorName: t.you, at: ago(70) },
             { value: "10.10.0.54", author: "m7", authorName: "Dima", at: ago(60) },
           ],
         },
@@ -50,7 +54,7 @@ export const mockWorkspace: Workspace = {
           record: "h21",
           field: "port",
           values: [
-            { value: 22, author: "m6", authorName: "Владислав", at: ago(70) },
+            { value: 22, author: "m6", authorName: t.you, at: ago(70) },
             { value: 2222, author: "m7", authorName: "Dima", at: ago(60) },
           ],
         },
@@ -59,8 +63,8 @@ export const mockWorkspace: Workspace = {
   ],
 
   hosts: [
-    { id: "h1", vaultId: "personal", group: "Дом", label: "laptop", address: "192.168.1.30", port: 22, user: "me", auth: { type: "key", keyId: "k1" }, tags: ["ubuntu"], hasPassword: false, os: "ubuntu", online: true, lastConnected: ago(3 * H) },
-    { id: "h2", vaultId: "personal", group: "Дом", label: "nas", address: "192.168.1.10", port: 22, user: "admin", auth: { type: "password" }, tags: ["storage"], hasPassword: true, os: "freebsd", online: true, lastConnected: ago(5 * D) },
+    { id: "h1", vaultId: "personal", group: t.home, label: "laptop", address: "192.168.1.30", port: 22, user: "me", auth: { type: "key", keyId: "k1" }, tags: ["ubuntu"], hasPassword: false, os: "ubuntu", online: true, lastConnected: ago(3 * H) },
+    { id: "h2", vaultId: "personal", group: t.home, label: "nas", address: "192.168.1.10", port: 22, user: "admin", auth: { type: "password" }, tags: ["storage"], hasPassword: true, os: "freebsd", online: true, lastConnected: ago(5 * D) },
     { id: "h3", vaultId: "personal", group: "VPS", label: "vpn-fra", address: "203.0.113.17", port: 2222, user: "root", auth: { type: "key", keyId: "k1" }, tags: ["wireguard"], hasPassword: false, os: "debian", online: false, lastConnected: ago(3 * D) },
 
     { id: "h10", vaultId: "acme", group: "Production", label: "api-1", address: "10.0.1.11", port: 22, user: "deploy", auth: { type: "key", keyId: "k2" }, access: "edit", tags: ["api", "prod"], hasPassword: false, os: "ubuntu", online: true, lastConnected: ago(D + 2 * H) },
@@ -74,12 +78,12 @@ export const mockWorkspace: Workspace = {
   ],
 
   members: [
-    { id: "m1", vaultId: "acme", name: "Владислав", role: "owner", recovery: false, fingerprint: "K7QM-2XPA-9DTE-WN4F", isYou: true },
+    { id: "m1", vaultId: "acme", name: t.you, role: "owner", recovery: false, fingerprint: "K7QM-2XPA-9DTE-WN4F", isYou: true },
     { id: "m2", vaultId: "acme", name: "Anna Kovalenko", role: "admin", recovery: false, fingerprint: "R2TV-8HCE-QM4P-LX7A", isYou: false },
     { id: "m3", vaultId: "acme", name: "Max Petrenko", role: "member", recovery: false, fingerprint: "WD3N-6KQY-T2MB-9PEC", isYou: false },
     { id: "m4", vaultId: "acme", name: "Oleh Shevchuk", role: "member", recovery: false, fingerprint: "HF8C-4ZRW-M7QN-2TLD", isYou: false },
     { id: "m5", vaultId: "acme", name: "Recovery key", role: "owner", recovery: true, fingerprint: "J9PL-3QWE-X6RT-B4NM", isYou: false },
-    { id: "m6", vaultId: "homelab", name: "Владислав", role: "admin", recovery: false, fingerprint: "K7QM-2XPA-9DTE-WN4F", isYou: true },
+    { id: "m6", vaultId: "homelab", name: t.you, role: "admin", recovery: false, fingerprint: "K7QM-2XPA-9DTE-WN4F", isYou: true },
     { id: "m7", vaultId: "homelab", name: "Dima", role: "owner", recovery: false, fingerprint: "P4XC-7NMQ-2LWA-DE8K", isYou: false },
   ],
 
@@ -90,24 +94,24 @@ export const mockWorkspace: Workspace = {
   ],
 
   snippets: [
-    { id: "s1", vaultId: "acme", name: "Перезапуск API", command: "sudo systemctl restart acme-api && journalctl -u acme-api -n 50 -f", access: "edit" },
-    { id: "s2", vaultId: "acme", name: "Место на дисках", command: "df -h", access: "edit" },
-    { id: "s3", vaultId: "acme", name: "Нагрузка", command: "uptime", access: "edit" },
-    { id: "s4", vaultId: "personal", name: "Обновить систему", command: "sudo apt update && sudo apt upgrade -y" },
+    { id: "s1", vaultId: "acme", name: t.snippets.restartApi, command: "sudo systemctl restart acme-api && journalctl -u acme-api -n 50 -f", access: "edit" },
+    { id: "s2", vaultId: "acme", name: t.snippets.diskSpace, command: "df -h", access: "edit" },
+    { id: "s3", vaultId: "acme", name: t.snippets.load, command: "uptime", access: "edit" },
+    { id: "s4", vaultId: "personal", name: t.snippets.upgrade, command: "sudo apt update && sudo apt upgrade -y" },
   ],
 
   tunnels: [
     { id: "t1", vaultId: "acme", name: "Postgres prod", kind: "local", bindPort: 5432, viaHostId: "h10", target: "db-primary:5432", state: "off", access: "edit" },
-    { id: "t2", vaultId: "acme", name: "Прокси через staging", kind: "dynamic", bindPort: 1080, viaHostId: "h13", state: "off", access: "edit" },
-    { id: "t4", vaultId: "acme", name: "Демо фронтенда", kind: "remote", bindPort: 8080, viaHostId: "h13", target: "localhost:3000", state: "off", access: "edit" },
-    { id: "t5", vaultId: "acme", name: "Метрики CI", kind: "local", bindPort: 9090, viaHostId: "h14", target: "localhost:9090", state: "off", access: "edit" },
+    { id: "t2", vaultId: "acme", name: t.tunnels.stagingProxy, kind: "dynamic", bindPort: 1080, viaHostId: "h13", state: "off", access: "edit" },
+    { id: "t4", vaultId: "acme", name: t.tunnels.frontendDemo, kind: "remote", bindPort: 8080, viaHostId: "h13", target: "localhost:3000", state: "off", access: "edit" },
+    { id: "t5", vaultId: "acme", name: t.tunnels.ciMetrics, kind: "local", bindPort: 9090, viaHostId: "h14", target: "localhost:9090", state: "off", access: "edit" },
     { id: "t3", vaultId: "personal", name: "Proxmox", kind: "local", bindPort: 8006, viaHostId: "h1", target: "10.10.0.2:8006", state: "off" },
   ],
 
   activity: [
     { vaultId: "acme", authorName: "Anna Kovalenko", isYou: false, at: ago(2), kind: "added", coll: "host", id: "h11", name: "api-2" },
-    { vaultId: "acme", authorName: "Max Petrenko", isYou: false, at: ago(60), kind: "changed", coll: "snippet", id: "s1", name: "Перезапуск API" },
-    { vaultId: "acme", authorName: "Владислав", isYou: true, at: ago(D), kind: "memberAdded", member: "Oleh Shevchuk" },
+    { vaultId: "acme", authorName: "Max Petrenko", isYou: false, at: ago(60), kind: "changed", coll: "snippet", id: "s1", name: t.snippets.restartApi },
+    { vaultId: "acme", authorName: t.you, isYou: true, at: ago(D), kind: "memberAdded", member: "Oleh Shevchuk" },
     { vaultId: "acme", authorName: "Anna Kovalenko", isYou: false, at: ago(3 * D), kind: "changed", coll: "key", id: "k2", name: "acme-deploy" },
     { vaultId: "homelab", authorName: "Dima", isYou: false, at: ago(60), kind: "changed", coll: "host", id: "h21", name: "pi-hole" },
   ],
@@ -133,6 +137,7 @@ export const mockWorkspace: Workspace = {
     { vaultId: "homelab", coll: "host", record: "h21", member: "m6", level: "view" },
     { vaultId: "homelab", coll: "host", record: "h21", member: "m7", level: "edit" },
   ],
+  };
 };
 
 /** Secrets of the demo data; the real ones live only in detour-core. */

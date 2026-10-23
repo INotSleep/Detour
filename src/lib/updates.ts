@@ -1,4 +1,5 @@
 // Updates from the project's GitHub releases (Tauri's updater: signed, checked against the key built into the app).
+import { tr } from "../i18n";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 
@@ -11,14 +12,15 @@ export interface UpdateInfo {
 let found: Update | null = null;
 
 /** Nothing to compare with yet: not a failure. */
-export const NO_RELEASES = "Нет опубликованных версий";
+export const isNoReleases = (text: string) => text === tr().common.updates.noReleases;
 
 /** Why a check failed, in words. */
 export function updateErrorText(e: unknown): string {
   const text = String(e instanceof Error ? e.message : e);
-  if (/release JSON|404|not found/i.test(text)) return NO_RELEASES;
-  if (/signature/i.test(text)) return "Обновление не прошло проверку подписи";
-  if (/network|dns|connect|timed? ?out|error sending request/i.test(text)) return "Нет связи с сервером обновлений";
+  const t = tr().common.updates;
+  if (/release JSON|404|not found/i.test(text)) return t.noReleases;
+  if (/signature/i.test(text)) return t.badSignature;
+  if (/network|dns|connect|timed? ?out|error sending request/i.test(text)) return t.offline;
   return text;
 }
 

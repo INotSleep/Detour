@@ -1,0 +1,113 @@
+// The terminal, its session lines, host key questions, and the login pieces of the host panel.
+
+export const en = {
+  offerSave: {
+    password: (host: string) => `Save password for "${host}"?`,
+    passphrase: (key: string) => `Save passphrase for key "${key}"?`,
+    saved: "Saved to vault",
+  },
+  search: {
+    placeholder: "Find",
+    count: (i: number, n: number) => `${i} of ${n}`,
+    none: "No results",
+    prev: "Previous · Shift+Enter",
+    next: "Next · Enter",
+    close: "Close · Esc",
+  },
+  menu: {
+    find: "Find",
+    splitRight: "Split right",
+    splitDown: "Split down",
+  },
+  hostKey: {
+    label: "Host key",
+    unknown: "New host",
+    changed: "Host key changed",
+    fingerprint: "Fingerprint",
+    was: "Previous",
+    now: "Current",
+    replace: "Replace key",
+    /** Backing out of a changed key: the safe choice. */
+    stop: "Cancel",
+    trust: "Trust and connect",
+  },
+  /** Lines the app writes into the terminal. */
+  session: {
+    retry: "Enter: retry",
+    closed: "Connection closed. Enter: reconnect",
+    cancelled: "Connection cancelled",
+    cancelledKeyChanged: "Connection cancelled: host key changed",
+    passphrasePrompt: "Key passphrase: ",
+  },
+  login: {
+    passwordCopied: "Password copied",
+    askOnConnect: "password on connect",
+    saved: "Personal login saved",
+    removed: "Personal login removed",
+    title: "Personal login",
+    useShared: "Use shared login",
+    useOwn: "Use my own login",
+    setOwn: "Set personal login",
+    user: "Username",
+    auth: "Authentication",
+    ownKey: "My key",
+    noKeys: "No personal keys",
+    passwordSaved: "Saved",
+    askPassword: "Ask when connecting",
+  },
+};
+
+export const ru: typeof en = {
+  offerSave: {
+    password: (host: string) => `Сохранить пароль для «${host}»?`,
+    passphrase: (key: string) => `Сохранить пароль ключа «${key}»?`,
+    saved: "Сохранено в vault",
+  },
+  search: {
+    placeholder: "Найти",
+    count: (i: number, n: number) => `${i} из ${n}`,
+    none: "Нет",
+    prev: "Предыдущее · Shift+Enter",
+    next: "Следующее · Enter",
+    close: "Закрыть · Esc",
+  },
+  menu: {
+    find: "Найти",
+    splitRight: "Разделить вправо",
+    splitDown: "Разделить вниз",
+  },
+  hostKey: {
+    label: "Ключ хоста",
+    unknown: "Новый хост",
+    changed: "Ключ хоста изменился",
+    fingerprint: "Отпечаток",
+    was: "Был",
+    now: "Сейчас",
+    replace: "Заменить ключ",
+    stop: "Отменить",
+    trust: "Доверять и подключиться",
+  },
+  session: {
+    retry: "Enter: повторить",
+    closed: "Соединение закрыто. Enter: переподключиться",
+    cancelled: "Подключение отменено",
+    cancelledKeyChanged: "Подключение отменено: ключ хоста изменился",
+    passphrasePrompt: "Пароль ключа: ",
+  },
+  login: {
+    passwordCopied: "Пароль скопирован",
+    askOnConnect: "пароль при подключении",
+    saved: "Свой вход сохранён",
+    removed: "Свой вход убран",
+    title: "Свой вход",
+    useShared: "Входить общим",
+    useOwn: "Входить со своими данными",
+    setOwn: "Указать свой вход",
+    user: "Пользователь",
+    auth: "Вход",
+    ownKey: "Свой ключ",
+    noKeys: "Нет личных ключей",
+    passwordSaved: "Сохранён",
+    askPassword: "Спрашивать при подключении",
+  },
+};

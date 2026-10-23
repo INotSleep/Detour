@@ -6,11 +6,13 @@ import { Copy, Eye, EyeOff } from "lucide-react";
 import { api, errorText } from "../lib/api";
 import { copyText, useStore } from "../lib/store";
 import { atLeast } from "../lib/teams";
+import { tr, useT } from "../i18n";
 import type { Auth, Host } from "../lib/types";
 import { Button, Field, IconButton, PasswordInput, Segmented } from "./ui";
 
 /** A saved password, fetched from the vault only when asked for. */
 export function SavedPassword({ host, own = false }: { host: Host; own?: boolean }) {
+  const t = useT();
   const { toast } = useStore();
   const [value, setValue] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -36,20 +38,22 @@ export function SavedPassword({ host, own = false }: { host: Host; own?: boolean
 
   const copy = async () => {
     const pw = await load();
-    if (pw !== null) toast((await copyText(pw)) ? { text: "Пароль скопирован", tone: "success" } : { text: "Не удалось скопировать", tone: "error" });
+    if (pw !== null) toast((await copyText(pw)) ? { text: tr().terminal.login.passwordCopied, tone: "success" } : { text: tr().common.copyFailed, tone: "error" });
   };
 
   return (
     <span className="saved-password">
       <span className={`mono ${value === null ? "muted" : ""}`}>{value ?? "••••••••"}</span>
-      <IconButton type="button" icon={value === null ? Eye : EyeOff} label={value === null ? "Показать" : "Скрыть"} size={14} disabled={busy} onClick={toggle} />
-      <IconButton type="button" icon={Copy} label="Копировать" size={14} disabled={busy} onClick={copy} />
+      <IconButton type="button" icon={value === null ? Eye : EyeOff} label={value === null ? t.common.show : t.common.hide} size={14} disabled={busy} onClick={toggle} />
+      <IconButton type="button" icon={Copy} label={t.common.copy} size={14} disabled={busy} onClick={copy} />
     </span>
   );
 }
 
 /** Your own login for a team host: used instead of the shared one, never leaves your personal vault. */
 export function OwnLoginSection({ host }: { host: Host }) {
+  const t = useT();
+  const l = t.terminal.login;
   const { ws, vault, update, toast, applyTeamView } = useStore();
   const personalKeys = ws.keys.filter((k) => k.vaultId === "personal");
   const own = host.own;
@@ -61,8 +65,8 @@ export function OwnLoginSection({ host }: { host: Host }) {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const keyName = own?.auth.type === "key" ? personalKeys.find((k) => k.id === (own.auth as { keyId: string }).keyId)?.name ?? "Ключ" : null;
-  const authText = own ? (own.auth.type === "key" ? keyName : own.auth.type === "agent" ? "ssh-agent" : own.hasPassword ? null : "пароль при подключении") : null;
+  const keyName = own?.auth.type === "key" ? personalKeys.find((k) => k.id === (own.auth as { keyId: string }).keyId)?.name ?? t.common.key : null;
+  const authText = own ? (own.auth.type === "key" ? keyName : own.auth.type === "agent" ? "ssh-agent" : own.hasPassword ? null : l.askOnConnect) : null;
   const keyMissing = authType === "key" && !keyId;
 
   const set = async (login: { user: string; auth: Auth; newPassword?: string } | null) => {
@@ -74,7 +78,7 @@ export function OwnLoginSection({ host }: { host: Host }) {
         const next = login && { user: login.user, auth: login.auth, hasPassword: login.auth.type === "password" && (!!login.newPassword || !!own?.hasPassword) };
         update((w) => ({ ...w, hosts: w.hosts.map((h) => (h.id === host.id ? { ...h, own: next ?? undefined } : h)) }));
       }
-      toast({ text: login ? "Свой вход сохранён" : "Свой вход убран", tone: "success" });
+      toast({ text: login ? tr().terminal.login.saved : tr().terminal.login.removed, tone: "success" });
       setEditing(false);
       setPassword("");
     } catch (e) {
@@ -92,7 +96,7 @@ export function OwnLoginSection({ host }: { host: Host }) {
   if (!editing) {
     return (
       <section className="own-login">
-        <h3 className="section-title">Свой вход</h3>
+        <h3 className="section-title">{l.title}</h3>
         {own ? (
           <div className="own-summary">
             <div className="own-line">
@@ -101,12 +105,12 @@ export function OwnLoginSection({ host }: { host: Host }) {
               {own.auth.type === "password" && own.hasPassword && <SavedPassword host={host} own />}
             </div>
             <div className="own-actions">
-              <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>Изменить</Button>
-              <Button size="sm" variant="ghost" loading={busy} onClick={() => set(null)}>{shared ? "Входить общим" : "Убрать"}</Button>
+              <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>{t.common.edit}</Button>
+              <Button size="sm" variant="ghost" loading={busy} onClick={() => set(null)}>{shared ? l.useShared : t.common.remove}</Button>
             </div>
           </div>
         ) : (
-          <Button size="sm" onClick={() => setEditing(true)}>{shared ? "Входить со своими данными" : "Указать свой вход"}</Button>
+          <Button size="sm" onClick={() => setEditing(true)}>{shared ? l.useOwn : l.setOwn}</Button>
         )}
       </section>
     );
@@ -121,36 +125,36 @@ export function OwnLoginSection({ host }: { host: Host }) {
       }}
       onKeyDown={(e) => e.key === "Escape" && (e.stopPropagation(), setEditing(false))}
     >
-      <h3 className="section-title">Свой вход</h3>
-      <Field label="Пользователь">
+      <h3 className="section-title">{l.title}</h3>
+      <Field label={l.user}>
         <input className="input mono" value={user} onChange={(e) => setUser(e.target.value)} autoComplete="off" spellCheck={false} autoFocus />
       </Field>
-      <Field label="Вход">
+      <Field label={l.auth}>
         <Segmented
           value={authType}
           onChange={setAuthType}
           options={[
-            { value: "key", label: "Свой ключ" },
-            { value: "password", label: "Пароль" },
+            { value: "key", label: l.ownKey },
+            { value: "password", label: t.common.password },
             { value: "agent", label: "ssh-agent" },
           ]}
         />
       </Field>
       {authType === "key" && (
-        <Field label="Ключ" error={keyMissing ? "Нет личных ключей" : null}>
+        <Field label={t.common.key} error={keyMissing ? l.noKeys : null}>
           <select className="input" value={keyId} onChange={(e) => setKeyId(e.target.value)} disabled={!personalKeys.length}>
             {personalKeys.map((k) => <option key={k.id} value={k.id}>{k.name}</option>)}
           </select>
         </Field>
       )}
       {authType === "password" && (
-        <Field label="Пароль">
-          <PasswordInput value={password} onChange={setPassword} placeholder={own?.hasPassword ? "Сохранён" : "Спрашивать при подключении"} />
+        <Field label={t.common.password}>
+          <PasswordInput value={password} onChange={setPassword} placeholder={own?.hasPassword ? l.passwordSaved : l.askPassword} />
         </Field>
       )}
       <div className="panel-save">
-        <Button type="button" variant="ghost" onClick={() => setEditing(false)}>Отмена</Button>
-        <Button type="submit" variant="primary" loading={busy} disabled={keyMissing}>Сохранить</Button>
+        <Button type="button" variant="ghost" onClick={() => setEditing(false)}>{t.common.cancel}</Button>
+        <Button type="submit" variant="primary" loading={busy} disabled={keyMissing}>{t.common.save}</Button>
       </div>
     </form>
   );

@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { ChevronRight, Copy, Download, FolderSync, GitBranch, Laptop, RotateCw, ShieldAlert } from "lucide-react";
 import { api, errorText, isCoreError, type CoreError, type Pairing, type SyncInfo, type SyncPlace } from "../lib/api";
-import { copyText, formatAgo, plural, useStore } from "../lib/store";
+import { locale, tr, useT } from "../i18n";
+import { copyText, formatAgo, useStore } from "../lib/store";
 import { Button, ConfirmDialog, Field, Modal, PasswordInput } from "./ui";
 import { ServerKeyCard, StorageFields, gitLogin, storageReady, unknownServerKey, useStorage, type Storage } from "./TeamDialogs";
 import { problemText, remoteErrorText } from "./TeamsView";
@@ -12,7 +13,7 @@ const placeOf = (s: Storage): SyncPlace => (s.kind === "folder" ? { path: s.path
 export function syncErrorText(s: SyncInfo): string {
   const e = s.error;
   if (!e) return "";
-  if (!s.git && (e.kind === "unavailable" || e.kind === "io")) return "Папка недоступна";
+  if (!s.git && (e.kind === "unavailable" || e.kind === "io")) return tr().sync.folderUnavailable;
   return remoteErrorText(e);
 }
 
@@ -21,6 +22,8 @@ const tokenRejected = (e: CoreError | null) => e?.kind === "git" && e.message.in
 /** Settings: syncing the personal vault between this person's devices. */
 export function SyncSettings() {
   const { sync, setSync, refreshPersonal, toast } = useStore();
+  const all = useT();
+  const t = all.sync;
   const [dialog, setDialog] = useState<"enable" | "join" | "device" | "recovery" | "disable" | "token" | "serverKey" | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [showProblems, setShowProblems] = useState(false);
@@ -44,12 +47,12 @@ export function SyncSettings() {
   if (!sync.enabled) {
     return (
       <section className="settings-group">
-        <h3 className="section-title">Синхронизация</h3>
+        <h3 className="section-title">{t.title}</h3>
         <div className="setting">
-          <span>Между своими устройствами</span>
+          <span>{t.betweenDevices}</span>
           <div className="row-buttons">
-            <Button size="sm" onClick={() => setDialog("join")}>Подключиться</Button>
-            <Button size="sm" variant="primary" onClick={() => setDialog("enable")}>Включить</Button>
+            <Button size="sm" onClick={() => setDialog("join")}>{all.common.connect}</Button>
+            <Button size="sm" variant="primary" onClick={() => setDialog("enable")}>{t.enable}</Button>
           </div>
         </div>
         {dialog === "enable" && <EnableDialog onClose={() => setDialog(null)} />}
@@ -60,12 +63,12 @@ export function SyncSettings() {
 
   const failed = !!sync.error;
   const keyChanged = sync.error?.kind === "hostKeyChanged";
-  const status = failed ? syncErrorText(sync) : syncing ? "Синхронизация…" : sync.pending ? "Не отправлено" : sync.syncedAt ? `Синхронизировано ${formatAgo(sync.syncedAt)}` : "Ещё не синхронизировано";
+  const status = failed ? syncErrorText(sync) : syncing ? t.syncing : sync.pending ? t.notSent : sync.syncedAt ? t.syncedAgo(formatAgo(sync.syncedAt)) : t.neverSynced;
   const problems = sync.problems;
 
   return (
     <section className="settings-group">
-      <h3 className="section-title">Синхронизация</h3>
+      <h3 className="section-title">{t.title}</h3>
       <div className="sync-card">
         <div className="item-icon">{sync.git ? <GitBranch size={15} /> : <FolderSync size={15} />}</div>
         <div className="sync-main">
@@ -73,11 +76,11 @@ export function SyncSettings() {
           <span className={`small ${failed ? "err-text" : sync.pending ? "warn-text" : "muted"}`}>{status}</span>
         </div>
         {keyChanged ? (
-          <Button size="sm" onClick={() => setDialog("serverKey")}>Заменить ключ сервера</Button>
+          <Button size="sm" onClick={() => setDialog("serverKey")}>{t.replaceServerKey}</Button>
         ) : tokenRejected(sync.error) ? (
-          <Button size="sm" onClick={() => setDialog("token")}>Новый токен</Button>
+          <Button size="sm" onClick={() => setDialog("token")}>{t.newToken}</Button>
         ) : (
-          <Button size="sm" icon={RotateCw} loading={syncing} onClick={() => void run(() => api.syncNow())}>Синхронизировать</Button>
+          <Button size="sm" icon={RotateCw} loading={syncing} onClick={() => void run(() => api.syncNow())}>{t.syncNow}</Button>
         )}
       </div>
 
@@ -85,7 +88,7 @@ export function SyncSettings() {
         <div className="banner warn problems">
           <button className="problems-head" onClick={() => setShowProblems((s) => !s)} aria-expanded={showProblems}>
             <ShieldAlert size={16} />
-            <span className="grow">{problems.length} {plural(problems.length, "проблема", "проблемы", "проблем")} с хранилищем</span>
+            <span className="grow">{t.storageProblems(all.common.problemCount(problems.length))}</span>
             <ChevronRight size={14} className={`chev ${showProblems ? "open" : ""}`} />
           </button>
           {showProblems && (
@@ -97,16 +100,16 @@ export function SyncSettings() {
       )}
 
       <div className="setting">
-        <span>Другое устройство</span>
-        <Button size="sm" icon={Laptop} onClick={() => setDialog("device")}>Добавить</Button>
+        <span>{t.otherDevice}</span>
+        <Button size="sm" icon={Laptop} onClick={() => setDialog("device")}>{all.common.add}</Button>
       </div>
       <div className="setting">
-        <span>Ключ восстановления</span>
-        <Button size="sm" onClick={() => setDialog("recovery")}>Показать</Button>
+        <span>{t.recoveryKey}</span>
+        <Button size="sm" onClick={() => setDialog("recovery")}>{all.common.show}</Button>
       </div>
       <div className="setting">
-        <span>Синхронизация на этом устройстве</span>
-        <Button size="sm" variant="ghost" className="danger-text" onClick={() => setDialog("disable")}>Отключить</Button>
+        <span>{t.onThisDevice}</span>
+        <Button size="sm" variant="ghost" className="danger-text" onClick={() => setDialog("disable")}>{t.disable}</Button>
       </div>
 
       {dialog === "device" && <AddDeviceDialog onClose={() => setDialog(null)} />}
@@ -125,14 +128,14 @@ export function SyncSettings() {
       )}
       {dialog === "disable" && (
         <ConfirmDialog
-          title="Отключить синхронизацию?"
-          confirm="Отключить"
+          title={t.disableTitle}
+          confirm={t.disable}
           onClose={() => setDialog(null)}
           onConfirm={async () => {
             try {
               await api.syncDisable();
               setSync(await api.syncStatus());
-              toast({ text: "Синхронизация отключена", tone: "success" });
+              toast({ text: t.disabled, tone: "success" });
             } catch (e) {
               toast({ text: errorText(e), tone: "error" });
             }
@@ -147,6 +150,8 @@ export function SyncSettings() {
 
 function EnableDialog({ onClose }: { onClose: () => void }) {
   const { setSync, toast } = useStore();
+  const all = useT();
+  const t = all.sync;
   const [storage, setStorageRaw] = useStorage();
   const [serverKey, setServerKey] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -168,7 +173,7 @@ function EnableDialog({ onClose }: { onClose: () => void }) {
     } catch (e) {
       const fp = unknownServerKey(e);
       if (fp) setServerKey(fp);
-      else setError(isCoreError(e) && e.kind === "folderNotEmpty" ? (storage.kind === "git" ? "Репозиторий не пустой" : "Папка не пустая") : isCoreError(e) && e.kind === "io" ? (storage.kind === "git" ? "Нет связи с репозиторием" : "Папка недоступна") : errorText(e));
+      else setError(isCoreError(e) && e.kind === "folderNotEmpty" ? (storage.kind === "git" ? t.repoNotEmpty : t.folderNotEmpty) : isCoreError(e) && e.kind === "io" ? (storage.kind === "git" ? t.repoUnreachable : t.folderUnavailable) : errorText(e));
     } finally {
       setBusy(false);
     }
@@ -179,7 +184,7 @@ function EnableDialog({ onClose }: { onClose: () => void }) {
       <RecoveryDialog
         onClose={() => {
           setSync(enabled);
-          toast({ text: "Синхронизация включена", tone: "success" });
+          toast({ text: t.enabled, tone: "success" });
           onClose();
         }}
       />
@@ -188,18 +193,18 @@ function EnableDialog({ onClose }: { onClose: () => void }) {
 
   return (
     <Modal
-      title="Синхронизация"
+      title={t.enableTitle}
       width={520}
       onClose={onClose}
       onSubmit={submit}
       footer={
         <>
-          <Button type="button" variant="ghost" onClick={onClose}>Отмена</Button>
-          <Button type="submit" variant="primary" loading={busy} disabled={!storageReady(storage)}>{serverKey ? "Доверять и включить" : "Включить"}</Button>
+          <Button type="button" variant="ghost" onClick={onClose}>{all.common.cancel}</Button>
+          <Button type="submit" variant="primary" loading={busy} disabled={!storageReady(storage)}>{serverKey ? t.trustAndEnable : t.enable}</Button>
         </>
       }
     >
-      <StorageFields value={storage} set={setStorage} folderLabel="Пустая папка" folderPlaceholder={"D:\\Sync\\detour"} />
+      <StorageFields value={storage} set={setStorage} folderLabel={t.emptyFolder} folderPlaceholder={"D:\\Sync\\detour"} />
       {serverKey && <ServerKeyCard url={storage.url} fingerprint={serverKey} />}
       {error && <span className="field-error">{error}</span>}
     </Modal>
@@ -210,6 +215,8 @@ function EnableDialog({ onClose }: { onClose: () => void }) {
 
 function JoinDialog({ onClose }: { onClose: () => void }) {
   const { setSync, refreshPersonal, toast } = useStore();
+  const all = useT();
+  const t = all.sync;
   const [storage, setStorageRaw] = useStorage();
   const [code, setCode] = useState("");
   const [serverKey, setServerKey] = useState<string | null>(null);
@@ -230,33 +237,33 @@ function JoinDialog({ onClose }: { onClose: () => void }) {
       const status = await api.syncJoin(placeOf(storage), code.trim(), serverKey ?? undefined);
       setSync(status);
       await refreshPersonal();
-      toast({ text: "Синхронизация включена", tone: "success" });
+      toast({ text: t.enabled, tone: "success" });
       onClose();
     } catch (e) {
       setBusy(false);
       const fp = unknownServerKey(e);
       if (fp) return setServerKey(fp);
       const onCode = isCoreError(e) && (e.kind === "invalidCode" || e.kind === "codeExpired");
-      const text = isCoreError(e) && e.kind === "io" ? (storage.kind === "git" ? "Нет связи с репозиторием" : "Папка недоступна") : errorText(e);
+      const text = isCoreError(e) && e.kind === "io" ? (storage.kind === "git" ? t.repoUnreachable : t.folderUnavailable) : errorText(e);
       setError({ field: onCode ? "code" : "storage", text });
     }
   };
 
   return (
     <Modal
-      title="Подключение к своему vault"
+      title={t.joinTitle}
       width={520}
       onClose={onClose}
       onSubmit={submit}
       footer={
         <>
-          <Button type="button" variant="ghost" onClick={onClose}>Отмена</Button>
-          <Button type="submit" variant="primary" loading={busy} disabled={!storageReady(storage) || !code.trim()}>{serverKey ? "Доверять и подключить" : "Подключить"}</Button>
+          <Button type="button" variant="ghost" onClick={onClose}>{all.common.cancel}</Button>
+          <Button type="submit" variant="primary" loading={busy} disabled={!storageReady(storage) || !code.trim()}>{serverKey ? t.trustAndConnect : t.connect}</Button>
         </>
       }
     >
-      <StorageFields value={storage} set={setStorage} folderLabel="Папка с хранилищем" folderPlaceholder={"D:\\Sync\\detour"} />
-      <Field label="Код с другого устройства или ключ восстановления" error={error?.field === "code" ? error.text : null}>
+      <StorageFields value={storage} set={setStorage} folderLabel={t.vaultFolder} folderPlaceholder={"D:\\Sync\\detour"} />
+      <Field label={t.code} error={error?.field === "code" ? error.text : null}>
         <input
           className={`input mono ${error?.field === "code" ? "invalid" : ""}`}
           value={code}
@@ -279,6 +286,8 @@ function JoinDialog({ onClose }: { onClose: () => void }) {
 
 function AddDeviceDialog({ onClose }: { onClose: () => void }) {
   const { toast } = useStore();
+  const all = useT();
+  const t = all.sync;
   const [pairing, setPairing] = useState<Pairing | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -286,31 +295,31 @@ function AddDeviceDialog({ onClose }: { onClose: () => void }) {
     api.syncAddDevice().then(setPairing).catch((e) => setError(errorText(e)));
   }, []);
 
-  const until = pairing ? new Date(pairing.expiresAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" }) : "";
+  const until = pairing ? new Date(pairing.expiresAt).toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit" }) : "";
   return (
     <Modal
-      title="Новое устройство"
+      title={t.newDevice}
       width={440}
       onClose={onClose}
       onSubmit={onClose}
       footer={
         <>
           {pairing && (
-            <Button type="button" icon={Copy} onClick={async () => toast((await copyText(pairing.code)) ? { text: "Код скопирован", tone: "success" } : { text: "Не удалось скопировать", tone: "error" })}>
-              Копировать
+            <Button type="button" icon={Copy} onClick={async () => toast((await copyText(pairing.code)) ? { text: t.codeCopied, tone: "success" } : { text: all.common.copyFailed, tone: "error" })}>
+              {all.common.copy}
             </Button>
           )}
-          <Button type="submit" variant="primary">Готово</Button>
+          <Button type="submit" variant="primary">{all.common.done}</Button>
         </>
       }
     >
-      <div className="modal-text">На новом устройстве: Настройки, Синхронизация, Подключиться. То же хранилище и этот код.</div>
+      <div className="modal-text">{t.newDeviceHint}</div>
       {error ? (
         <span className="field-error">{error}</span>
       ) : (
         <div className={`pair-code mono ${pairing ? "" : "loading"}`}>{pairing?.code ?? "••••-••••-••••-••••"}</div>
       )}
-      {pairing && <div className="muted small center">Действует до {until}</div>}
+      {pairing && <div className="muted small center">{t.validUntil(until)}</div>}
     </Modal>
   );
 }
@@ -319,27 +328,29 @@ function AddDeviceDialog({ onClose }: { onClose: () => void }) {
 
 function RecoveryDialog({ onClose }: { onClose: () => void }) {
   const { toast } = useStore();
+  const all = useT();
+  const t = all.sync;
   const [key, setKey] = useState("");
   useEffect(() => {
     api.syncRecoveryKey().then(setKey).catch((e) => toast({ text: errorText(e), tone: "error" }));
   }, [toast]);
 
   return (
-    <Modal title="Ключ восстановления" width={540} onClose={onClose} onSubmit={onClose} footer={<Button type="submit" variant="primary">Готово</Button>}>
-      <div className="modal-text">Сохраните его: с ним vault открывается без других устройств.</div>
+    <Modal title={t.recoveryKey} width={540} onClose={onClose} onSubmit={onClose} footer={<Button type="submit" variant="primary">{all.common.done}</Button>}>
+      <div className="modal-text">{t.recoveryHint}</div>
       <div className="recovery-box mono">{key || "…"}</div>
       <div className="row-buttons">
-        <Button type="button" icon={Copy} disabled={!key} onClick={async () => { if (await copyText(key)) toast({ text: "Ключ скопирован", tone: "success" }); }}>Копировать</Button>
+        <Button type="button" icon={Copy} disabled={!key} onClick={async () => { if (await copyText(key)) toast({ text: t.keyCopied, tone: "success" }); }}>{all.common.copy}</Button>
         <Button
           type="button"
           icon={Download}
           disabled={!key}
           onClick={async () => {
-            const where = await api.saveTextFile("detour-recovery-personal.txt", `Detour: личный vault\n${key}\n`);
-            if (where) toast({ text: `Сохранено: ${where}`, tone: "success" });
+            const where = await api.saveTextFile("detour-recovery-personal.txt", t.recoveryFile(key));
+            if (where) toast({ text: t.savedTo(where), tone: "success" });
           }}
         >
-          Сохранить в файл
+          {t.saveToFile}
         </Button>
       </div>
     </Modal>
@@ -349,10 +360,12 @@ function RecoveryDialog({ onClose }: { onClose: () => void }) {
 /* ---------- repository problems ---------- */
 
 function TokenDialog({ onClose, onSaved }: { onClose: () => void; onSaved: (go: () => Promise<{ changed: boolean; status: SyncInfo }>) => Promise<void> }) {
+  const all = useT();
+  const t = all.sync;
   const [token, setToken] = useState("");
   return (
     <Modal
-      title="Токен доступа к репозиторию"
+      title={t.tokenTitle}
       onClose={onClose}
       onSubmit={() => {
         if (!token.trim()) return;
@@ -361,12 +374,12 @@ function TokenDialog({ onClose, onSaved }: { onClose: () => void; onSaved: (go: 
       }}
       footer={
         <>
-          <Button type="button" variant="ghost" onClick={onClose}>Отмена</Button>
-          <Button type="submit" variant="primary" disabled={!token.trim()}>Сохранить</Button>
+          <Button type="button" variant="ghost" onClick={onClose}>{all.common.cancel}</Button>
+          <Button type="submit" variant="primary" disabled={!token.trim()}>{all.common.save}</Button>
         </>
       }
     >
-      <Field label="Новый токен">
+      <Field label={t.newToken}>
         <PasswordInput value={token} onChange={setToken} autoFocus />
       </Field>
     </Modal>
@@ -374,21 +387,23 @@ function TokenDialog({ onClose, onSaved }: { onClose: () => void; onSaved: (go: 
 }
 
 function ServerKeyChangedDialog({ expected, actual, onClose, onReplace }: { expected: string; actual: string; onClose: () => void; onReplace: (fingerprint: string) => void }) {
+  const all = useT();
+  const t = all.sync;
   return (
     <Modal
-      title="Ключ сервера изменился"
+      title={t.serverKeyChanged}
       onClose={onClose}
       footer={
         <>
-          <Button type="button" variant="ghost" className="danger-text" onClick={() => onReplace(actual)}>Заменить ключ</Button>
-          <Button type="button" variant="primary" autoFocus onClick={onClose}>Отменить</Button>
+          <Button type="button" variant="ghost" className="danger-text" onClick={() => onReplace(actual)}>{t.replaceKey}</Button>
+          <Button type="button" variant="primary" autoFocus onClick={onClose}>{all.common.cancel}</Button>
         </>
       }
     >
       <dl className="hostkey-fp">
-        <dt>Был</dt>
+        <dt>{t.was}</dt>
         <dd className="mono">{expected}</dd>
-        <dt>Сейчас</dt>
+        <dt>{t.now}</dt>
         <dd className="mono">{actual}</dd>
       </dl>
     </Modal>

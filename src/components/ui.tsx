@@ -1,3 +1,4 @@
+import { useT } from "../i18n";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Check, Eye, EyeOff, Loader2, X, type LucideIcon } from "lucide-react";
@@ -55,6 +56,7 @@ export function Field({ label, error, children }: { label: string; error?: strin
 }
 
 export function PasswordInput({ value, onChange, placeholder, invalid, autoFocus }: { value: string; onChange: (v: string) => void; placeholder?: string; invalid?: boolean; autoFocus?: boolean }) {
+  const t = useT().common;
   const [shown, setShown] = useState(false);
   return (
     <div className={`password-input ${invalid ? "invalid" : ""}`}>
@@ -68,7 +70,7 @@ export function PasswordInput({ value, onChange, placeholder, invalid, autoFocus
         spellCheck={false}
         autoFocus={autoFocus}
       />
-      {value && <IconButton type="button" icon={shown ? EyeOff : Eye} label={shown ? "Скрыть" : "Показать"} tipSide="left" size={14} onClick={() => setShown((s) => !s)} />}
+      {value && <IconButton type="button" icon={shown ? EyeOff : Eye} label={shown ? t.hide : t.show} tipSide="left" size={14} onClick={() => setShown((s) => !s)} />}
     </div>
   );
 }
@@ -115,6 +117,7 @@ interface ModalProps {
 }
 
 export function Modal({ title, onClose, children, footer, width = 440, onSubmit }: ModalProps) {
+  const t = useT().common;
   const ref = useRef<HTMLFormElement>(null);
 
   useEffect(() => {
@@ -142,7 +145,7 @@ export function Modal({ title, onClose, children, footer, width = 440, onSubmit 
       >
         <div className="modal-head">
           <h2>{title}</h2>
-          <IconButton type="button" icon={X} label="Закрыть" onClick={onClose} />
+          <IconButton type="button" icon={X} label={t.close} onClick={onClose} />
         </div>
         <div className="modal-body">{children}</div>
         {footer && <div className="modal-foot">{footer}</div>}
@@ -153,6 +156,7 @@ export function Modal({ title, onClose, children, footer, width = 440, onSubmit 
 }
 
 export function ConfirmDialog({ title, body, confirm, onConfirm, onClose }: { title: string; body?: ReactNode; confirm: string; onConfirm: () => void; onClose: () => void }) {
+  const t = useT().common;
   return (
     <Modal
       title={title}
@@ -164,7 +168,7 @@ export function ConfirmDialog({ title, body, confirm, onConfirm, onClose }: { ti
       }}
       footer={
         <>
-          <Button type="button" variant="ghost" onClick={onClose}>Отмена</Button>
+          <Button type="button" variant="ghost" onClick={onClose}>{t.cancel}</Button>
           <Button type="submit" variant="danger">{confirm}</Button>
         </>
       }

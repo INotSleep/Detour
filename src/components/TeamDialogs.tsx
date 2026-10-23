@@ -4,6 +4,7 @@ import { api, errorText, isCoreError, type GitLogin, type TeamView } from "../li
 import { copyText, sleep, uid, useStore } from "../lib/store";
 import type { Level, Role, Vault } from "../lib/types";
 import { Button, Field, IconButton, Modal, PasswordInput, Segmented } from "./ui";
+import { tr, useT } from "../i18n";
 
 /* ---------- demo stand-ins (plain browser) ---------- */
 
@@ -20,14 +21,15 @@ export function useMyId() {
   return id;
 }
 
-export function FolderField({ value, onChange, label = "Папка", placeholder = "D:\\Sync\\team-vault" }: { value: string; onChange: (v: string) => void; label?: string; placeholder?: string }) {
+export function FolderField({ value, onChange, label, placeholder = "D:\\Sync\\team-vault" }: { value: string; onChange: (v: string) => void; label?: string; placeholder?: string }) {
+  const t = useT();
   return (
-    <Field label={label}>
+    <Field label={label ?? t.teams.storage.folder}>
       <div className="input-group">
         <input className="input mono" value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} spellCheck={false} />
         {api.real && (
           <Button type="button" icon={FolderOpen} onClick={async () => { const p = await api.pickFolder(); if (p) onChange(p); }}>
-            Выбрать
+            {t.teams.storage.choose}
           </Button>
         )}
       </div>
@@ -62,35 +64,36 @@ export const gitLogin = (s: Storage): GitLogin =>
 export const storageReady = (s: Storage) => (s.kind === "folder" ? !!s.path.trim() : !!s.url.trim() && (!isHttps(s.url) || !!s.token.trim()));
 
 export function StorageFields({ value, set, folderLabel, folderPlaceholder }: { value: Storage; set: (p: Partial<Storage>) => void; folderLabel: string; folderPlaceholder?: string }) {
+  const t = useT();
   const { ws, toast } = useStore();
   const keys = ws.keys.filter((k) => k.vaultId === "personal");
   const key = keys.find((k) => k.id === value.login);
   return (
     <>
-      <Field label="Хранилище">
-        <Segmented value={value.kind} onChange={(kind) => set({ kind })} options={[{ value: "folder", label: "Папка" }, { value: "git", label: "Git-репозиторий" }]} />
+      <Field label={t.teams.storage.title}>
+        <Segmented value={value.kind} onChange={(kind) => set({ kind })} options={[{ value: "folder", label: t.teams.storage.folder }, { value: "git", label: t.teams.storage.git }]} />
       </Field>
       {value.kind === "folder" ? (
         <FolderField value={value.path} onChange={(path) => set({ path })} label={folderLabel} placeholder={folderPlaceholder} />
       ) : (
         <>
-          <Field label="Адрес репозитория">
+          <Field label={t.teams.storage.url}>
             <input className="input mono" value={value.url} onChange={(e) => set({ url: e.target.value })} placeholder="git@github.com:team/vault.git" spellCheck={false} autoComplete="off" />
           </Field>
           {isHttps(value.url) ? (
-            <Field label="Токен доступа">
+            <Field label={t.teams.storage.token}>
               <PasswordInput value={value.token} onChange={(token) => set({ token })} placeholder="github_pat_…" />
             </Field>
           ) : (
-          <Field label="Вход в репозиторий">
+          <Field label={t.teams.storage.login}>
             <div className="input-group">
               <select className="input" value={value.login} onChange={(e) => set({ login: e.target.value })}>
                 {keys.map((k) => <option key={k.id} value={k.id}>{k.name}</option>)}
                 <option value="agent">ssh-agent</option>
               </select>
               {key && (
-                <Button type="button" icon={Copy} onClick={async () => toast((await copyText(key.publicKey)) ? { text: `Публичный ключ «${key.name}» скопирован`, tone: "success" } : { text: "Не удалось скопировать", tone: "error" })}>
-                  Публичный ключ
+                <Button type="button" icon={Copy} onClick={async () => toast((await copyText(key.publicKey)) ? { text: t.teams.storage.publicKeyCopied(key.name), tone: "success" } : { text: t.common.copyFailed, tone: "error" })}>
+                  {t.teams.storage.publicKey}
                 </Button>
               )}
             </div>
@@ -104,14 +107,15 @@ export function StorageFields({ value, set, folderLabel, folderPlaceholder }: { 
 
 /** The server key of a repository seen for the first time. */
 export function ServerKeyCard({ url, fingerprint }: { url: string; fingerprint: string }) {
+  const t = useT();
   const host = url.replace(/^ssh:\/\//, "").replace(/^[^@]*@/, "").split(/[:/]/)[0];
   return (
     <div className="trust-card">
       <ShieldQuestion size={18} />
       <div>
-        <div className="strong">Новый сервер {host}</div>
+        <div className="strong">{t.teams.storage.newServer(host)}</div>
         <div className="fp mono">{fingerprint}</div>
-        <div className="muted small">Сверьте отпечаток с тем, что публикует хостинг</div>
+        <div className="muted small">{t.teams.storage.checkServer}</div>
       </div>
     </div>
   );
@@ -123,13 +127,14 @@ export const unknownServerKey = (e: unknown) => (isCoreError(e) && e.kind === "h
 /* ---------- my Detour ID ---------- */
 
 export function MyIdDialog({ onClose }: { onClose: () => void }) {
+  const t = useT();
   const { toast } = useStore();
   const me = useMyId();
   return (
-    <Modal title="Мой Detour ID" width={480} onClose={onClose} footer={<Button variant="primary" icon={Copy} onClick={async () => { if (me && (await copyText(me.detourId))) toast({ text: "Detour ID скопирован", tone: "success" }); }}>Копировать</Button>}>
+    <Modal title={t.teams.myId.title} width={480} onClose={onClose} footer={<Button variant="primary" icon={Copy} onClick={async () => { if (me && (await copyText(me.detourId))) toast({ text: t.teams.page.idCopied, tone: "success" }); }}>{t.common.copy}</Button>}>
       <div className="id-box mono">{me?.detourId ?? "…"}</div>
       <div className="fp-row">
-        <span className="muted small">Отпечаток</span>
+        <span className="muted small">{t.teams.myId.fingerprint}</span>
         <span className="fp mono">{me?.fingerprint ?? "…"}</span>
       </div>
     </Modal>
@@ -139,6 +144,7 @@ export function MyIdDialog({ onClose }: { onClose: () => void }) {
 /* ---------- create, with a mandatory recovery key ---------- */
 
 export function CreateTeamDialog({ onClose, onDone }: { onClose: () => void; onDone?: () => void }) {
+  const t = useT();
   const { update, setVault, toast, applyTeamView } = useStore();
   const [step, setStep] = useState<"details" | "recovery">("details");
   const [name, setName] = useState("");
@@ -191,36 +197,36 @@ export function CreateTeamDialog({ onClose, onDone }: { onClose: () => void; onD
         setVault(id);
       }
       onDone?.();
-      toast({ text: `Команда «${name.trim()}» создана`, tone: "success" });
+      toast({ text: t.teams.create.created(name.trim()), tone: "success" });
       onClose();
     } catch (e) {
       setBusy(false);
       const fp = unknownServerKey(e);
       if (fp) setServerKey(fp);
-      else setError(isCoreError(e) && e.kind === "folderNotEmpty" ? (storage.kind === "git" ? "Репозиторий не пустой" : "Папка не пустая") : errorText(e));
+      else setError(isCoreError(e) && e.kind === "folderNotEmpty" ? (storage.kind === "git" ? t.teams.create.repoNotEmpty : t.common.errors.folderNotEmpty) : errorText(e));
     }
   };
 
   if (step === "details") {
     return (
       <Modal
-        title="Новая команда"
+        title={t.teams.create.title}
         width={520}
         onClose={onClose}
         onSubmit={next}
         footer={
           <>
-            <Button type="button" variant="ghost" onClick={onClose}>Отмена</Button>
-            <Button type="submit" variant="primary" disabled={!detailsOk}>Далее</Button>
+            <Button type="button" variant="ghost" onClick={onClose}>{t.common.cancel}</Button>
+            <Button type="submit" variant="primary" disabled={!detailsOk}>{t.common.next}</Button>
           </>
         }
       >
-        <Field label="Название">
+        <Field label={t.teams.create.name}>
           <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Acme Infra" autoFocus />
         </Field>
-        <StorageFields value={storage} set={(p) => { setStorage(p); setServerKey(null); }} folderLabel="Пустая папка для хранилища" />
-        <Field label="Ваше имя в команде">
-          <input className="input" value={myName} onChange={(e) => setMyName(e.target.value)} placeholder="Владислав" />
+        <StorageFields value={storage} set={(p) => { setStorage(p); setServerKey(null); }} folderLabel={t.teams.create.emptyFolder} />
+        <Field label={t.teams.create.myName}>
+          <input className="input" value={myName} onChange={(e) => setMyName(e.target.value)} placeholder={t.teams.create.myNamePlaceholder} />
         </Field>
       </Modal>
     );
@@ -228,33 +234,33 @@ export function CreateTeamDialog({ onClose, onDone }: { onClose: () => void; onD
 
   return (
     <Modal
-      title="Ключ восстановления"
+      title={t.teams.create.recoveryTitle}
       width={540}
       onClose={onClose}
       onSubmit={create}
       footer={
         <>
-          <Button type="button" variant="ghost" onClick={() => setStep("details")}>Назад</Button>
-          <Button type="submit" variant="primary" disabled={!confirmed} loading={busy}>{serverKey ? "Доверять и создать" : "Создать команду"}</Button>
+          <Button type="button" variant="ghost" onClick={() => setStep("details")}>{t.common.back}</Button>
+          <Button type="submit" variant="primary" disabled={!confirmed} loading={busy}>{serverKey ? t.teams.create.trustAndCreate : t.teams.create.create}</Button>
         </>
       }
     >
-      <div className="modal-text">Без него не восстановить команду, если владельцы потеряют устройства.</div>
+      <div className="modal-text">{t.teams.create.recoveryHint}</div>
       <div className="recovery-box mono">{recovery}</div>
       <div className="row-buttons">
-        <Button type="button" icon={Copy} onClick={async () => { if (await copyText(recovery)) { toast({ text: "Ключ скопирован", tone: "success" }); } }}>Копировать</Button>
+        <Button type="button" icon={Copy} onClick={async () => { if (await copyText(recovery)) { toast({ text: t.teams.create.keyCopied, tone: "success" }); } }}>{t.common.copy}</Button>
         <Button
           type="button"
           icon={Download}
           onClick={async () => {
             const where = await api.saveTextFile(`detour-recovery-${name.trim().toLowerCase().replace(/\s+/g, "-") || "team"}.txt`, `${name.trim()}\n${recovery}\n`);
-            if (where) toast({ text: `Сохранено: ${where}`, tone: "success" });
+            if (where) toast({ text: t.teams.create.saved(where), tone: "success" });
           }}
         >
-          Сохранить в файл
+          {t.teams.create.saveToFile}
         </Button>
       </div>
-      <Field label="Последние 4 символа ключа" error={confirm.length >= 4 && !confirmed ? "Не совпадает" : error}>
+      <Field label={t.teams.create.lastFour} error={confirm.length >= 4 && !confirmed ? t.teams.create.mismatch : error}>
         <input className={`input mono confirm-input ${confirm.length >= 4 && !confirmed ? "invalid" : ""}`} value={confirm} onChange={(e) => setConfirm(e.target.value.slice(0, 4))} placeholder="••••" autoComplete="off" spellCheck={false} />
       </Field>
       {serverKey && <ServerKeyCard url={storage.url} fingerprint={serverKey} />}
@@ -265,6 +271,7 @@ export function CreateTeamDialog({ onClose, onDone }: { onClose: () => void; onD
 /* ---------- join (or recover) ---------- */
 
 export function JoinTeamDialog({ onClose, onDone }: { onClose: () => void; onDone?: () => void }) {
+  const t = useT();
   const { setVault, toast, applyTeamView } = useStore();
   const me = useMyId();
   const [mode, setMode] = useState<"join" | "recover">("join");
@@ -289,14 +296,14 @@ export function JoinTeamDialog({ onClose, onDone }: { onClose: () => void; onDon
     applyTeamView(view);
     setVault(view.id);
     onDone?.();
-    toast({ text: view.joined ? `Команда «${view.name}» подключена` : "Хранилище подключено. Ждём, пока админ добавит ваш Detour ID", tone: "success" });
+    toast({ text: view.joined ? t.teams.join.joined(view.name) : t.teams.join.waiting, tone: "success" });
     onClose();
   };
 
   const submit = async () => {
     if (busy || !storageReady(storage)) return;
     if (!api.real) {
-      toast({ text: "Подключение работает в приложении Detour", tone: "error" });
+      toast({ text: t.teams.join.appOnly, tone: "error" });
       return;
     }
     setBusy(true);
@@ -328,12 +335,12 @@ export function JoinTeamDialog({ onClose, onDone }: { onClose: () => void; onDon
       setBusy(false);
       const fp = unknownServerKey(e);
       if (fp) setServerKey(fp);
-      else setError(isCoreError(e) && e.kind === "io" ? (storage.kind === "git" ? "Нет связи с репозиторием" : "Папка недоступна") : errorText(e));
+      else setError(isCoreError(e) && e.kind === "io" ? (storage.kind === "git" ? t.teams.remote.unreachable : t.teams.page.folderUnavailable) : errorText(e));
     }
   };
 
-  const title = mode === "recover" ? "Восстановить доступ" : "Подключить команду";
-  const action = serverKey ? "Доверять серверу" : mode === "recover" ? "Восстановить" : info ? "Доверять и подключить" : "Далее";
+  const title = mode === "recover" ? t.teams.join.recoverTitle : t.teams.join.joinTitle;
+  const action = serverKey ? t.teams.join.trustServer : mode === "recover" ? t.teams.join.recover : info ? t.teams.join.trustAndJoin : t.common.next;
 
   return (
     <Modal
@@ -344,14 +351,14 @@ export function JoinTeamDialog({ onClose, onDone }: { onClose: () => void; onDon
       footer={
         <>
           <Button type="button" variant="ghost" className="footer-left" onClick={() => { setMode(mode === "join" ? "recover" : "join"); setInfo(null); setClone(null); setError(null); }}>
-            {mode === "join" ? "У меня ключ восстановления" : "Обычное подключение"}
+            {mode === "join" ? t.teams.join.haveRecoveryKey : t.teams.join.normalJoin}
           </Button>
-          <Button type="button" variant="ghost" onClick={onClose}>Отмена</Button>
+          <Button type="button" variant="ghost" onClick={onClose}>{t.common.cancel}</Button>
           <Button type="submit" variant="primary" loading={busy} disabled={!storageReady(storage) || (mode === "recover" && !recoveryKey.trim())}>{action}</Button>
         </>
       }
     >
-      <StorageFields value={storage} set={setStorage} folderLabel="Папка с хранилищем команды" />
+      <StorageFields value={storage} set={setStorage} folderLabel={t.teams.join.folder} />
 
       {serverKey && <ServerKeyCard url={storage.url} fingerprint={serverKey} />}
 
@@ -359,19 +366,19 @@ export function JoinTeamDialog({ onClose, onDone }: { onClose: () => void; onDon
         <div className="trust-card">
           <ShieldCheck size={18} />
           <div>
-            <div className="strong">Создатель хранилища</div>
+            <div className="strong">{t.teams.join.creator}</div>
             <div className="fp mono">{info.rootFingerprint}</div>
-            <div className="muted small">Сверьте отпечаток с создателем команды</div>
+            <div className="muted small">{t.teams.join.checkCreator}</div>
           </div>
         </div>
       )}
 
       {mode === "recover" && (
         <>
-          <Field label="Ключ восстановления">
+          <Field label={t.teams.join.recoveryKey}>
             <textarea className="input mono textarea" rows={3} value={recoveryKey} onChange={(e) => setRecoveryKey(e.target.value)} placeholder="DETOUR-RECOVERY-…" spellCheck={false} />
           </Field>
-          <Field label="Ваше имя в команде">
+          <Field label={t.teams.join.myName}>
             <input className="input" value={myName} onChange={(e) => setMyName(e.target.value)} />
           </Field>
         </>
@@ -379,7 +386,7 @@ export function JoinTeamDialog({ onClose, onDone }: { onClose: () => void; onDon
 
       {error && <span className="field-error">{error}</span>}
       {mode === "join" && me && (
-        <div className="muted small">Ваш отпечаток: <span className="mono">{me.fingerprint}</span></div>
+        <div className="muted small">{t.teams.join.myFingerprint} <span className="mono">{me.fingerprint}</span></div>
       )}
     </Modal>
   );
@@ -388,6 +395,7 @@ export function JoinTeamDialog({ onClose, onDone }: { onClose: () => void; onDon
 /* ---------- add a member by Detour ID ---------- */
 
 export function AddMemberDialog({ vault, onClose }: { vault: Vault; onClose: () => void }) {
+  const t = useT();
   const { update, toast, applyTeamView } = useStore();
   const [detourId, setDetourId] = useState("");
   const [fingerprint, setFingerprint] = useState<string | null>(null);
@@ -403,19 +411,19 @@ export function AddMemberDialog({ vault, onClose }: { vault: Vault; onClose: () 
     setIdError(null);
     const id = detourId.trim();
     if (!id) return;
-    const t = setTimeout(async () => {
+    const timer = setTimeout(async () => {
       if (!api.real) {
         if (/^detour1[a-z2-7]{100,}$/i.test(id)) setFingerprint(`${demoGroup()}-${demoGroup()}-${demoGroup()}-${demoGroup()}`);
-        else setIdError("Неверный Detour ID");
+        else setIdError(tr().common.errors.invalidId);
         return;
       }
       try {
         setFingerprint(await api.idInspect(id));
       } catch {
-        setIdError("Неверный Detour ID");
+        setIdError(tr().common.errors.invalidId);
       }
     }, 250);
-    return () => clearTimeout(t);
+    return () => clearTimeout(timer);
   }, [detourId]);
 
   const valid = !!fingerprint && name.trim().length > 0;
@@ -431,62 +439,57 @@ export function AddMemberDialog({ vault, onClose }: { vault: Vault; onClose: () 
         update((w) => ({
           ...w,
           members: [...w.members, { id: uid("m"), vaultId: vault.id, name: name.trim(), role, recovery: false, fingerprint: fingerprint!, isYou: false }],
-          activity: [...w.activity, { vaultId: vault.id, authorName: "Вы", isYou: true, at: Date.now(), kind: "memberAdded", member: name.trim() }],
+          activity: [...w.activity, { vaultId: vault.id, authorName: t.common.you, isYou: true, at: Date.now(), kind: "memberAdded", member: name.trim() }],
         }));
       }
-      toast({ text: `${name.trim()} добавлен в команду`, tone: "success" });
+      toast({ text: t.teams.activity.memberAdded(name.trim()), tone: "success" });
       onClose();
     } catch (e) {
       setBusy(false);
-      if (isCoreError(e) && e.kind === "alreadyMember") setIdError("Уже в команде");
+      if (isCoreError(e) && e.kind === "alreadyMember") setIdError(t.common.errors.alreadyMember);
       else toast({ text: errorText(e), tone: "error" });
     }
   };
 
   return (
     <Modal
-      title={`Добавить в «${vault.name}»`}
+      title={t.teams.add.title(vault.name)}
       width={500}
       onClose={onClose}
       onSubmit={submit}
       footer={
         <>
-          <Button type="button" variant="ghost" onClick={onClose}>Отмена</Button>
-          <Button type="submit" variant="primary" disabled={!valid} loading={busy}>Добавить</Button>
+          <Button type="button" variant="ghost" onClick={onClose}>{t.common.cancel}</Button>
+          <Button type="submit" variant="primary" disabled={!valid} loading={busy}>{t.common.add}</Button>
         </>
       }
     >
-      <Field label="Detour ID участника" error={idError}>
+      <Field label={t.teams.add.detourId} error={idError}>
         <textarea className={`input mono textarea id-input ${idError ? "invalid" : ""}`} rows={3} value={detourId} onChange={(e) => setDetourId(e.target.value)} placeholder="detour1…" spellCheck={false} autoFocus />
       </Field>
       {fingerprint && (
         <div className="fp-row">
-          <span className="muted small">Отпечаток</span>
+          <span className="muted small">{t.teams.add.fingerprint}</span>
           <span className="fp mono">{fingerprint}</span>
         </div>
       )}
       <div className="row">
-        <Field label="Имя">
+        <Field label={t.teams.add.name}>
           <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Anna" />
         </Field>
-        <Field label="Роль">
+        <Field label={t.teams.add.role}>
           <select className="input" value={role} onChange={(e) => setRole(e.target.value as Role)}>
-            {iAmOwner && <option value="owner">Владелец</option>}
-            {iAmOwner && <option value="admin">Админ</option>}
-            <option value="member">Участник</option>
+            {iAmOwner && <option value="owner">{t.common.role.owner}</option>}
+            {iAmOwner && <option value="admin">{t.common.role.admin}</option>}
+            <option value="member">{t.common.role.member}</option>
           </select>
         </Field>
       </div>
-      <Field label="Доступ ко всем записям">
+      <Field label={t.teams.add.access}>
         <Segmented
           value={access}
           onChange={setAccess}
-          options={[
-            { value: "none", label: "Нет" },
-            { value: "view", label: "Видит" },
-            { value: "secret", label: "Секрет" },
-            { value: "edit", label: "Изменяет" },
-          ]}
+          options={(["none", "view", "secret", "edit"] as const).map((l) => ({ value: l, label: t.teams.level[l] }))}
         />
       </Field>
     </Modal>
@@ -494,7 +497,8 @@ export function AddMemberDialog({ vault, onClose }: { vault: Vault; onClose: () 
 }
 
 export function CopyIdButton() {
+  const t = useT();
   const { toast } = useStore();
   const me = useMyId();
-  return <IconButton icon={KeyRound} label="Копировать мой Detour ID" onClick={async () => { if (me && (await copyText(me.detourId))) toast({ text: "Detour ID скопирован", tone: "success" }); }} />;
+  return <IconButton icon={KeyRound} label={t.teams.copyMyId} onClick={async () => { if (me && (await copyText(me.detourId))) toast({ text: t.teams.page.idCopied, tone: "success" }); }} />;
 }

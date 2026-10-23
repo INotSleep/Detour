@@ -1,6 +1,7 @@
 // Simulated SSH session: a tiny line-editing shell on top of xterm.js.
 // Replaced by a real russh channel from detour-core later.
 
+import { tr } from "../i18n";
 import type { Terminal } from "@xterm/xterm";
 import type { Host } from "./types";
 
@@ -99,8 +100,8 @@ export function runFakeSession(term: Terminal, host: Host, { initialCommand, sec
     await sleep(host.online !== false ? 700 : 1600);
     if (disposed) return;
     if (host.online === false) {
-      println(`${C.red}Не удалось подключиться: ${host.address}:${host.port} не отвечает${C.reset}`);
-      println(`${C.dim}Enter: повторить${C.reset}`);
+      println(`${C.red}${tr().demo.connectFailed(`${host.address}:${host.port}`)}${C.reset}`);
+      println(`${C.dim}${tr().demo.enterRetry}${C.reset}`);
       mode = "failed";
       onStatus("failed");
       return;
@@ -128,12 +129,12 @@ export function runFakeSession(term: Terminal, host: Host, { initialCommand, sec
     if (!value) {
       attemptsLeft -= 1;
       if (attemptsLeft > 0) {
-        println(secret!.kind === "password" ? "Permission denied, please try again." : "Неверный пароль ключа.");
+        println(secret!.kind === "password" ? "Permission denied, please try again." : `${tr().common.errors.wrongPassphrase}.`);
         println(secret!.prompt);
         return;
       }
       println(`${C.red}${host.user}@${host.address}: Permission denied${C.reset}`);
-      println(`${C.dim}Enter: повторить${C.reset}`);
+      println(`${C.dim}${tr().demo.enterRetry}${C.reset}`);
       mode = "failed";
       onStatus("failed");
       return;
@@ -168,7 +169,7 @@ export function runFakeSession(term: Terminal, host: Host, { initialCommand, sec
         else if (ch === "\x7f") secretBuf = secretBuf.slice(0, -1);
         else if (ch === "\x03") {
           term.write("^C");
-          println(`${C.dim}Enter: повторить${C.reset}`);
+          println(`${C.dim}${tr().demo.enterRetry}${C.reset}`);
           mode = "failed";
           onStatus("failed");
           return;

@@ -4,6 +4,7 @@
 // (vite dev) everything is demo data, so the UI can be developed without the
 // Rust side.
 
+import { tr } from "../i18n";
 import { Channel, invoke, isTauri } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
@@ -54,63 +55,65 @@ export const trustMore = (trusted: string | null | undefined, fingerprint: strin
 /** Human text for an error, for toasts and inline messages. */
 export function errorText(e: unknown): string {
   if (!isCoreError(e)) return e instanceof Error ? e.message : String(e);
+  const t = tr().common.errors;
   switch (e.kind) {
-    case "locked": return "Vault заблокирован";
-    case "alreadyInitialized": return "Vault уже создан";
-    case "notInitialized": return "Vault ещё не создан";
-    case "wrongMasterPassword": return "Неверный мастер-пароль";
-    case "notFound": return `Не найдено: ${e.what}`;
+    case "locked": return t.locked;
+    case "alreadyInitialized": return t.alreadyInitialized;
+    case "notInitialized": return t.notInitialized;
+    case "wrongMasterPassword": return t.wrongMasterPassword;
+    case "notFound": return t.notFound(e.what);
     case "invalidKey": return keyReason(e.reason);
-    case "passphraseRequired": return "Ключ защищён паролем";
-    case "wrongPassphrase": return "Неверный пароль ключа";
+    case "passphraseRequired": return t.passphraseRequired;
+    case "wrongPassphrase": return t.wrongPassphrase;
     case "needSecret": return e.prompt;
-    case "authFailed": return e.secret === "password" ? "Неверный пароль" : e.secret === "passphrase" ? "Неверный пароль ключа" : "Сервер не принял ключ";
-    case "hostKeyUnknown": return "Неизвестный ключ хоста";
-    case "hostKeyChanged": return "Ключ хоста изменился";
-    case "unreachable": return `${e.endpoint} не отвечает`;
-    case "agentUnavailable": return "ssh-agent не запущен";
-    case "invalidId": return e.reason.includes("recovery") ? "Неверный ключ восстановления" : "Неверный Detour ID";
-    case "forbidden": return "Недостаточно прав";
-    case "notATeamVault": return "В этой папке нет хранилища команды";
-    case "folderNotEmpty": return "Папка не пустая";
-    case "rootChanged": return "Создатель хранилища изменился";
-    case "alreadyMember": return "Уже в команде";
-    case "notASyncVault": return "Здесь нет синхронизированного vault";
-    case "invalidCode": return "Неверный код";
-    case "codeExpired": return "Код истёк, создайте новый на другом устройстве";
-    case "syncHasTeams": return "На этом устройстве есть команды: сначала выйдите из них";
-    case "unavailable": return `Хранилище недоступно: ${e.path}`;
+    case "authFailed": return e.secret === "password" ? t.wrongPassword : e.secret === "passphrase" ? t.wrongPassphrase : t.keyRejected;
+    case "hostKeyUnknown": return t.hostKeyUnknown;
+    case "hostKeyChanged": return t.hostKeyChanged;
+    case "unreachable": return t.unreachable(e.endpoint);
+    case "agentUnavailable": return t.agentUnavailable;
+    case "invalidId": return e.reason.includes("recovery") ? t.invalidRecoveryKey : t.invalidId;
+    case "forbidden": return t.forbidden;
+    case "notATeamVault": return t.notATeamVault;
+    case "folderNotEmpty": return t.folderNotEmpty;
+    case "rootChanged": return t.rootChanged;
+    case "alreadyMember": return t.alreadyMember;
+    case "notASyncVault": return t.notASyncVault;
+    case "invalidCode": return t.invalidCode;
+    case "codeExpired": return t.codeExpired;
+    case "syncHasTeams": return t.syncHasTeams;
+    case "unavailable": return t.unavailable(e.path);
     case "git": return gitReason(e.message);
-    case "portBusy": return `Порт ${e.port} занят другой программой`;
-    case "forwardRefused": return `Сервер не разрешает открыть порт ${e.port}`;
-    case "sftp": return e.message.endsWith("already exists") ? "Уже есть файл с таким именем" : e.message;
-    case "cancelled": return "Отменено";
-    case "jumpNeedsLogin": return "Для промежуточного хоста нужен сохранённый пароль";
-    case "jumpLoop": return "Хосты подключаются друг через друга по кругу";
-    case "proxy":
-      return { unreachable: "Прокси не отвечает", auth: "Прокси не принял логин", refused: "Прокси не смог подключиться к хосту", protocol: "Прокси ответил непонятно" }[e.reason];
-    case "connect": return e.message === "connection lost" ? "Соединение с сервером потеряно" : e.message;
+    case "portBusy": return t.portBusy(e.port);
+    case "forwardRefused": return t.forwardRefused(e.port);
+    case "sftp": return e.message.endsWith("already exists") ? t.fileExists : e.message;
+    case "cancelled": return t.cancelled;
+    case "jumpNeedsLogin": return t.jumpNeedsLogin;
+    case "jumpLoop": return t.jumpLoop;
+    case "proxy": return t.proxy[e.reason];
+    case "connect": return e.message === "connection lost" ? t.connectionLost : e.message;
     default: return e.message;
   }
 }
 
 function gitReason(message: string) {
-  if (message.includes("repository address")) return "Неверный адрес репозитория";
-  if (message.includes("key or ssh-agent")) return "Выберите ключ или ssh-agent";
-  if (message.includes("keeps changing")) return "Репозиторий всё время меняется, повторите позже";
-  if (message.includes("token rejected")) return "Репозиторий не принял токен";
-  if (message.includes("use https")) return "Токен передаётся только по https";
-  if (message.includes("not a smart Git server")) return "По этому адресу нет Git-репозитория";
-  if (message.includes("repository not found")) return "Репозиторий не найден";
-  if (message.includes("unsafe")) return "В репозитории посторонние файлы";
-  if (/not found|does not appear|not a git repository/i.test(message)) return "Репозиторий не найден";
-  return `Репозиторий: ${message}`;
+  const t = tr().common.errors.git;
+  if (message.includes("repository address")) return t.badAddress;
+  if (message.includes("key or ssh-agent")) return t.needKey;
+  if (message.includes("keeps changing")) return t.keepsChanging;
+  if (message.includes("token rejected")) return t.tokenRejected;
+  if (message.includes("use https")) return t.httpsOnly;
+  if (message.includes("not a smart Git server")) return t.notGit;
+  if (message.includes("repository not found")) return t.notFound;
+  if (message.includes("unsafe")) return t.unsafe;
+  if (/not found|does not appear|not a git repository/i.test(message)) return t.notFound;
+  return t.other(message);
 }
 
 function keyReason(reason: string) {
-  if (reason.startsWith("this is a public key")) return "Это публичный ключ, нужен приватный";
-  if (reason.startsWith("PuTTY")) return "Формат PuTTY: экспортируйте ключ в OpenSSH";
-  return "Не похоже на приватный ключ";
+  const t = tr().common.errors.key;
+  if (reason.startsWith("this is a public key")) return t.public;
+  if (reason.startsWith("PuTTY")) return t.putty;
+  return t.notKey;
 }
 
 /* ---------- shapes exchanged with detour-core ---------- */
@@ -694,7 +697,7 @@ export const api = {
       const r = await open({ directory: true, multiple: false });
       return typeof r === "string" ? r : null;
     }
-    return "Загрузки";
+    return tr().demo.downloads;
   },
 
   /** Files dragged onto the window from the system, in the app. Returns how to stop listening. */

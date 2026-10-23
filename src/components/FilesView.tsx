@@ -3,7 +3,8 @@ import {
   ArrowDown, ArrowUp, Check, ChevronDown, ChevronUp, Copy, Download, Ellipsis, File, FolderOpen, FolderPlus, FolderUp, Folder, House, KeyRound, Link2, Loader2, Pencil, RotateCw, ShieldAlert, ShieldQuestion, SquareTerminal, Trash2, Upload, X,
 } from "lucide-react";
 import { api, errorText, isCoreError, trustMore, type FileEntry, type LocalFile, type SecretKind } from "../lib/api";
-import { copyText, plural, uid, useStore } from "../lib/store";
+import { copyText, uid, useStore } from "../lib/store";
+import { locale, tr, useT } from "../i18n";
 import type { Host } from "../lib/types";
 import type { SessionStatus } from "../lib/fakeShell";
 import { Button, Checkbox, ConfirmDialog, Field, IconButton, Menu, Modal, PasswordInput } from "./ui";
@@ -47,9 +48,9 @@ function parentOf(path: string) {
   return i <= 0 ? "/" : path.slice(0, i);
 }
 
-/** "812 Б", "8,4 МБ", "177 МБ", "1,2 ГБ". */
+/** "812 B", "8.4 MB", "177 MB", "1.2 GB". */
 export function formatBytes(n: number) {
-  const units = ["Б", "КБ", "МБ", "ГБ", "ТБ"];
+  const units = tr().files.units;
   let i = 0;
   let v = n;
   while (v >= 1024 && i < units.length - 1) {
@@ -57,17 +58,18 @@ export function formatBytes(n: number) {
     i++;
   }
   const digits = i === 0 || v >= 100 ? 0 : 1;
-  return `${v.toLocaleString("ru-RU", { maximumFractionDigits: digits, minimumFractionDigits: digits })} ${units[i]}`;
+  return `${v.toLocaleString(locale(), { maximumFractionDigits: digits, minimumFractionDigits: digits })} ${units[i]}`;
 }
 
-/** "14:32" today, "21 окт 14:32" this year, "21 окт 2024" before. */
+/** "14:32" today, "Oct 21 14:32" this year, "Oct 21, 2024" before. */
 function formatModified(ms: number | null) {
   if (!ms) return "";
   const d = new Date(ms);
   const now = new Date();
-  const time = d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+  const time = d.toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit" });
   if (d.toDateString() === now.toDateString()) return time;
-  const date = d.toLocaleDateString("ru-RU", { day: "numeric", month: "short", ...(d.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }) }).replace(".", "").replace(" г", "");
+  // Russian adds a dot after the month and a suffix after the year: both go.
+  const date = d.toLocaleDateString(locale(), { day: "numeric", month: "short", ...(d.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }) }).replace(".", "").replace(" \u0433", "");
   return d.getFullYear() === now.getFullYear() ? `${date} ${time}` : date;
 }
 
@@ -83,7 +85,7 @@ function sortEntries(list: FileEntry[], by: SortBy, desc: boolean) {
   return [...list].sort((a, b) => {
     const dirs = Number(b.kind === "dir") - Number(a.kind === "dir");
     if (dirs) return dirs;
-    const k = by === "name" ? a.name.localeCompare(b.name, "ru", { numeric: true, sensitivity: "base" }) : key(a) - key(b) || a.name.localeCompare(b.name, "ru", { numeric: true });
+    const k = by === "name" ? a.name.localeCompare(b.name, locale(), { numeric: true, sensitivity: "base" }) : key(a) - key(b) || a.name.localeCompare(b.name, locale(), { numeric: true });
     return desc ? -k : k;
   });
 }
@@ -92,6 +94,7 @@ function sortEntries(list: FileEntry[], by: SortBy, desc: boolean) {
 const cdTo = (path: string) => `cd '${path.replace(/'/g, `'\\''`)}'`;
 
 export function FilesView({ host, active, onStatus, onClose }: Props) {
+  const t = useT();
   const { update, toast, applyTeamView, connect: openTerminal } = useStore();
   const [phase, setPhase] = useState<Phase>({ kind: "connecting" });
   const [path, setPath] = useState("");
@@ -371,7 +374,7 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
         toast({ text: `${e.name}: ${errorText(err)}`, tone: "error" });
       }
     }
-    if (gone) toast({ text: items.length === 1 ? `«${items[0]!.name}» удалён` : `Удалено: ${gone}`, tone: "success" });
+    if (gone) toast({ text: items.length === 1 ? tr().files.removedOne(items[0]!.name) : tr().files.removedMany(gone), tone: "success" });
     const left = sorted.filter((x) => !items.some((i) => i.name === x.name));
     void refresh(left[Math.min(Math.max(idx, 0), left.length - 1)]?.name ?? null);
   };
@@ -380,7 +383,7 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
     if (!conn) return;
     try {
       await api.filesChmod(conn.id, join(path, e.name), mode);
-      toast({ text: `Права «${e.name}»: ${formatMode(mode)}`, tone: "success" });
+      toast({ text: tr().files.modeSet(e.name, formatMode(mode)), tone: "success" });
       void refresh(e.name);
     } catch (err) {
       toast({ text: errorText(err), tone: "error" });
@@ -389,7 +392,7 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
 
   const copyPath = async (e: FileEntry) => {
     const p = join(path, e.name);
-    toast((await copyText(p)) ? { text: `Скопировано: ${p}`, tone: "success" } : { text: "Не удалось скопировать", tone: "error" });
+    toast((await copyText(p)) ? { text: tr().files.pathCopied(p), tone: "success" } : { text: tr().common.copyFailed, tone: "error" });
   };
 
   /* ---------- keyboard ---------- */
@@ -460,8 +463,8 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
       }}
     >
       <div className="files-bar">
-        <IconButton icon={ArrowUp} label="Вверх · Backspace" disabled={path === "/"} onClick={() => void up()} />
-        <IconButton icon={House} label="Домашняя папка" disabled={path === conn.home} onClick={() => void go(conn.home)} />
+        <IconButton icon={ArrowUp} label={t.files.bar.up} disabled={path === "/"} onClick={() => void up()} />
+        <IconButton icon={House} label={t.files.bar.home} disabled={path === conn.home} onClick={() => void go(conn.home)} />
         {editingPath !== null ? (
           <input
             className="input mono files-path-input"
@@ -487,36 +490,36 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
           <Crumbs path={path} onGo={(p) => void go(p)} onEdit={() => setEditingPath(path)} />
         )}
         {loading && <Loader2 size={14} className="spin muted" />}
-        <IconButton icon={RotateCw} label="Обновить · F5" onClick={() => void refresh()} />
-        <IconButton icon={SquareTerminal} label="Терминал в этой папке" onClick={() => openTerminal(host.id, cdTo(path))} />
-        <Button size="sm" icon={FolderPlus} onClick={() => setCreating(true)}>Папка</Button>
-        {api.real && <IconButton icon={FolderUp} label="Загрузить папку" onClick={() => void pickFolders()} />}
-        <Button size="sm" variant="primary" icon={Upload} onClick={() => void pickUploads()}>Загрузить</Button>
+        <IconButton icon={RotateCw} label={t.files.bar.refresh} onClick={() => void refresh()} />
+        <IconButton icon={SquareTerminal} label={t.files.bar.terminalHere} onClick={() => openTerminal(host.id, cdTo(path))} />
+        <Button size="sm" icon={FolderPlus} onClick={() => setCreating(true)}>{t.files.bar.newFolder}</Button>
+        {api.real && <IconButton icon={FolderUp} label={t.files.bar.uploadFolder} onClick={() => void pickFolders()} />}
+        <Button size="sm" variant="primary" icon={Upload} onClick={() => void pickUploads()}>{t.files.bar.upload}</Button>
       </div>
 
       {picked.length > 1 && (
         <div className="files-selbar">
-          <span>Выбрано: {picked.length}</span>
-          <Button size="sm" icon={Download} onClick={() => void download(picked)}>Скачать</Button>
-          <Button size="sm" variant="ghost" icon={Trash2} className="danger-text" onClick={() => setRemoving(picked)}>Удалить</Button>
+          <span>{t.files.selected(picked.length)}</span>
+          <Button size="sm" icon={Download} onClick={() => void download(picked)}>{t.files.download}</Button>
+          <Button size="sm" variant="ghost" icon={Trash2} className="danger-text" onClick={() => setRemoving(picked)}>{t.common.delete}</Button>
           <span className="grow" />
-          <IconButton icon={X} label="Снять выделение · Esc" onClick={() => selectOnly(cursor)} />
+          <IconButton icon={X} label={t.files.clearSelection} onClick={() => selectOnly(cursor)} />
         </div>
       )}
 
       <div className="files-list" ref={listRef} tabIndex={0} onKeyDown={onListKey} role="grid" aria-label={path} aria-multiselectable>
         <div className="files-row files-head" role="row">
           <span />
-          <button className="files-sort" onClick={() => toggleSort("name")}>Имя <SortMark by="name" /></button>
-          <button className="files-sort files-size" onClick={() => toggleSort("size")}><SortMark by="size" /> Размер</button>
-          <button className="files-sort" onClick={() => toggleSort("modified")}>Изменён <SortMark by="modified" /></button>
-          <span>Права</span>
+          <button className="files-sort" onClick={() => toggleSort("name")}>{t.files.columns.name} <SortMark by="name" /></button>
+          <button className="files-sort files-size" onClick={() => toggleSort("size")}><SortMark by="size" /> {t.files.columns.size}</button>
+          <button className="files-sort" onClick={() => toggleSort("modified")}>{t.files.columns.modified} <SortMark by="modified" /></button>
+          <span>{t.files.columns.permissions}</span>
           <span />
         </div>
         {creating && (
           <div className="files-row selected" role="row">
             <Folder size={15} className="files-icon dir" />
-            <NameInput initial="Новая папка" onDone={(v) => void mkdir(v ?? "")} />
+            <NameInput initial={t.files.newFolderName} onDone={(v) => void mkdir(v ?? "")} />
             <span />
             <span />
             <span />
@@ -546,17 +549,17 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
               <span className="files-date">{formatModified(e.modified)}</span>
               <span className="files-mode mono">{formatMode(e.permissions)}</span>
               <span className="row-actions">
-                <IconButton icon={Download} label="Скачать" onClick={(ev) => (ev.stopPropagation(), void download([e]))} />
+                <IconButton icon={Download} label={t.files.download} onClick={(ev) => (ev.stopPropagation(), void download([e]))} />
                 <Menu
-                  trigger={(toggle, isOpen) => <IconButton icon={Ellipsis} label="Ещё" className={isOpen ? "pressed" : ""} onClick={toggle} />}
+                  trigger={(toggle, isOpen) => <IconButton icon={Ellipsis} label={t.files.more} className={isOpen ? "pressed" : ""} onClick={toggle} />}
                   items={[
-                    ...(e.kind === "dir" ? [{ label: "Открыть", icon: FolderOpen, onSelect: () => void enter(e) }] : []),
-                    { label: "Скачать", icon: Download, onSelect: () => void download([e]) },
-                    { label: "Копировать путь", icon: Copy, onSelect: () => void copyPath(e) },
-                    ...(e.kind === "dir" ? [{ label: "Терминал в этой папке", icon: SquareTerminal, onSelect: () => openTerminal(host.id, cdTo(join(path, e.name))) }] : []),
-                    { label: "Права доступа", icon: KeyRound, onSelect: () => setChmodding(e) },
-                    { label: "Переименовать", icon: Pencil, hint: "F2", onSelect: () => setRenaming(e.name) },
-                    { label: "Удалить", icon: Trash2, danger: true, hint: "Del", onSelect: () => setRemoving([e]) },
+                    ...(e.kind === "dir" ? [{ label: t.files.menu.open, icon: FolderOpen, onSelect: () => void enter(e) }] : []),
+                    { label: t.files.download, icon: Download, onSelect: () => void download([e]) },
+                    { label: t.files.menu.copyPath, icon: Copy, onSelect: () => void copyPath(e) },
+                    ...(e.kind === "dir" ? [{ label: t.files.bar.terminalHere, icon: SquareTerminal, onSelect: () => openTerminal(host.id, cdTo(join(path, e.name))) }] : []),
+                    { label: t.files.menu.permissions, icon: KeyRound, onSelect: () => setChmodding(e) },
+                    { label: t.common.rename, icon: Pencil, hint: "F2", onSelect: () => setRenaming(e.name) },
+                    { label: t.common.delete, icon: Trash2, danger: true, hint: "Del", onSelect: () => setRemoving([e]) },
                   ]}
                 />
               </span>
@@ -565,8 +568,8 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
         })}
         {sorted.length === 0 && !creating && (
           <div className="files-empty">
-            <span>Папка пуста</span>
-            <Button size="sm" icon={Upload} onClick={() => void pickUploads()}>Загрузить файлы</Button>
+            <span>{t.files.empty}</span>
+            <Button size="sm" icon={Upload} onClick={() => void pickUploads()}>{t.files.uploadFiles}</Button>
           </div>
         )}
       </div>
@@ -582,15 +585,15 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
       {dragOver && (
         <div className="files-drop">
           <Upload size={22} />
-          <span>Загрузить в {where}</span>
+          <span>{t.files.dropTo(where ?? "/")}</span>
         </div>
       )}
 
       {removing && (
         <ConfirmDialog
-          title={removing.length === 1 ? `Удалить «${removing[0]!.name}»?` : `Удалить ${removing.length} ${plural(removing.length, "элемент", "элемента", "элементов")}?`}
-          body={removing.some((e) => e.kind === "dir") ? "Папки вместе со всем содержимым" : undefined}
-          confirm="Удалить"
+          title={removing.length === 1 ? t.files.confirm.removeOne(removing[0]!.name) : t.files.confirm.removeMany(removing.length)}
+          body={removing.some((e) => e.kind === "dir") ? t.files.confirm.withContents : undefined}
+          confirm={t.common.delete}
           onConfirm={() => void remove(removing)}
           onClose={() => {
             setRemoving(null);
@@ -600,8 +603,8 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
       )}
       {replacing && (
         <ConfirmDialog
-          title={replacing.existing.length === 1 ? `Заменить «${replacing.existing[0]}»?` : `Заменить ${replacing.existing.length} ${plural(replacing.existing.length, "элемент", "элемента", "элементов")}?`}
-          confirm="Заменить"
+          title={replacing.existing.length === 1 ? t.files.confirm.replaceOne(replacing.existing[0]!) : t.files.confirm.replaceMany(replacing.existing.length)}
+          confirm={t.files.confirm.replace}
           onConfirm={() => upload(replacing.items, true)}
           onClose={() => {
             setReplacing(null);
@@ -625,19 +628,21 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
 
 /* ---------- pieces ---------- */
 
-const WHO = [
-  { label: "Владелец", shift: 6 },
-  { label: "Группа", shift: 3 },
-  { label: "Остальные", shift: 0 },
-];
-const WHAT = [
-  { label: "Чтение", bit: 4 },
-  { label: "Запись", bit: 2 },
-  { label: "Выполнение", bit: 1 },
-];
 
 /** Unix permission bits as checkboxes and as a number, kept in step. */
 function PermissionsDialog({ entry, onClose, onSave }: { entry: FileEntry; onClose: () => void; onSave: (mode: number) => void }) {
+  const t = useT();
+  const p = t.files.perms;
+  const WHO = [
+    { label: p.owner, shift: 6 },
+    { label: p.group, shift: 3 },
+    { label: p.others, shift: 0 },
+  ];
+  const WHAT = [
+    { label: p.read, bit: 4 },
+    { label: p.write, bit: 2 },
+    { label: p.execute, bit: 1 },
+  ];
   const [mode, setMode] = useState(entry.permissions ?? (entry.kind === "dir" ? 0o755 : 0o644));
   const [octal, setOctal] = useState((mode & 0o777).toString(8).padStart(3, "0"));
   const set = (m: number) => {
@@ -646,7 +651,7 @@ function PermissionsDialog({ entry, onClose, onSave }: { entry: FileEntry; onClo
   };
   return (
     <Modal
-      title={`Права «${entry.name}»`}
+      title={p.title(entry.name)}
       width={420}
       onClose={onClose}
       onSubmit={() => {
@@ -655,8 +660,8 @@ function PermissionsDialog({ entry, onClose, onSave }: { entry: FileEntry; onClo
       }}
       footer={
         <>
-          <Button type="button" variant="ghost" onClick={onClose}>Отмена</Button>
-          <Button type="submit" variant="primary">Сохранить</Button>
+          <Button type="button" variant="ghost" onClick={onClose}>{t.common.cancel}</Button>
+          <Button type="submit" variant="primary">{t.common.save}</Button>
         </>
       }
     >
@@ -677,7 +682,7 @@ function PermissionsDialog({ entry, onClose, onSave }: { entry: FileEntry; onClo
           </Fragment>
         ))}
       </div>
-      <Field label="Числом">
+      <Field label={p.octal}>
         <input
           className="input mono perm-octal"
           value={octal}
@@ -748,9 +753,10 @@ function NameInput({ initial, onDone }: { initial: string; onDone: (v: string | 
 }
 
 function TransferRow({ t, onCancel, onDismiss }: { t: Transfer; onCancel: () => void; onDismiss: () => void }) {
+  const x = useT().files;
   const pct = t.total ? Math.round((t.done / t.total) * 100) : 0;
   const secs = (Date.now() - t.started) / 1000;
-  const speed = secs >= 1 && t.done ? ` · ${formatBytes(t.done / secs)}/с` : "";
+  const speed = secs >= 1 && t.done ? ` · ${formatBytes(t.done / secs)}${x.perSecond}` : "";
   return (
     <div className={`transfer ${t.state}`}>
       {t.state === "done" ? <Check size={14} className="ok-text" /> : t.up ? <ArrowUp size={14} /> : <ArrowDown size={14} />}
@@ -758,12 +764,12 @@ function TransferRow({ t, onCancel, onDismiss }: { t: Transfer; onCancel: () => 
       {t.state === "active" && (
         <>
           <span className="transfer-bar"><span style={{ width: `${pct}%` }} /></span>
-          <span className="transfer-amount">{t.total ? `${formatBytes(t.done)} из ${formatBytes(t.total)}${speed}` : ""}</span>
+          <span className="transfer-amount">{t.total ? `${x.transfer.amount(formatBytes(t.done), formatBytes(t.total))}${speed}` : ""}</span>
         </>
       )}
-      {t.state === "done" && <span className="transfer-amount ok-text">{t.up ? "Загружен" : "Скачан"}</span>}
+      {t.state === "done" && <span className="transfer-amount ok-text">{t.up ? x.transfer.uploaded : x.transfer.downloaded}</span>}
       {t.state === "error" && <span className="transfer-amount err-text">{t.error}</span>}
-      <IconButton icon={X} label={t.state === "active" ? "Отменить" : "Убрать"} tipSide="left" onClick={t.state === "active" ? onCancel : onDismiss} />
+      <IconButton icon={X} label={t.state === "active" ? x.transfer.cancel : x.transfer.dismiss} tipSide="left" onClick={t.state === "active" ? onCancel : onDismiss} />
     </div>
   );
 }
@@ -786,6 +792,8 @@ function Gate({
 }) {
   const [value, setValue] = useState("");
   const [remember, setRemember] = useState(true);
+  const t = useT();
+  const k = t.terminal.hostKey;
   const { toast, ws } = useStore();
   // A key on the way belongs to the jump host, not to this one.
   const keyHost = (phase.kind === "trust" || phase.kind === "changed") && phase.via ? ws.hosts.find((h) => h.id === phase.via) : undefined;
@@ -812,15 +820,15 @@ function Gate({
         </div>
         <div className="hostkey-host mono">{host.user}@{where}</div>
         <div className="hostkey-actions">
-          <Button variant="ghost" onClick={onClose}>Закрыть</Button>
-          <Button variant="primary" icon={RotateCw} autoFocus onClick={() => (phase.kind === "ready" ? retryList() : connect())}>Повторить</Button>
+          <Button variant="ghost" onClick={onClose}>{t.common.close}</Button>
+          <Button variant="primary" icon={RotateCw} autoFocus onClick={() => (phase.kind === "ready" ? retryList() : connect())}>{t.common.retry}</Button>
         </div>
       </div>
     );
   }
 
   if (phase.kind === "secret") {
-    const label = phase.secret === "passphrase" ? "Пароль ключа" : `Пароль ${host.user}@${host.address}`;
+    const label = phase.secret === "passphrase" ? t.files.gate.passphrase : t.files.gate.password(`${host.user}@${host.address}`);
     return (
       <form
         className="hostkey-card"
@@ -836,10 +844,10 @@ function Gate({
         <Field label={label} error={phase.error}>
           <PasswordInput value={value} onChange={setValue} invalid={!!phase.error} autoFocus />
         </Field>
-        <Checkbox checked={remember} onChange={setRemember}>Сохранить в vault</Checkbox>
+        <Checkbox checked={remember} onChange={setRemember}>{t.files.gate.remember}</Checkbox>
         <div className="hostkey-actions">
-          <Button type="button" variant="ghost" onClick={onClose}>Отмена</Button>
-          <Button type="submit" variant="primary" disabled={!value}>Подключиться</Button>
+          <Button type="button" variant="ghost" onClick={onClose}>{t.common.cancel}</Button>
+          <Button type="submit" variant="primary" disabled={!value}>{t.common.connect}</Button>
         </div>
       </form>
     );
@@ -856,16 +864,16 @@ function Gate({
       >
         <div className="hostkey-head">
           <ShieldQuestion size={20} />
-          <h2>Новый хост</h2>
+          <h2>{k.unknown}</h2>
         </div>
         <div className="hostkey-host mono">{keyWhere}</div>
         <dl className="hostkey-fp">
-          <dt>Отпечаток</dt>
+          <dt>{k.fingerprint}</dt>
           <dd className="mono">{phase.fingerprint}</dd>
         </dl>
         <div className="hostkey-actions">
-          <Button type="button" variant="ghost" onClick={onClose}>Отмена</Button>
-          <Button type="submit" variant="primary" autoFocus>Доверять и подключиться</Button>
+          <Button type="button" variant="ghost" onClick={onClose}>{t.common.cancel}</Button>
+          <Button type="submit" variant="primary" autoFocus>{k.trust}</Button>
         </div>
       </form>
     );
@@ -875,13 +883,13 @@ function Gate({
     <div className="hostkey-card danger">
       <div className="hostkey-head">
         <ShieldAlert size={20} />
-        <h2>Ключ хоста изменился</h2>
+        <h2>{k.changed}</h2>
       </div>
       <div className="hostkey-host mono">{keyWhere}</div>
       <dl className="hostkey-fp">
-        <dt>Был</dt>
+        <dt>{k.was}</dt>
         <dd className="mono">{phase.expected}</dd>
-        <dt>Сейчас</dt>
+        <dt>{k.now}</dt>
         <dd className="mono">{phase.actual}</dd>
       </dl>
       <div className="hostkey-actions">
@@ -897,9 +905,9 @@ function Gate({
             }
           }}
         >
-          Заменить ключ
+          {k.replace}
         </Button>
-        <Button variant="primary" autoFocus onClick={onClose}>Отменить</Button>
+        <Button variant="primary" autoFocus onClick={onClose}>{k.stop}</Button>
       </div>
     </div>
   );

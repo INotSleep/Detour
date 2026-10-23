@@ -1,5 +1,6 @@
 import { FolderSync, GitBranch, HardDrive, Server } from "lucide-react";
-import type { Host, Member, Role, SyncBackend, SyncStatus, Vault } from "../lib/types";
+import { tr } from "../i18n";
+import type { Host, Member, SyncBackend, Vault } from "../lib/types";
 
 const palette = ["#7a8cff", "#4cc38a", "#e5a54b", "#c08bff", "#ef6461", "#3fb7c9", "#e58bb8"];
 
@@ -56,21 +57,13 @@ export function syncTarget(sync: SyncBackend): string {
   return "";
 }
 
-export const syncStatusText: Record<SyncStatus, string> = {
-  synced: "Синхронизировано",
-  syncing: "Синхронизация…",
-  offline: "Хранилище недоступно",
-  conflict: "Конфликт",
-};
+/** Hosts saved without a group (earlier versions wrote the label itself). */
+export const isNoGroup = (group: string) => !group || group === "Без группы" || group === "No group";
 
-export const roleLabel: Record<Role, string> = {
-  owner: "Владелец",
-  admin: "Админ",
-  member: "Участник",
-};
+export const groupLabel = (group: string) => (isNoGroup(group) ? tr().hosts.form.noGroup : group);
 
 export function authLabel(host: Host, keyName?: string): string {
-  if (host.auth.type === "key") return keyName ?? "Ключ";
+  if (host.auth.type === "key") return keyName ?? tr().common.key;
   if (host.auth.type === "agent") return "ssh-agent";
-  return "Пароль";
+  return tr().common.password;
 }

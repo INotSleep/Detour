@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { ArrowRight, Check, FileWarning, Loader2 } from "lucide-react";
 import { api, errorText, type ImportHost, type ImportPreview } from "../lib/api";
-import { plural, uid, useStore } from "../lib/store";
+import { uid, useStore } from "../lib/store";
 import type { Host } from "../lib/types";
 import { Button, Checkbox, Empty, Modal } from "./ui";
+import { useT } from "../i18n";
 
 /** What a plain browser shows: a typical ~/.ssh/config. */
 const DEMO: ImportPreview = {
@@ -22,6 +23,7 @@ const DEMO: ImportPreview = {
 
 /** Hosts, keys and pinned server keys from ~/.ssh, into the personal vault. */
 export function ImportDialog({ onClose }: { onClose: () => void }) {
+  const t = useT();
   const { update, toast, refreshPersonal } = useStore();
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -59,16 +61,16 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
         const r = await api.sshImport([...chosen], known && preview.knownNew > 0);
         await refreshPersonal();
         hosts = r.hosts;
-        const parts = [`${r.hosts} ${plural(r.hosts, "хост", "хоста", "хостов")}`];
-        if (r.keys) parts.push(`${r.keys} ${plural(r.keys, "ключ", "ключа", "ключей")}`);
-        if (r.known) parts.push(`${r.known} ${plural(r.known, "ключ сервера", "ключа сервера", "ключей серверов")}`);
-        toast({ text: `Импортировано: ${parts.join(", ")}`, tone: "success" });
+        const parts = [t.common.hostCount(r.hosts)];
+        if (r.keys) parts.push(t.common.keyCount(r.keys));
+        if (r.known) parts.push(t.hosts.import.serverKeyCount(r.known));
+        toast({ text: t.hosts.import.imported(parts.join(", ")), tone: "success" });
       } else {
         const added: Host[] = preview.hosts
           .filter((h) => chosen.has(h.alias))
           .map((h) => ({ id: uid("h"), vaultId: "personal", group: "SSH config", label: h.alias, address: h.address, port: h.port, user: h.user, auth: { type: "agent" }, tags: [], hasPassword: false, os: "ubuntu", online: true }));
         update((w) => ({ ...w, hosts: [...w.hosts, ...added] }));
-        toast({ text: `Импортировано: ${hosts} ${plural(hosts, "хост", "хоста", "хостов")}`, tone: "success" });
+        toast({ text: t.hosts.import.imported(t.common.hostCount(hosts)), tone: "success" });
       }
       onClose();
     } catch (e) {
@@ -80,15 +82,15 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
   const count = chosen.size;
   return (
     <Modal
-      title="Импорт из ~/.ssh"
+      title={t.hosts.importSsh}
       width={600}
       onClose={onClose}
       onSubmit={submit}
       footer={
         <>
-          <Button type="button" variant="ghost" onClick={onClose}>Отмена</Button>
+          <Button type="button" variant="ghost" onClick={onClose}>{t.common.cancel}</Button>
           <Button type="submit" variant="primary" loading={busy} disabled={!preview || nothing}>
-            {count ? `Импортировать ${count} ${plural(count, "хост", "хоста", "хостов")}` : "Импортировать"}
+            {count ? t.hosts.import.importHosts(count) : t.hosts.import.import}
           </Button>
         </>
       }
@@ -99,12 +101,12 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
         </div>
       )}
       {error && <span className="field-error">{error}</span>}
-      {preview && !preview.configFound && preview.knownNew === 0 && <Empty icon={FileWarning} title={`Не найдено: ${preview.configPath}`} />}
+      {preview && !preview.configFound && preview.knownNew === 0 && <Empty icon={FileWarning} title={t.common.errors.notFound(preview.configPath)} />}
       {preview && preview.hosts.length > 0 && (
         <>
           <div className="import-head">
             <Checkbox checked={all} onChange={(on) => setChosen(new Set(on ? fresh.map((h) => h.alias) : []))}>
-              Хосты: {preview.hosts.length}
+              {t.hosts.import.hosts(preview.hosts.length)}
             </Checkbox>
           </div>
           <div className="import-list">
@@ -116,7 +118,7 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
       )}
       {preview && preview.knownNew > 0 && (
         <Checkbox checked={known} onChange={setKnown}>
-          Ключи серверов из known_hosts: {preview.knownNew}
+          {t.hosts.import.knownHosts(preview.knownNew)}
         </Checkbox>
       )}
     </Modal>
@@ -124,7 +126,8 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
 }
 
 function ImportRow({ h, checked, onChange }: { h: ImportHost; checked: boolean; onChange: (on: boolean) => void }) {
-  const note = h.exists ? "Уже есть" : h.unsupported ? "ProxyCommand не переносится" : h.keyMissing ? "Ключ не найден, вход через ssh-agent" : null;
+  const t = useT();
+  const note = h.exists ? t.hosts.import.exists : h.unsupported ? t.hosts.import.proxyCommand : h.keyMissing ? t.hosts.import.keyMissing : null;
   return (
     <label className={`checkbox import-row ${h.exists ? "done" : ""}`}>
       <input type="checkbox" checked={checked && !h.exists} disabled={h.exists} onChange={(e) => onChange(e.target.checked)} />
@@ -136,7 +139,7 @@ function ImportRow({ h, checked, onChange }: { h: ImportHost; checked: boolean; 
           {h.jumps.length > 0 && (
             <>
               {" "}
-              <ArrowRight size={11} /> через {h.jumps.join(", ")}
+              <ArrowRight size={11} /> {t.hosts.import.via(h.jumps.join(", "))}
             </>
           )}
         </span>
