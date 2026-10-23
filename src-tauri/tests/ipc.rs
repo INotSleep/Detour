@@ -24,7 +24,8 @@ impl Ui {
             cmd: cmd.into(),
             callback: tauri::ipc::CallbackFn(0),
             error: tauri::ipc::CallbackFn(1),
-            url: "http://tauri.localhost".parse().unwrap(),
+            // The app's own origin: http://tauri.localhost on Windows, tauri://localhost elsewhere.
+            url: if cfg!(windows) { "http://tauri.localhost" } else { "tauri://localhost" }.parse().unwrap(),
             body: tauri::ipc::InvokeBody::Json(args),
             headers: Default::default(),
             invoke_key: INVOKE_KEY.to_string(),
