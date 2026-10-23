@@ -1,6 +1,6 @@
 # Teams: design
 
-Status: format 2 (per-record access enforced by encryption, storage integrity checks), the folder and Git transports and personal vault sync are implemented in `crates/detour-core/src/team` and `personal.rs`; rotation on hosts, snapshots and SSH certificates are planned.
+Status: format 2 (per-record access enforced by encryption, storage integrity checks), the folder and Git transports and personal vault sync are implemented in `crates/detour-core/src/team` and `personal.rs`, as is reading only what is new with a per-device cache; rotation on hosts and SSH certificates are planned.
 
 ## Goals
 
