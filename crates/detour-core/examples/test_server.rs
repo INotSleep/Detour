@@ -21,6 +21,8 @@ struct Srv {
     line: String,
     /// Input of the `git` process this connection runs, if any.
     git: Option<Arc<tokio::sync::Mutex<tokio::process::ChildStdin>>>,
+    /// The channel the line shell runs on; data of other channels (tunnels) is not ours.
+    shell: Option<ChannelId>,
 }
 
 const PROMPT: &[u8] = b"\x1b[1;32mdemo@detour-test\x1b[0m:\x1b[1;34m~\x1b[0m$ ";
@@ -79,12 +81,55 @@ impl server::Handler for Srv {
         Ok(())
     }
 
+    /// `ssh -L` and `ssh -D`: connect where the client asks, from here.
+    async fn channel_open_direct_tcpip(
+        &mut self,
+        channel: Channel<Msg>,
+        host: &str,
+        port: u32,
+        _: &str,
+        _: u32,
+        reply: server::ChannelOpenHandle,
+        _: &mut Session,
+    ) -> Result<(), Self::Error> {
+        println!("direct-tcpip {host}:{port}");
+        match tokio::net::TcpStream::connect((host, port as u16)).await {
+            Ok(mut tcp) => {
+                reply.accept().await;
+                tokio::spawn(async move {
+                    let mut ch = channel.into_stream();
+                    let _ = tokio::io::copy_bidirectional(&mut ch, &mut tcp).await;
+                });
+            }
+            Err(_) => reply.reject(russh::ChannelOpenFailure::ConnectFailed).await,
+        }
+        Ok(())
+    }
+
+    /// `ssh -R`: listen on this machine's loopback and send connections to the client.
+    async fn tcpip_forward(&mut self, address: &str, port: &mut u32, session: &mut Session) -> Result<bool, Self::Error> {
+        println!("tcpip-forward {address}:{port}");
+        let Ok(listener) = tokio::net::TcpListener::bind(("127.0.0.1", *port as u16)).await else { return Ok(false) };
+        let (handle, address, port) = (session.handle(), address.to_string(), *port);
+        tokio::spawn(async move {
+            while let Ok((mut sock, from)) = listener.accept().await {
+                let Ok(ch) = handle.channel_open_forwarded_tcpip(address.clone(), port, from.ip().to_string(), from.port() as u32).await else { break };
+                tokio::spawn(async move {
+                    let mut ch = ch.into_stream();
+                    let _ = tokio::io::copy_bidirectional(&mut ch, &mut sock).await;
+                });
+            }
+        });
+        Ok(true)
+    }
+
     async fn channel_open_session(&mut self, _: Channel<Msg>, reply: server::ChannelOpenHandle, _: &mut Session) -> Result<(), Self::Error> {
         reply.accept().await;
         Ok(())
     }
 
     async fn shell_request(&mut self, channel: ChannelId, session: &mut Session) -> Result<(), Self::Error> {
+        self.shell = Some(channel);
         session.data(channel, b"Welcome to the Detour test server\r\n".to_vec())?;
         session.data(channel, PROMPT.to_vec())?;
         Ok(())
@@ -93,6 +138,9 @@ impl server::Handler for Srv {
     async fn data(&mut self, channel: ChannelId, data: &[u8], session: &mut Session) -> Result<(), Self::Error> {
         if let Some(git) = &self.git {
             let _ = git.lock().await.write_all(data).await;
+            return Ok(());
+        }
+        if self.shell != Some(channel) {
             return Ok(());
         }
         for &b in data {
@@ -137,5 +185,5 @@ async fn main() {
     println!("host key {}", key.public_key().fingerprint(Default::default()));
     println!("listening on 127.0.0.1:{port}, user demo / {password}");
     let config = Arc::new(server::Config { keys: vec![key], ..Default::default() });
-    Srv { password, line: String::new(), git: None }.run_on_address(config, ("127.0.0.1", port)).await.unwrap();
+    Srv { password, line: String::new(), git: None, shell: None }.run_on_address(config, ("127.0.0.1", port)).await.unwrap();
 }

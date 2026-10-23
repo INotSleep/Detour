@@ -436,6 +436,10 @@ impl TeamVault {
         self.records::<Host>(Coll::Host).into_iter().find(|h| h.id == id)
     }
 
+    pub fn tunnel(&self, id: &str) -> Option<Tunnel> {
+        self.records::<Tunnel>(Coll::Tunnel).into_iter().find(|t| t.id == id)
+    }
+
     /// A key; its private part is empty unless this member has Secret access to it.
     pub fn key(&self, id: &str) -> Option<KeyEntry> {
         self.records::<KeyEntry>(Coll::Key).into_iter().find(|k| k.id == id)

@@ -716,6 +716,14 @@ impl Store {
         }
     }
 
+    /// A tunnel of any vault and the host it goes through.
+    pub fn tunnel_in(&self, vault: &str, tunnel_id: &str) -> Result<Tunnel> {
+        if vault == PERSONAL {
+            return self.unlocked()?.vault.tunnels.iter().find(|t| t.id == tunnel_id).cloned().ok_or_else(|| not_found("tunnel"));
+        }
+        self.team(vault)?.tunnel(tunnel_id).ok_or_else(|| not_found("tunnel"))
+    }
+
     pub fn forget_host_key_in(&mut self, vault: &str, host_id: &str) -> Result<()> {
         if vault == PERSONAL {
             return self.forget_host_key(host_id);

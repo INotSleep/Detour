@@ -9,6 +9,7 @@ use detour_core::ssh::{self, SessionEvent, SessionHandle};
 use detour_core::store::{MyId, Store, TeamEntry, VaultUpdate};
 use detour_core::team::state::{Coll, Level, Role};
 use detour_core::sync;
+use detour_core::tunnel::{self, TunnelStatus, Tunnels};
 use detour_core::team::git::GitRemote;
 use detour_core::team::{AccessChange, TeamView, VaultInfo};
 use detour_core::{Error, Result, SecretKind};
@@ -19,6 +20,7 @@ use tauri::State;
 struct App {
     store: Arc<Mutex<Store>>,
     sessions: Mutex<HashMap<String, SessionHandle>>,
+    tunnels: Tunnels,
 }
 
 fn poisoned<T>(_: T) -> Error {
@@ -85,8 +87,28 @@ async fn vault_unlock(app: State<'_, App>, master_password: String) -> Result<Va
 
 #[tauri::command]
 fn vault_lock(app: State<App>) -> Result<()> {
+    app.tunnels.stop_all();
     app.store.lock().map_err(poisoned)?.lock();
     Ok(())
+}
+
+/* ---------- tunnels ---------- */
+
+/// Opens a tunnel. `secret` and `trust_fingerprint` answer the prompts a login may need.
+#[tauri::command]
+async fn tunnel_start(app: State<'_, App>, vault_id: String, tunnel_id: String, secret: Option<String>, trust_fingerprint: Option<String>) -> Result<()> {
+    tunnel::start_in(&app.store, &app.tunnels, &vault_id, &tunnel_id, secret, trust_fingerprint).await
+}
+
+#[tauri::command]
+fn tunnel_stop(app: State<App>, vault_id: String, tunnel_id: String) {
+    app.tunnels.stop(&format!("{vault_id}/{tunnel_id}"));
+}
+
+/// Every running or failed tunnel, keyed `<vault>/<tunnel>`.
+#[tauri::command]
+fn tunnels_status(app: State<App>) -> Vec<TunnelStatus> {
+    app.tunnels.statuses()
 }
 
 #[tauri::command]
@@ -418,7 +440,7 @@ fn data_dir() -> std::path::PathBuf {
 pub fn builder<R: tauri::Runtime>(builder: tauri::Builder<R>, data_dir: std::path::PathBuf) -> tauri::Builder<R> {
     builder
         .plugin(tauri_plugin_dialog::init())
-        .manage(App { store: Arc::new(Mutex::new(Store::open(data_dir))), sessions: Mutex::new(HashMap::new()) })
+        .manage(App { store: Arc::new(Mutex::new(Store::open(data_dir))), sessions: Mutex::new(HashMap::new()), tunnels: Tunnels::new() })
         .invoke_handler(tauri::generate_handler![
             core_info,
             write_text_file,
@@ -441,6 +463,9 @@ pub fn builder<R: tauri::Runtime>(builder: tauri::Builder<R>, data_dir: std::pat
             session_resize,
             session_close,
             secret_save,
+            tunnel_start,
+            tunnel_stop,
+            tunnels_status,
             my_id,
             id_inspect,
             recovery_key_new,

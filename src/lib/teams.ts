@@ -21,7 +21,9 @@ export function writable(v: Vault) {
 
 export function dataOf(ws: Workspace, vaultId: string): PersonalData {
   const mine = <T extends { vaultId: string }>(xs: T[]) => xs.filter((x) => x.vaultId === vaultId);
-  return { hosts: mine(ws.hosts), keys: mine(ws.keys), snippets: mine(ws.snippets), tunnels: mine(ws.tunnels) };
+  // A tunnel's switch, connections and failure live in this session only; they are not vault data.
+  const tunnels = mine(ws.tunnels).map(({ error: _e, connections: _c, ...t }) => ({ ...t, state: "off" as const }));
+  return { hosts: mine(ws.hosts), keys: mine(ws.keys), snippets: mine(ws.snippets), tunnels };
 }
 
 const folderName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? path;

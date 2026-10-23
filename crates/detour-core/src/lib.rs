@@ -12,6 +12,7 @@ pub mod ssh;
 pub mod store;
 pub mod sync;
 pub mod team;
+pub mod tunnel;
 
 use serde::Serialize;
 
@@ -75,6 +76,12 @@ pub enum Error {
     RootChanged,
     #[error("already a member")]
     AlreadyMember,
+    /// A local port for a tunnel is taken by another program.
+    #[error("port {port} is in use")]
+    PortBusy { port: u16 },
+    /// The server does not let us listen on its port (`ssh -R`).
+    #[error("server refused to forward port {port}")]
+    ForwardRefused { port: u16 },
     /// The Git repository or its server said no, or sent something unusable.
     #[error("git: {message}")]
     Git { message: String },

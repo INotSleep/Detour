@@ -157,6 +157,35 @@ export default function App() {
     }
   }, [ws, phase, toaster.push, applyView]);
 
+  // Tunnels run in the core: keep switches, connection counts and failures in step with it.
+  const tunnelsActive = ws?.tunnels.some((t) => t.state === "on" || t.state === "starting") ?? false;
+  useEffect(() => {
+    if (!api.real || phase !== "ready") return;
+    const poll = () =>
+      api
+        .tunnelsStatus()
+        .then((list) => {
+          const byKey = new Map(list.map((s) => [s.key, s]));
+          setWs((w) =>
+            w && {
+              ...w,
+              tunnels: w.tunnels.map((t) => {
+                const s = byKey.get(`${t.vaultId}/${t.id}`);
+                if (t.state === "starting") return t;
+                if (!s) return t.state === "on" ? { ...t, state: "off" as const, connections: 0 } : t;
+                if (s.state === "error") return { ...t, state: "error" as const, connections: 0, error: s.error ? errorText(s.error) : undefined };
+                return t.state === "on" && t.connections === s.connections ? t : { ...t, state: "on" as const, connections: s.connections, error: undefined };
+              }),
+            },
+          );
+        })
+        .catch(() => {});
+    void poll();
+    if (!tunnelsActive) return;
+    const timer = setInterval(poll, 1500);
+    return () => clearInterval(timer);
+  }, [phase, tunnelsActive]);
+
   // Pick up teammates' changes in the background.
   const teamIds = ws?.vaults.filter((v) => v.kind === "team").map((v) => v.id).join(",") ?? "";
   useEffect(() => {

@@ -72,7 +72,20 @@ struct Client {
     pinned: Option<PublicKey>,
     trust_fingerprint: Option<String>,
     seen: Arc<Mutex<Option<PublicKey>>>,
+    forwards: Forwards,
 }
+
+/// Where connections to a port the server listens on for us (`ssh -R`) go.
+#[derive(Clone)]
+pub struct RemoteForward {
+    pub host: String,
+    pub port: u16,
+    /// Told +1 when a connection opens and -1 when it ends.
+    pub on_connection: Arc<dyn Fn(i32) + Send + Sync>,
+}
+
+/// Server port -> where its connections go.
+type Forwards = Arc<Mutex<HashMap<u32, RemoteForward>>>;
 
 fn fingerprint(key: &PublicKey) -> String {
     key.fingerprint(HashAlg::Sha256).to_string()
@@ -92,6 +105,30 @@ impl client::Handler for Client {
             None => self.trust_fingerprint.as_deref() == Some(fingerprint(&key).as_str()),
         })
     }
+
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: russh::Channel<client::Msg>,
+        _connected_address: &str,
+        connected_port: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> std::result::Result<(), Self::Error> {
+        // A port we did not ask for: dropping `reply` refuses the channel.
+        let Some(fwd) = self.forwards.lock().unwrap().get(&connected_port).cloned() else { return Ok(()) };
+        reply.accept().await;
+        tokio::spawn(async move {
+            if let Ok(mut tcp) = tokio::net::TcpStream::connect((fwd.host.as_str(), fwd.port)).await {
+                (fwd.on_connection)(1);
+                let mut ch = channel.into_stream();
+                let _ = tokio::io::copy_bidirectional(&mut ch, &mut tcp).await;
+                (fwd.on_connection)(-1);
+            }
+        });
+        Ok(())
+    }
 }
 
 fn connect_error(e: impl std::fmt::Display) -> Error {
@@ -99,14 +136,15 @@ fn connect_error(e: impl std::fmt::Display) -> Error {
 }
 
 /// Connects, checks the host key and authenticates.
-async fn open(req: &ConnectRequest) -> Result<(client::Handle<Client>, Option<KnownHost>)> {
+async fn open(req: &ConnectRequest) -> Result<(client::Handle<Client>, Option<KnownHost>, Forwards)> {
     let host = &req.host;
     let pinned = match &req.known {
         Some(k) => Some(PublicKey::from_openssh(&k.key).map_err(|e| Error::Internal { message: format!("pinned key: {e}") })?),
         None => None,
     };
     let seen = Arc::new(Mutex::new(None));
-    let handler = Client { pinned: pinned.clone(), trust_fingerprint: req.trust_fingerprint.clone(), seen: seen.clone() };
+    let forwards = Forwards::default();
+    let handler = Client { pinned: pinned.clone(), trust_fingerprint: req.trust_fingerprint.clone(), seen: seen.clone(), forwards: forwards.clone() };
     let config = Arc::new(client::Config {
         keepalive_interval: Some(Duration::from_secs(30)),
         keepalive_max: 3,
@@ -143,12 +181,47 @@ async fn open(req: &ConnectRequest) -> Result<(client::Handle<Client>, Option<Kn
         let _ = session.disconnect(Disconnect::ByApplication, "", "en").await;
         return Err(e);
     }
-    Ok((session, new_known_host))
+    Ok((session, new_known_host, forwards))
 }
 
-/// A connection kept open for more commands (Git sync runs every few seconds).
+/// A connection kept open for more commands (Git sync runs every few seconds, tunnels share it).
 #[derive(Clone)]
-pub struct Session(Arc<client::Handle<Client>>);
+pub struct Session(Arc<SessionInner>);
+
+struct SessionInner {
+    handle: client::Handle<Client>,
+    forwards: Forwards,
+}
+
+impl Session {
+    pub fn is_closed(&self) -> bool {
+        self.0.handle.is_closed()
+    }
+
+    /// A TCP connection made by the server to `host:port` (`ssh -L`, `ssh -D`).
+    pub async fn connect_tcp(&self, host: &str, port: u16, from: std::net::SocketAddr) -> Result<russh::ChannelStream<client::Msg>> {
+        let channel = self.0.handle.channel_open_direct_tcpip(host, port as u32, from.ip().to_string(), from.port() as u32).await.map_err(connect_error)?;
+        Ok(channel.into_stream())
+    }
+
+    /// Asks the server to listen on its loopback `port` and send connections to `fwd` (`ssh -R`).
+    pub async fn listen_remote(&self, port: u16, fwd: RemoteForward) -> Result<()> {
+        self.0.forwards.lock().unwrap().insert(port as u32, fwd);
+        if let Err(e) = self.0.handle.tcpip_forward("localhost", port as u32).await {
+            self.0.forwards.lock().unwrap().remove(&(port as u32));
+            return Err(match e {
+                russh::Error::RequestDenied => Error::ForwardRefused { port },
+                other => connect_error(other),
+            });
+        }
+        Ok(())
+    }
+
+    pub async fn stop_remote(&self, port: u16) {
+        self.0.forwards.lock().unwrap().remove(&(port as u32));
+        let _ = self.0.handle.cancel_tcpip_forward("localhost", port as u32).await;
+    }
+}
 
 struct Pooled {
     session: Session,
@@ -173,7 +246,7 @@ fn pool_key(req: &ConnectRequest) -> String {
 
 fn pooled(key: &str) -> Option<Session> {
     let mut pool = POOL.lock().unwrap_or_else(|e| e.into_inner());
-    pool.retain(|_, p| p.used.elapsed() < IDLE && !p.session.0.is_closed());
+    pool.retain(|_, p| p.used.elapsed() < IDLE && !p.session.is_closed());
     let p = pool.get_mut(key)?;
     p.used = Instant::now();
     Some(p.session.clone())
@@ -193,38 +266,47 @@ pub struct Exec {
 }
 
 async fn run(session: &Session, command: &str) -> Result<russh::ChannelStream<client::Msg>> {
-    let channel = session.0.channel_open_session().await.map_err(connect_error)?;
+    let channel = session.0.handle.channel_open_session().await.map_err(connect_error)?;
     channel.exec(true, command).await.map_err(connect_error)?;
     Ok(channel.into_stream())
 }
 
-/// Runs a command, over a kept connection when there is one.
-pub async fn exec(req: &ConnectRequest, command: &str) -> Result<Exec> {
+/// A kept connection for this target and login, or a new one (then also kept).
+pub async fn session(req: &ConnectRequest) -> Result<(Session, Option<KnownHost>)> {
     let key = pool_key(req);
     if let Some(session) = pooled(&key) {
-        match run(&session, command).await {
-            Ok(stream) => return Ok(Exec { stream, new_known_host: None, session }),
-            // The server dropped it in the meantime: connect again.
-            Err(_) => {
-                POOL.lock().unwrap_or_else(|e| e.into_inner()).remove(&key);
-            }
-        }
+        return Ok((session, None));
     }
-    let (handle, new_known_host) = open(req).await?;
-    let session = Session(Arc::new(handle));
-    let stream = run(&session, command).await?;
+    let (handle, new_known_host, forwards) = open(req).await?;
+    let session = Session(Arc::new(SessionInner { handle, forwards }));
     POOL.lock().unwrap_or_else(|e| e.into_inner()).insert(key, Pooled { session: session.clone(), used: Instant::now() });
-    Ok(Exec { stream, new_known_host, session })
+    Ok((session, new_known_host))
 }
 
-/// How many connections are kept open (for tests).
+/// Runs a command, over a kept connection when there is one.
+pub async fn exec(req: &ConnectRequest, command: &str) -> Result<Exec> {
+    let (session, new_known_host) = session(req).await?;
+    match run(&session, command).await {
+        Ok(stream) => Ok(Exec { stream, new_known_host, session }),
+        // A kept connection the server dropped in the meantime: connect again.
+        Err(_) if new_known_host.is_none() => {
+            POOL.lock().unwrap_or_else(|e| e.into_inner()).remove(&pool_key(req));
+            let (session, new_known_host) = self::session(req).await?;
+            let stream = run(&session, command).await?;
+            Ok(Exec { stream, new_known_host, session })
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Is a connection kept for this target and login (for tests)?
 #[doc(hidden)]
-pub fn pooled_count() -> usize {
-    POOL.lock().unwrap_or_else(|e| e.into_inner()).len()
+pub fn pooled_count_for(req: &ConnectRequest) -> usize {
+    POOL.lock().unwrap_or_else(|e| e.into_inner()).keys().filter(|k| **k == pool_key(req)).count()
 }
 
 pub async fn connect(req: ConnectRequest, cols: u32, rows: u32) -> Result<Connected> {
-    let (session, new_known_host) = open(&req).await?;
+    let (session, new_known_host, _) = open(&req).await?;
     let channel = session.channel_open_session().await.map_err(connect_error)?;
     channel.request_pty(false, "xterm-256color", cols, rows, 0, 0, &[]).await.map_err(connect_error)?;
     channel.request_shell(false).await.map_err(connect_error)?;

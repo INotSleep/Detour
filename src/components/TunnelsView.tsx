@@ -1,9 +1,10 @@
 import { useRef, useState } from "react";
-import { ArrowLeftRight, ArrowRight, Copy, Ellipsis, Globe, Laptop, Loader2, Pencil, Plus, RotateCw, Server, Trash2, type LucideIcon } from "lucide-react";
-import { copyText, sleep, uid, useStore } from "../lib/store";
+import { ArrowLeftRight, ArrowRight, Copy, Ellipsis, Globe, Laptop, Loader2, Pencil, Plus, RotateCw, Server, ShieldQuestion, Trash2, type LucideIcon } from "lucide-react";
+import { api, errorText, isCoreError, type SecretKind } from "../lib/api";
+import { copyText, plural, sleep, uid, useStore } from "../lib/store";
 import type { Host, Tunnel } from "../lib/types";
 import { atLeast, writable } from "../lib/teams";
-import { Button, Empty, Field, IconButton, Menu, Modal, PageHeader, Switch } from "./ui";
+import { Button, Checkbox, Empty, Field, IconButton, Menu, Modal, PageHeader, PasswordInput, Switch } from "./ui";
 
 /* ---------- route ---------- */
 
@@ -47,10 +48,24 @@ function Route({ nodes }: { nodes: RouteNode[] }) {
 }
 
 /** What to copy to use an open tunnel. */
-function endpoint(t: Tunnel, via?: Host) {
+function endpoint(t: Tunnel) {
   if (t.kind === "local") return `localhost:${t.bindPort}`;
   if (t.kind === "dynamic") return `socks5://localhost:${t.bindPort}`;
-  return `${via?.address ?? "?"}:${t.bindPort}`;
+  // The server listens on its own loopback: this is the address on the server.
+  return `localhost:${t.bindPort}`;
+}
+
+/** What a tunnel's login asks the user for. */
+type Ask =
+  | { kind: "secret"; tunnel: Tunnel; secret: SecretKind; text: string; trust?: string; error?: string }
+  | { kind: "trust"; tunnel: Tunnel; fingerprint: string; host: string }
+  | { kind: "changed"; tunnel: Tunnel; expected: string; actual: string; host: string };
+
+interface Answer {
+  secret?: string;
+  secretKind?: SecretKind;
+  remember?: boolean;
+  trust?: string;
 }
 
 /* ---------- page ---------- */
@@ -59,6 +74,7 @@ export function TunnelsView() {
   const { ws, vault, update, toast, navigate } = useStore();
   const canCreate = writable(vault);
   const [editing, setEditing] = useState<Tunnel | "new" | null>(null);
+  const [ask, setAsk] = useState<Ask | null>(null);
   // Each start attempt gets a token; a click while starting invalidates it, so a late result can't flip the switch.
   const attempts = useRef(new Map<string, number>());
   // Async start() and rapid clicks must see the latest state, not the render they were created in.
@@ -72,13 +88,15 @@ export function TunnelsView() {
 
   const stop = (t: Tunnel) => {
     attempts.current.set(t.id, (attempts.current.get(t.id) ?? 0) + 1);
-    patch(t.id, { state: "off", error: undefined });
+    patch(t.id, { state: "off", error: undefined, connections: 0 });
+    if (api.real) void api.tunnelStop(t).catch(() => {});
   };
 
-  const start = async (t: Tunnel) => {
+  const start = async (t: Tunnel, answer: Answer = {}) => {
     const token = (attempts.current.get(t.id) ?? 0) + 1;
     attempts.current.set(t.id, token);
-    patch(t.id, { state: "starting", error: undefined });
+    patch(t.id, { state: "starting", error: undefined, connections: 0 });
+    if (api.real) return startReal(t, token, answer);
     await sleep(900);
     if (attempts.current.get(t.id) !== token) return;
 
@@ -88,6 +106,40 @@ export function TunnelsView() {
     if (!via || via.online === false) return patch(t.id, { state: "error", error: `${via?.label ?? "Сервер"} не отвечает` });
     if (busy) return patch(t.id, { state: "error", error: `Порт ${t.bindPort} занят «${busy.name}»` });
     patch(t.id, { state: "on" });
+  };
+
+  const startReal = async (t: Tunnel, token: number, answer: Answer) => {
+    const current = () => attempts.current.get(t.id) === token;
+    try {
+      await api.tunnelStart(t, answer.secret ?? null, answer.trust ?? null);
+      // Switched off while it was opening.
+      if (!current()) return void api.tunnelStop(t).catch(() => {});
+      patch(t.id, { state: "on" });
+      const host = latest.current.hosts.find((h) => h.id === t.viaHostId);
+      if (answer.secret && answer.remember && answer.secretKind && host) {
+        await api.secretSave(host, answer.secretKind, answer.secret).catch((e) => toast({ text: errorText(e), tone: "error" }));
+      }
+    } catch (e) {
+      if (!current()) return;
+      const via = latest.current.hosts.find((h) => h.id === t.viaHostId);
+      if (isCoreError(e) && e.kind === "needSecret") {
+        patch(t.id, { state: "off" });
+        return setAsk({ kind: "secret", tunnel: t, secret: e.secret, text: secretLabel(e.secret, via), trust: answer.trust });
+      }
+      if (isCoreError(e) && e.kind === "authFailed" && answer.secret) {
+        patch(t.id, { state: "off" });
+        return setAsk({ kind: "secret", tunnel: t, secret: e.secret ?? "password", text: secretLabel(e.secret ?? "password", via), trust: answer.trust, error: errorText(e) });
+      }
+      if (isCoreError(e) && e.kind === "hostKeyUnknown") {
+        patch(t.id, { state: "off" });
+        return setAsk({ kind: "trust", tunnel: t, fingerprint: e.fingerprint, host: via ? `${via.address}:${via.port}` : "" });
+      }
+      if (isCoreError(e) && e.kind === "hostKeyChanged") {
+        patch(t.id, { state: "error", error: errorText(e) });
+        return setAsk({ kind: "changed", tunnel: t, expected: e.expected, actual: e.actual, host: via ? `${via.address}:${via.port}` : "" });
+      }
+      patch(t.id, { state: "error", error: errorText(e) });
+    }
   };
 
   const toggle = (id: string) => {
@@ -110,7 +162,7 @@ export function TunnelsView() {
   };
 
   const copy = async (t: Tunnel) => {
-    const text = endpoint(t, ws.hosts.find((h) => h.id === t.viaHostId));
+    const text = endpoint(t);
     toast((await copyText(text)) ? { text: `Скопировано: ${text}`, tone: "success" } : { text: "Не удалось скопировать", tone: "error" });
   };
 
@@ -150,7 +202,8 @@ export function TunnelsView() {
                 {t.state === "on" && (
                   <>
                     <span className="ok-text">Открыт</span>
-                    <Button size="sm" variant="ghost" icon={Copy} onClick={() => copy(t)}>{endpoint(t, via)}</Button>
+                    {!!t.connections && <span className="muted small">{t.connections} {plural(t.connections, "подключение", "подключения", "подключений")}</span>}
+                    <Button size="sm" variant="ghost" icon={Copy} onClick={() => copy(t)}>{endpoint(t)}</Button>
                   </>
                 )}
                 {t.state === "error" && (
@@ -177,6 +230,43 @@ export function TunnelsView() {
         })}
       </div>
 
+      {ask?.kind === "secret" && (
+        <SecretDialog
+          ask={ask}
+          onClose={() => setAsk(null)}
+          onAnswer={(secret, remember) => {
+            setAsk(null);
+            void start(ask.tunnel, { secret, secretKind: ask.secret, remember, trust: ask.trust });
+          }}
+        />
+      )}
+      {ask?.kind === "trust" && (
+        <TrustDialog
+          ask={ask}
+          onClose={() => setAsk(null)}
+          onTrust={() => {
+            setAsk(null);
+            void start(ask.tunnel, { trust: ask.fingerprint });
+          }}
+        />
+      )}
+
+      {ask?.kind === "changed" && (
+        <ChangedKeyDialog
+          ask={ask}
+          onClose={() => setAsk(null)}
+          onReplace={async () => {
+            setAsk(null);
+            try {
+              await api.hostForgetKey(ask.tunnel.vaultId, ask.tunnel.viaHostId);
+              void start(ask.tunnel, { trust: ask.actual });
+            } catch (e) {
+              toast({ text: errorText(e), tone: "error" });
+            }
+          }}
+        />
+      )}
+
       {editing && (
         <TunnelDialog
           tunnel={editing === "new" ? null : editing}
@@ -185,6 +275,83 @@ export function TunnelsView() {
         />
       )}
     </div>
+  );
+}
+
+/* ---------- what a login asks for ---------- */
+
+function SecretDialog({ ask, onClose, onAnswer }: { ask: Extract<Ask, { kind: "secret" }>; onClose: () => void; onAnswer: (secret: string, remember: boolean) => void }) {
+  const [value, setValue] = useState("");
+  const [remember, setRemember] = useState(true);
+  return (
+    <Modal
+      title={`«${ask.tunnel.name}»`}
+      onClose={onClose}
+      onSubmit={() => value && onAnswer(value, remember)}
+      footer={
+        <>
+          <Button type="button" variant="ghost" onClick={onClose}>Отмена</Button>
+          <Button type="submit" variant="primary" disabled={!value}>Открыть туннель</Button>
+        </>
+      }
+    >
+      <Field label={ask.text} error={ask.error}>
+        <PasswordInput value={value} onChange={setValue} invalid={!!ask.error} autoFocus />
+      </Field>
+      <Checkbox checked={remember} onChange={setRemember}>Сохранить в vault</Checkbox>
+    </Modal>
+  );
+}
+
+function TrustDialog({ ask, onClose, onTrust }: { ask: Extract<Ask, { kind: "trust" }>; onClose: () => void; onTrust: () => void }) {
+  return (
+    <Modal
+      title="Новый хост"
+      onClose={onClose}
+      onSubmit={onTrust}
+      footer={
+        <>
+          <Button type="button" variant="ghost" onClick={onClose}>Отмена</Button>
+          <Button type="submit" variant="primary">Доверять и открыть</Button>
+        </>
+      }
+    >
+      <div className="trust-card">
+        <ShieldQuestion size={18} />
+        <div>
+          <div className="strong mono">{ask.host}</div>
+          <div className="fp mono">{ask.fingerprint}</div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/** What the login prompt asks for, in words. */
+function secretLabel(kind: SecretKind, via?: Host) {
+  return kind === "passphrase" ? "Пароль ключа" : via ? `Пароль ${via.user}@${via.address}` : "Пароль";
+}
+
+function ChangedKeyDialog({ ask, onClose, onReplace }: { ask: Extract<Ask, { kind: "changed" }>; onClose: () => void; onReplace: () => void }) {
+  return (
+    <Modal
+      title="Ключ хоста изменился"
+      onClose={onClose}
+      footer={
+        <>
+          <Button type="button" variant="ghost" className="danger-text" onClick={onReplace}>Заменить ключ</Button>
+          <Button type="button" variant="primary" autoFocus onClick={onClose}>Отменить</Button>
+        </>
+      }
+    >
+      <div className="hostkey-host mono">{ask.host}</div>
+      <dl className="hostkey-fp">
+        <dt>Был</dt>
+        <dd className="mono">{ask.expected}</dd>
+        <dt>Сейчас</dt>
+        <dd className="mono">{ask.actual}</dd>
+      </dl>
+    </Modal>
   );
 }
 

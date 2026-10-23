@@ -29,6 +29,7 @@ export type CoreError =
   | { kind: "invalidId"; reason: string }
   | { kind: "forbidden" | "notATeamVault" | "folderNotEmpty" | "rootChanged" | "alreadyMember" }
   | { kind: "git"; message: string }
+  | { kind: "portBusy" | "forwardRefused"; port: number }
   | { kind: "unavailable"; path: string };
 
 export type SecretKind = "password" | "passphrase";
@@ -63,6 +64,9 @@ export function errorText(e: unknown): string {
     case "alreadyMember": return "Уже в команде";
     case "unavailable": return `Хранилище недоступно: ${e.path}`;
     case "git": return gitReason(e.message);
+    case "portBusy": return `Порт ${e.port} занят другой программой`;
+    case "forwardRefused": return `Сервер не разрешает открыть порт ${e.port}`;
+    case "connect": return e.message === "connection lost" ? "Соединение с сервером потеряно" : e.message;
     default: return e.message;
   }
 }
@@ -123,7 +127,7 @@ export function toView(d: PersonalData): VaultView {
     hosts: d.hosts.map(({ vaultId: _v, os: _o, online: _on, access: _a, own: _w, ...h }) => h),
     keys: d.keys.map(({ vaultId: _v, access: _a, ...k }) => k),
     snippets: d.snippets.map(({ vaultId: _v, access: _a, ...s }) => s),
-    tunnels: d.tunnels.map(({ vaultId: _v, state: _s, error: _e, access: _a, ...t }) => t),
+    tunnels: d.tunnels.map(({ vaultId: _v, state: _s, error: _e, access: _a, connections: _c, ...t }) => t),
   };
 }
 
@@ -394,6 +398,15 @@ export const api = {
     const r = await open({ directory: true, multiple: false });
     return typeof r === "string" ? r : null;
   },
+
+  /* tunnels (detour-core only) */
+
+  /** Opens a tunnel; `secret` and `trustFingerprint` answer a login's prompts. */
+  tunnelStart: (t: Tunnel, secret: string | null, trustFingerprint: string | null): Promise<void> =>
+    invoke("tunnel_start", { vaultId: t.vaultId, tunnelId: t.id, secret, trustFingerprint }),
+  tunnelStop: (t: Tunnel): Promise<void> => invoke("tunnel_stop", { vaultId: t.vaultId, tunnelId: t.id }),
+  /** Running and failed tunnels, keyed `<vault>/<tunnel>`. */
+  tunnelsStatus: (): Promise<{ key: string; state: "on" | "error"; connections: number; error: CoreError | null }[]> => invoke("tunnels_status"),
 
   async secretSave(host: Host, kind: SecretKind, value: string): Promise<void> {
     if (api.usesCore(host.vaultId)) return invoke("secret_save", { vaultId: host.vaultId, hostId: host.id, kind, value });

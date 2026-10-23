@@ -156,8 +156,10 @@ export interface Tunnel {
   target?: string;
   /** mock */
   state: "off" | "starting" | "on" | "error";
-  /** mock */
+  /** Why it failed or stopped. */
   error?: string;
+  /** Connections going through it now. */
+  connections?: number;
   /** Team only: your access. */
   access?: Level;
 }
