@@ -5,7 +5,7 @@ export type VaultKind = "personal" | "team";
 
 export type SyncBackend =
   | { type: "local" }
-  | { type: "git"; remote: string; branch: string }
+  | { type: "git"; remote: string }
   | { type: "folder"; path: string };
 
 export type SyncStatus = "synced" | "syncing" | "offline" | "conflict";
@@ -33,6 +33,10 @@ export interface Vault {
   me?: string;
   /** Team only: what is wrong with the storage or changes in it. */
   problems?: Problem[];
+  /** Git team: local changes the repository doesn't have yet. */
+  pending?: boolean;
+  /** Git team: why the repository could not be reached last time. */
+  remoteError?: import("./api").CoreError;
 }
 
 /** detour_core::team::ProblemView */

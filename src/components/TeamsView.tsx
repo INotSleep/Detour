@@ -1,11 +1,11 @@
 import { Fragment, useState } from "react";
-import { ChevronRight, Copy, Ellipsis, FolderSync, IdCard, LogIn, LogOut, Plus, RefreshCw, ShieldAlert, TriangleAlert, UserMinus, UserPlus, Users, UserX } from "lucide-react";
-import { api, errorText } from "../lib/api";
+import { ChevronRight, Copy, Ellipsis, IdCard, LogIn, LogOut, Plus, RefreshCw, ShieldAlert, ShieldQuestion, TriangleAlert, UserMinus, UserPlus, Users, UserX } from "lucide-react";
+import { api, errorText, type CoreError } from "../lib/api";
 import { copyText, formatAgo, plural, sleep, useStore } from "../lib/store";
 import { atLeast, canManage, removeVault } from "../lib/teams";
 import type { ActivityItem, Coll, Level, Member, Problem, Role, Vault } from "../lib/types";
-import { Avatar, VaultAvatar, roleLabel, syncStatusText } from "./common";
-import { Button, ConfirmDialog, Empty, IconButton, Menu, PageHeader, Segmented } from "./ui";
+import { Avatar, SyncIcon, VaultAvatar, roleLabel, syncStatusText, syncTarget } from "./common";
+import { Button, ConfirmDialog, Empty, Field, IconButton, Menu, Modal, PageHeader, PasswordInput, Segmented } from "./ui";
 import { AddMemberDialog, CreateTeamDialog, JoinTeamDialog, MyIdDialog, useMyId } from "./TeamDialogs";
 
 export function TeamsView() {
@@ -33,6 +33,17 @@ function activityText(a: ActivityItem): string {
       const verb = a.kind === "added" ? "добавлен" : a.kind === "changed" ? "изменён" : "удалён";
       return `${collName[a.coll]} «${a.name}» ${verb}`;
     }
+  }
+}
+
+/** Why a team's repository could not be reached, in words. */
+export function remoteErrorText(e: CoreError): string {
+  switch (e.kind) {
+    case "hostKeyChanged": return "Ключ сервера репозитория изменился";
+    case "unreachable": case "connect": case "io": return "Нет связи с репозиторием";
+    case "authFailed": return "Репозиторий не принял ключ";
+    case "needSecret": return "Ключ для репозитория защищён паролем: сохраните пароль ключа";
+    default: return errorText(e);
   }
 }
 
@@ -65,26 +76,44 @@ function TeamPage({ vault }: { vault: Vault }) {
   const [leaving, setLeaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [showProblems, setShowProblems] = useState(false);
+  const [tokenDialog, setTokenDialog] = useState(false);
+  const tokenRejected = vault.remoteError?.kind === "git" && vault.remoteError.message.includes("token rejected");
 
   const members = ws.members.filter((m) => m.vaultId === vault.id).sort(byRank);
   const activity = ws.activity.filter((a) => a.vaultId === vault.id).sort((a, b) => b.at - a.at);
   const manage = !!vault.joined && canManage(vault.myRole);
   const offline = vault.syncStatus === "offline";
-  const path = vault.sync.type === "folder" ? vault.sync.path : "";
+  const target = syncTarget(vault.sync);
+  const newServerKey = vault.remoteError?.kind === "hostKeyUnknown" ? vault.remoteError.fingerprint : null;
   const problems = vault.problems ?? [];
 
-  const sync = async () => {
+  const sync = async (trustFingerprint?: string) => {
     setSyncing(true);
     try {
       if (api.real) {
-        const view = await api.teamSync(vault.id);
+        const view = await api.teamSync(vault.id, trustFingerprint);
         applyTeamView(view);
-        toast(view.conflicts.length ? { text: "Есть конфликт", tone: "error", action: { label: "Решить", run: () => resolveConflicts(vault.id) } } : { text: "Синхронизировано", tone: "success" });
+        const failed = view.remote?.error;
+        if (failed) {
+          if (failed.kind !== "hostKeyUnknown") toast({ text: remoteErrorText(failed), tone: "error" });
+        } else toast(view.conflicts.length ? { text: "Есть конфликт", tone: "error", action: { label: "Решить", run: () => resolveConflicts(vault.id) } } : { text: "Синхронизировано", tone: "success" });
       } else {
         await sleep(900);
         update((w) => ({ ...w, vaults: w.vaults.map((v) => (v.id === vault.id ? { ...v, lastSync: Date.now() } : v)) }));
         toast({ text: "Синхронизировано", tone: "success" });
       }
+    } catch (e) {
+      toast({ text: errorText(e), tone: "error" });
+    }
+    setSyncing(false);
+  };
+
+  const replaceKey = async (fingerprint: string) => {
+    setSyncing(true);
+    try {
+      const view = await api.teamReplaceServerKey(vault.id, fingerprint);
+      applyTeamView(view);
+      toast(view.remote?.error ? { text: remoteErrorText(view.remote.error), tone: "error" } : { text: "Ключ сервера заменён", tone: "success" });
     } catch (e) {
       toast({ text: errorText(e), tone: "error" });
     }
@@ -127,7 +156,7 @@ function TeamPage({ vault }: { vault: Vault }) {
   return (
     <div className={`page ${tab === "access" ? "wide" : ""}`}>
       <PageHeader title={vault.name}>
-        <Button icon={RefreshCw} loading={syncing} onClick={sync}>{syncing ? "Синхронизация" : "Синхронизировать"}</Button>
+        <Button icon={RefreshCw} loading={syncing} onClick={() => sync()}>{syncing ? "Синхронизация" : "Синхронизировать"}</Button>
         {manage && <Button variant="primary" icon={UserPlus} onClick={() => setAdding(true)}>Добавить участника</Button>}
         <Menu
           trigger={(toggle, open) => <IconButton icon={Ellipsis} label="Ещё" className={open ? "pressed" : ""} onClick={toggle} />}
@@ -136,27 +165,65 @@ function TeamPage({ vault }: { vault: Vault }) {
       </PageHeader>
 
       <div className="sync-line">
-        <FolderSync size={14} />
-        <span className="mono ellipsis sync-path" title={path}>{path}</span>
+        <SyncIcon sync={vault.sync} />
+        <span className="mono ellipsis sync-path" title={target}>{target}</span>
         <span className="sep" />
         {vault.syncStatus === "conflict" ? (
           <button className="chip warn chip-btn" onClick={() => resolveConflicts(vault.id)}>
             <TriangleAlert size={12} /> Конфликт · решить
           </button>
+        ) : vault.remoteError ? (
+          <span className="vault-sync conflict">
+            <span className="dot" />
+            Нет связи
+          </span>
         ) : (
           <span className={`vault-sync ${vault.syncStatus}`}>
             <span className="dot" />
             {syncStatusText[vault.syncStatus]}
           </span>
         )}
-        {!offline && vault.lastSync && <span className="muted">· {formatAgo(vault.lastSync)}</span>}
+        {!offline && !vault.remoteError && vault.lastSync && <span className="muted">· {formatAgo(vault.lastSync)}</span>}
+        {vault.pending && <span className="chip">Не отправлено</span>}
       </div>
+
+      {newServerKey && (
+        <div className="banner info">
+          <ShieldQuestion size={16} />
+          <span className="grow">Новый ключ сервера репозитория: <span className="mono">{newServerKey}</span></span>
+          <Button size="sm" variant="primary" loading={syncing} onClick={() => sync(newServerKey)}>Доверять</Button>
+        </div>
+      )}
+
+      {vault.remoteError?.kind === "hostKeyChanged" && (
+        <div className="banner warn">
+          <ShieldAlert size={16} />
+          <span className="grow">
+            Ключ сервера репозитория изменился
+            <span className="banner-sub mono">Был {vault.remoteError.expected}</span>
+            <span className="banner-sub mono">Сейчас {vault.remoteError.actual}</span>
+          </span>
+          <Button size="sm" variant="ghost" className="danger-text" loading={syncing} onClick={() => replaceKey(vault.remoteError?.kind === "hostKeyChanged" ? vault.remoteError.actual : "")}>Заменить ключ</Button>
+        </div>
+      )}
+
+      {vault.remoteError && !newServerKey && vault.remoteError.kind !== "hostKeyChanged" && (
+        <div className="banner warn">
+          <TriangleAlert size={16} />
+          <span className="grow">{remoteErrorText(vault.remoteError)}</span>
+          {tokenRejected ? (
+            <Button size="sm" variant="primary" onClick={() => setTokenDialog(true)}>Новый токен</Button>
+          ) : (
+            <Button size="sm" loading={syncing} onClick={() => sync()}>Повторить</Button>
+          )}
+        </div>
+      )}
 
       {offline && (
         <div className="banner warn">
           <TriangleAlert size={16} />
           <span className="grow">Папка недоступна</span>
-          <Button size="sm" loading={syncing} onClick={sync}>Повторить</Button>
+          <Button size="sm" loading={syncing} onClick={() => sync()}>Повторить</Button>
         </div>
       )}
 
@@ -173,7 +240,7 @@ function TeamPage({ vault }: { vault: Vault }) {
           <IdCard size={16} />
           <span className="grow">Вас ещё не добавили. Отправьте свой Detour ID админу команды.</span>
           <Button size="sm" icon={Copy} onClick={copyMyId}>Копировать ID</Button>
-          <Button size="sm" variant="primary" loading={syncing} onClick={sync}>Проверить</Button>
+          <Button size="sm" variant="primary" loading={syncing} onClick={() => sync()}>Проверить</Button>
         </div>
       )}
 
@@ -271,6 +338,7 @@ function TeamPage({ vault }: { vault: Vault }) {
       )}
 
       {adding && <AddMemberDialog vault={vault} onClose={() => setAdding(false)} />}
+      {tokenDialog && <TokenDialog vault={vault} onClose={() => setTokenDialog(false)} />}
       {removing && (
         <ConfirmDialog
           title={`Удалить ${removing.name}?`}
@@ -290,6 +358,51 @@ function TeamPage({ vault }: { vault: Vault }) {
         />
       )}
     </div>
+  );
+}
+
+/** A new HTTPS token for a team's repository. */
+function TokenDialog({ vault, onClose }: { vault: Vault; onClose: () => void }) {
+  const { toast, applyTeamView } = useStore();
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    if (!token.trim() || busy) return;
+    setBusy(true);
+    try {
+      const view = await api.teamSetGitToken(vault.id, token.trim());
+      applyTeamView(view);
+      if (view.remote?.error) {
+        setError(remoteErrorText(view.remote.error));
+        setBusy(false);
+        return;
+      }
+      toast({ text: "Токен заменён", tone: "success" });
+      onClose();
+    } catch (e) {
+      setError(errorText(e));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      title="Токен доступа к репозиторию"
+      onClose={onClose}
+      onSubmit={submit}
+      footer={
+        <>
+          <Button type="button" variant="ghost" onClick={onClose}>Отмена</Button>
+          <Button type="submit" variant="primary" loading={busy} disabled={!token.trim()}>Сохранить</Button>
+        </>
+      }
+    >
+      <Field label="Новый токен" error={error}>
+        <PasswordInput value={token} onChange={(v) => { setToken(v); setError(null); }} invalid={!!error} autoFocus />
+      </Field>
+    </Modal>
   );
 }
 
@@ -452,7 +565,7 @@ function TeamsOverview() {
         {teams.map((t) => {
           const count = ws.members.filter((m) => m.vaultId === t.id && !m.recovery).length;
           const hosts = ws.hosts.filter((h) => h.vaultId === t.id).length;
-          const status = t.syncStatus === "offline" ? "Папка недоступна" : t.removed ? "Вы удалены" : t.joined === false ? "Ждёт добавления" : t.problems?.length ? "Проблемы с хранилищем" : t.syncStatus === "conflict" ? "Конфликт" : null;
+          const status = t.syncStatus === "offline" ? "Папка недоступна" : t.remoteError ? "Нет связи с репозиторием" : t.removed ? "Вы удалены" : t.joined === false ? "Ждёт добавления" : t.problems?.length ? "Проблемы с хранилищем" : t.syncStatus === "conflict" ? "Конфликт" : null;
           return (
             <button
               key={t.id}

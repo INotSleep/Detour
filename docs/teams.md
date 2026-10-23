@@ -1,6 +1,6 @@
 # Teams: design
 
-Status: format 2 (per-record access enforced by encryption, storage integrity checks) is implemented in `crates/detour-core/src/team`; Git transport, rotation on hosts, snapshots and SSH certificates are planned.
+Status: format 2 (per-record access enforced by encryption, storage integrity checks) and the folder and Git transports are implemented in `crates/detour-core/src/team`; rotation on hosts, snapshots and SSH certificates are planned.
 
 ## Goals
 
@@ -122,8 +122,30 @@ Creating a team generates a recovery key. The team is created only after the own
 ## Transports
 
 - **Folder:** plain file reads and writes; the app re-reads every 20 seconds and on "Sync".
-- **Git:** embedded, no system `git` required (`gix` first, vendored `git2` as a fallback).
+- **Git (SSH or HTTPS):** Detour's own Git client, no system `git` and no C libraries (see below).
 - **Later:** S3, WebDAV.
+
+## Git transport
+
+Why not a library: `gitoxide` can't push yet, and `git2` brings libgit2, libssh2 and OpenSSL as C code. A team vault needs very little of Git, so Detour speaks it itself (`team/git`):
+
+- **Objects:** blobs, trees, one commit per push with a neutral author (`Detour <detour@invalid>`), so the host learns nothing about who wrote what.
+- **Packs:** reads packs with deltas, writes packs of whole objects.
+- **Protocol:** smart protocol v0 to `git-upload-pack` / `git-receive-pack`, split into a request and a response so one implementation serves both transports.
+- **SSH:** an exec channel of Detour's own SSH client. The server key is pinned like any host's; the login is a personal key or ssh-agent. One connection per server and login is kept open and reused for every command (a new channel each time), closed after 5 minutes unused and when the vault locks, so a sync costs a channel, not a handshake.
+- **HTTPS:** smart HTTP (`GET info/refs`, `POST git-upload-pack` / `git-receive-pack`) with a personal access token as the password. TLS is rustls with ring, certificates are checked against the system's store (company proxies with their own CA work), `HTTPS_PROXY` is honoured. Plain `http://` is refused except to this machine. Each member's token is theirs and lives only in their personal vault; a rejected token can be replaced from the team page.
+
+A leaked Git credential gives access to the storage, not to the team's data: the storage is untrusted anyway, and every change to it is verified.
+
+A Git team is a local copy (`<data>/teams/<id>/files`) in the folder layout, plus what the remote branch held at the last sync. The folder transport's checks run on it unchanged. Mirroring follows from "the log is the truth, Git is only a carrier":
+
+- **Pull** adds files the client doesn't have. It never replaces or deletes one: a different version from the remote is kept beside the original (`*.git-conflict-<id>.json`) and reported as a second version of that entry; a file the remote dropped stays.
+- **Push** commits exactly the local files on top of the remote head. Whatever the remote dropped or changed is put back for everyone. A push rejected because someone else pushed first pulls and tries again; per-device files never conflict.
+- **Refused:** file names outside `[A-Za-z0-9._-]`, deeper than the vault layout, links and submodules.
+
+The app pulls and pushes on "Sync", every 20 seconds, and right after every edit. Network work never holds the vault lock.
+
+Not yet: signing in with GitHub (device flow through a registered GitHub App) instead of pasting a token.
 
 ## What the storage can see
 
@@ -140,7 +162,8 @@ The personal vault becomes a team of one person with several devices, using the 
 ## Plan
 
 - Done: format 2 with per-record access, key drops, cutoffs, integrity checks, folder transport, recovery key.
-- Embedded Git transport.
+- Done: Git transport over SSH (one kept connection) and HTTPS (token).
+- Signing in with GitHub (device flow).
 - Rotation on hosts after removal.
 - Snapshots (every open replays all entries now: fine for thousands of changes, not for years).
 - State fingerprint comparison between members.

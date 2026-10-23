@@ -10,6 +10,7 @@ pub mod keys;
 pub mod model;
 pub mod ssh;
 pub mod store;
+pub mod sync;
 pub mod team;
 
 use serde::Serialize;
@@ -74,6 +75,9 @@ pub enum Error {
     RootChanged,
     #[error("already a member")]
     AlreadyMember,
+    /// The Git repository or its server said no, or sent something unusable.
+    #[error("git: {message}")]
+    Git { message: String },
     #[error("{message}")]
     Io { message: String },
     #[error("{message}")]

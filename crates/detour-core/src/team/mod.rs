@@ -1,5 +1,6 @@
 //! Team vaults: shared, end-to-end encrypted, no server. See `docs/teams.md`.
 
+pub mod git;
 pub mod log;
 pub mod state;
 
@@ -113,6 +114,20 @@ pub struct TeamView {
     pub conflicts: Vec<ConflictView>,
     pub activity: Vec<ActivityView>,
     pub problems: Vec<ProblemView>,
+    /// For a team in a Git repository: how mirroring it goes. Filled in by the store.
+    pub remote: Option<RemoteView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteView {
+    pub url: String,
+    /// Local changes the repository doesn't have yet.
+    pub pending: bool,
+    /// Why the last attempt to reach the repository failed (a serialized `Error`).
+    pub error: Option<Value>,
+    /// Last time the repository was reached.
+    pub synced_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -538,6 +553,7 @@ impl TeamVault {
             conflicts,
             activity,
             problems,
+            remote: None,
         }
     }
 

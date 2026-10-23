@@ -2,12 +2,14 @@
 //! and `detour_core`. No business logic belongs in this crate.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
-use detour_core::model::{KeyAlgorithm, KeyView, OwnLoginView, VaultView};
+use detour_core::model::{Auth, KeyAlgorithm, KeyView, OwnLoginView, VaultView};
 use detour_core::ssh::{self, SessionEvent, SessionHandle};
 use detour_core::store::{MyId, Store, TeamEntry, VaultUpdate};
 use detour_core::team::state::{Coll, Level, Role};
+use detour_core::sync;
+use detour_core::team::git::GitRemote;
 use detour_core::team::{AccessChange, TeamView, VaultInfo};
 use detour_core::{Error, Result, SecretKind};
 use serde::{Deserialize, Serialize};
@@ -15,12 +17,23 @@ use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::State;
 
 struct App {
-    store: Mutex<Store>,
+    store: Arc<Mutex<Store>>,
     sessions: Mutex<HashMap<String, SessionHandle>>,
 }
 
 fn poisoned<T>(_: T) -> Error {
     Error::Internal { message: "state lock poisoned".into() }
+}
+
+/// After a successful edit of a team kept in Git, sends it to the repository in the background.
+fn pushed<T>(app: &App, vault_id: &str, result: Result<T>) -> Result<T> {
+    if result.is_ok() && vault_id != detour_core::store::PERSONAL {
+        let (store, id) = (app.store.clone(), vault_id.to_string());
+        tauri::async_runtime::spawn(async move {
+            let _ = sync::push_team(&store, &id).await;
+        });
+    }
+    result
 }
 
 #[derive(Serialize)]
@@ -93,7 +106,8 @@ fn vault_put(app: State<App>, update: VaultUpdate) -> Result<VaultView> {
 
 #[tauri::command]
 fn host_set_password(app: State<App>, vault_id: String, host_id: String, password: Option<String>) -> Result<()> {
-    app.store.lock().map_err(poisoned)?.set_host_password_in(&vault_id, &host_id, password)
+    let r = app.store.lock().map_err(poisoned)?.set_host_password_in(&vault_id, &host_id, password);
+    pushed(&app, &vault_id, r)
 }
 
 /// A saved password to show or copy: the shared one, or with `own` the person's own login for a team host.
@@ -111,12 +125,14 @@ fn host_forget_key(app: State<App>, vault_id: String, host_id: String) -> Result
 
 #[tauri::command]
 async fn key_generate(app: State<'_, App>, vault_id: String, name: String, algorithm: KeyAlgorithm, passphrase: Option<String>, remember: bool) -> Result<KeyView> {
-    app.store.lock().map_err(poisoned)?.generate_key_in(&vault_id, &name, algorithm, passphrase.as_deref(), remember)
+    let r = app.store.lock().map_err(poisoned)?.generate_key_in(&vault_id, &name, algorithm, passphrase.as_deref(), remember);
+    pushed(&app, &vault_id, r)
 }
 
 #[tauri::command]
 async fn key_import(app: State<'_, App>, vault_id: String, name: String, text: String, passphrase: Option<String>, remember: bool) -> Result<KeyView> {
-    app.store.lock().map_err(poisoned)?.import_key_in(&vault_id, &name, &text, passphrase.as_deref(), remember)
+    let r = app.store.lock().map_err(poisoned)?.import_key_in(&vault_id, &name, &text, passphrase.as_deref(), remember);
+    pushed(&app, &vault_id, r)
 }
 
 #[tauri::command]
@@ -126,7 +142,8 @@ fn key_export(app: State<App>, vault_id: String, key_id: String, passphrase: Opt
 
 #[tauri::command]
 async fn key_set_passphrase(app: State<'_, App>, vault_id: String, key_id: String, current: Option<String>, new: Option<String>, remember: bool) -> Result<KeyView> {
-    app.store.lock().map_err(poisoned)?.set_key_passphrase_in(&vault_id, &key_id, current.as_deref(), new.as_deref(), remember)
+    let r = app.store.lock().map_err(poisoned)?.set_key_passphrase_in(&vault_id, &key_id, current.as_deref(), new.as_deref(), remember);
+    pushed(&app, &vault_id, r)
 }
 
 /* ---------- teams ---------- */
@@ -178,33 +195,85 @@ fn team_leave(app: State<App>, id: String) -> Result<()> {
 }
 
 #[tauri::command]
-async fn team_sync(app: State<'_, App>, id: String) -> Result<TeamView> {
-    app.store.lock().map_err(poisoned)?.sync_team(&id)
+/// Re-reads a team; a team in Git is pulled and pushed. `trust_fingerprint` answers a new server key.
+async fn team_sync(app: State<'_, App>, id: String, trust_fingerprint: Option<String>) -> Result<TeamView> {
+    sync::sync_team(&app.store, &id, trust_fingerprint).await
+}
+
+fn git_remote(url: String, auth: Auth, token: Option<String>) -> GitRemote {
+    GitRemote { url, auth, token }
+}
+
+/// Replaces the HTTPS token of a team's repository, then syncs.
+#[tauri::command]
+async fn team_set_git_token(app: State<'_, App>, id: String, token: String) -> Result<TeamView> {
+    app.store.lock().map_err(poisoned)?.set_git_token(&id, &token)?;
+    sync::sync_team(&app.store, &id, None).await
+}
+
+/// Trusts a repository server's new key in place of the pinned one.
+#[tauri::command]
+async fn team_replace_server_key(app: State<'_, App>, id: String, fingerprint: String) -> Result<TeamView> {
+    sync::replace_server_key(&app.store, &id, fingerprint).await
+}
+
+#[tauri::command]
+async fn team_create_git(app: State<'_, App>, url: String, auth: Auth, token: Option<String>, name: String, my_name: String, recovery_key: String, trust_fingerprint: Option<String>) -> Result<TeamView> {
+    sync::create_git_team(&app.store, git_remote(url, auth, token), &name, &my_name, &recovery_key, trust_fingerprint).await
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GitInspected {
+    info: VaultInfo,
+    /// Hands the clone back to `team_join_git`.
+    clone: String,
+}
+
+#[tauri::command]
+async fn team_inspect_git(app: State<'_, App>, url: String, auth: Auth, token: Option<String>, trust_fingerprint: Option<String>) -> Result<GitInspected> {
+    let (info, clone) = sync::inspect_git_team(&app.store, &git_remote(url, auth, token), trust_fingerprint).await?;
+    Ok(GitInspected { info, clone })
+}
+
+#[tauri::command]
+fn team_join_git(app: State<App>, clone: String, root: String, url: String, auth: Auth, token: Option<String>) -> Result<TeamView> {
+    sync::join_git_team(&app.store, &clone, &root, git_remote(url, auth, token))
+}
+
+#[tauri::command]
+async fn team_recover_git(app: State<'_, App>, url: String, auth: Auth, token: Option<String>, recovery_key: String, my_name: String, trust_fingerprint: Option<String>) -> Result<TeamView> {
+    sync::recover_git_team(&app.store, git_remote(url, auth, token), &recovery_key, &my_name, trust_fingerprint).await
 }
 
 #[tauri::command]
 async fn team_put(app: State<'_, App>, id: String, update: VaultUpdate) -> Result<TeamView> {
-    app.store.lock().map_err(poisoned)?.team_put(&id, update)
+    let r = app.store.lock().map_err(poisoned)?.team_put(&id, update);
+    pushed(&app, &id, r)
 }
 
 #[tauri::command]
 async fn team_rename(app: State<'_, App>, id: String, name: String) -> Result<TeamView> {
-    app.store.lock().map_err(poisoned)?.team_rename(&id, &name)
+    let r = app.store.lock().map_err(poisoned)?.team_rename(&id, &name);
+    pushed(&app, &id, r)
 }
 
 #[tauri::command]
 async fn team_member_add(app: State<'_, App>, id: String, detour_id: String, name: String, role: Role, access: Level) -> Result<TeamView> {
-    app.store.lock().map_err(poisoned)?.team_add_member(&id, &detour_id, &name, role, access)
+    let r = app.store.lock().map_err(poisoned)?.team_add_member(&id, &detour_id, &name, role, access);
+    pushed(&app, &id, r)
 }
 
 #[tauri::command]
 async fn team_member_update(app: State<'_, App>, id: String, member: String, role: Role) -> Result<TeamView> {
-    app.store.lock().map_err(poisoned)?.team_update_member(&id, &member, role)
+    let r = app.store.lock().map_err(poisoned)?.team_update_member(&id, &member, role);
+    pushed(&app, &id, r)
 }
 
 #[tauri::command]
 async fn team_access_set(app: State<'_, App>, id: String, changes: Vec<AccessChange>) -> Result<TeamView> {
-    app.store.lock().map_err(poisoned)?.team_set_access(&id, &changes)
+    let r = app.store.lock().map_err(poisoned)?.team_set_access(&id, &changes);
+    pushed(&app, &id, r)
 }
 
 #[tauri::command]
@@ -214,17 +283,20 @@ fn team_own_login_set(app: State<App>, id: String, host_id: String, login: Optio
 
 #[tauri::command]
 async fn team_member_remove(app: State<'_, App>, id: String, member: String) -> Result<TeamView> {
-    app.store.lock().map_err(poisoned)?.team_remove_member(&id, &member)
+    let r = app.store.lock().map_err(poisoned)?.team_remove_member(&id, &member);
+    pushed(&app, &id, r)
 }
 
 #[tauri::command]
 async fn team_resolve_field(app: State<'_, App>, id: String, coll: Coll, record: String, field: String, pick: usize) -> Result<TeamView> {
-    app.store.lock().map_err(poisoned)?.team_resolve_field(&id, coll, &record, &field, pick)
+    let r = app.store.lock().map_err(poisoned)?.team_resolve_field(&id, coll, &record, &field, pick);
+    pushed(&app, &id, r)
 }
 
 #[tauri::command]
 async fn team_resolve_deleted(app: State<'_, App>, id: String, coll: Coll, record: String, keep: bool) -> Result<TeamView> {
-    app.store.lock().map_err(poisoned)?.team_resolve_deleted(&id, coll, &record, keep)
+    let r = app.store.lock().map_err(poisoned)?.team_resolve_deleted(&id, coll, &record, keep);
+    pushed(&app, &id, r)
 }
 
 /* ---------- sessions ---------- */
@@ -319,7 +391,8 @@ fn secret_save(app: State<App>, vault_id: String, host_id: String, kind: SecretK
         SecretKindArg::Password => SecretKind::Password,
         SecretKindArg::Passphrase => SecretKind::Passphrase,
     };
-    app.store.lock().map_err(poisoned)?.save_secret_in(&vault_id, &host_id, kind, value)
+    let r = app.store.lock().map_err(poisoned)?.save_secret_in(&vault_id, &host_id, kind, value);
+    pushed(&app, &vault_id, r)
 }
 
 #[derive(Deserialize)]
@@ -345,7 +418,7 @@ fn data_dir() -> std::path::PathBuf {
 pub fn builder<R: tauri::Runtime>(builder: tauri::Builder<R>, data_dir: std::path::PathBuf) -> tauri::Builder<R> {
     builder
         .plugin(tauri_plugin_dialog::init())
-        .manage(App { store: Mutex::new(Store::open(data_dir)), sessions: Mutex::new(HashMap::new()) })
+        .manage(App { store: Arc::new(Mutex::new(Store::open(data_dir))), sessions: Mutex::new(HashMap::new()) })
         .invoke_handler(tauri::generate_handler![
             core_info,
             write_text_file,
@@ -378,6 +451,12 @@ pub fn builder<R: tauri::Runtime>(builder: tauri::Builder<R>, data_dir: std::pat
             team_recover,
             team_leave,
             team_sync,
+            team_create_git,
+            team_replace_server_key,
+            team_set_git_token,
+            team_inspect_git,
+            team_join_git,
+            team_recover_git,
             team_put,
             team_rename,
             team_member_add,

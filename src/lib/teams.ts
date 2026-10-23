@@ -25,15 +25,20 @@ export function dataOf(ws: Workspace, vaultId: string): PersonalData {
 }
 
 const folderName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+/** `git@host:team/acme.git` -> `acme` */
+const repoName = (url: string) => folderName(url.replace(/:/g, "/")).replace(/\.git$/, "");
 
 function teamVault(view: TeamView): Vault {
   return {
     id: view.id,
-    name: view.name || folderName(view.path),
+    name: view.name || (view.remote ? repoName(view.remote.url) : folderName(view.path)),
     kind: "team",
-    sync: { type: "folder", path: view.path },
+    sync: view.remote ? { type: "git", remote: view.remote.url } : { type: "folder", path: view.path },
     syncStatus: view.conflicts.length ? "conflict" : "synced",
-    lastSync: Date.now(),
+    // For a repository: when it was last reached.
+    lastSync: view.remote ? (view.remote.syncedAt ?? undefined) : Date.now(),
+    pending: view.remote?.pending,
+    remoteError: view.remote?.error ?? undefined,
     conflicts: view.conflicts,
     joined: view.joined,
     removed: view.removed,

@@ -18,7 +18,8 @@ use crate::identity::{Identity, PublicIdentity};
 use crate::model::*;
 use crate::team::log::Head;
 use crate::team::state::{Coll, Level, Role};
-use crate::team::{AccessChange, TeamVault, TeamView, VaultInfo};
+use crate::team::git::{GitRemote, HttpRemote, HttpUrl, Mirror, Remote, SshUrl};
+use crate::team::{AccessChange, RemoteView, TeamVault, TeamView, VaultInfo};
 use crate::{Error, Result, SecretKind, keys, ssh};
 
 /// The personal vault's id in every vault-addressed call.
@@ -41,6 +42,8 @@ pub struct Store {
     teams: BTreeMap<String, TeamVault>,
     /// Teams that could not be opened (folder unavailable, ...), with the reason as error JSON.
     team_errors: BTreeMap<String, String>,
+    /// Git teams: the last failure reaching the repository (a serialized `Error`) and the last success.
+    git_status: BTreeMap<String, (Option<serde_json::Value>, Option<Millis>)>,
 }
 
 /// A joined team as the UI lists it: its contents when available, otherwise why not.
@@ -80,7 +83,7 @@ impl Store {
     }
 
     pub fn open(dir: impl AsRef<Path>) -> Self {
-        Self { dir: dir.as_ref().to_path_buf(), state: None, trash_keys: HashMap::new(), trash_passwords: HashMap::new(), teams: BTreeMap::new(), team_errors: BTreeMap::new() }
+        Self { dir: dir.as_ref().to_path_buf(), state: None, trash_keys: HashMap::new(), trash_passwords: HashMap::new(), teams: BTreeMap::new(), team_errors: BTreeMap::new(), git_status: BTreeMap::new() }
     }
 
     pub fn is_initialized(&self) -> bool {
@@ -135,6 +138,8 @@ impl Store {
         self.trash_passwords.clear();
         self.teams.clear();
         self.team_errors.clear();
+        self.git_status.clear();
+        ssh::close_pooled();
     }
 
     pub fn change_master_password(&mut self, current: &str, new: &str) -> Result<()> {
@@ -404,14 +409,20 @@ impl Store {
         }
     }
 
-    /// Team view with this person's last logins and own logins filled in.
-    fn team_view(&self, id: &str) -> Result<TeamView> {
+    /// Team view with this person's last logins, own logins and repository status filled in.
+    pub fn team_view(&self, id: &str) -> Result<TeamView> {
         let mut view = self.team(id)?.view();
         let v = &self.unlocked()?.vault;
         for h in &mut view.data.hosts {
             let key = format!("{id}/{}", h.id);
             h.last_connected = v.team_last_connected.get(&key).copied();
             h.own = v.team_own.get(&key).map(OwnLoginView::from);
+        }
+        if let Some(r) = v.teams.iter().find(|t| t.id == id)
+            && let Some(remote) = &r.remote
+        {
+            let (error, synced_at) = self.git_status.get(id).cloned().unwrap_or_default();
+            view.remote = Some(RemoteView { url: remote.url.clone(), pending: mirror_of(r).pending().unwrap_or(false), error, synced_at });
         }
         Ok(view)
     }
@@ -440,7 +451,7 @@ impl Store {
         let recovery = Identity::from_recovery_key(recovery_key)?;
         let (me, device) = self.member()?;
         let t = TeamVault::create(path, name, &me, my_name, &device, &recovery)?;
-        self.add_team(t)
+        self.add_team(t, None)
     }
 
     pub fn inspect_team(path: &str) -> Result<VaultInfo> {
@@ -455,7 +466,7 @@ impl Store {
             return Err(Error::AlreadyMember);
         }
         let t = TeamVault::open(path, root, &me, &device, self.known_heads(&id))?;
-        self.add_team(t)
+        self.add_team(t, None)
     }
 
     /// Uses a recovery key to make this person an owner of the vault at `path` again, then joins it.
@@ -469,9 +480,9 @@ impl Store {
         }
     }
 
-    fn add_team(&mut self, t: TeamVault) -> Result<TeamView> {
+    fn add_team(&mut self, t: TeamVault, remote: Option<GitRemote>) -> Result<TeamView> {
         let id = t.id().to_string();
-        let r = TeamRef { id: id.clone(), path: t.path().display().to_string(), root: t.root().to_string() };
+        let r = TeamRef { id: id.clone(), path: t.path().display().to_string(), root: t.root().to_string(), remote };
         self.vault_mut()?.teams.push(r);
         self.teams.insert(id.clone(), t);
         self.save()?;
@@ -480,10 +491,17 @@ impl Store {
 
     /// Forgets a team on this device (the shared vault is untouched).
     pub fn leave_team(&mut self, id: &str) -> Result<()> {
+        let gone: Vec<TeamRef> = self.unlocked()?.vault.teams.iter().filter(|t| t.id == id).cloned().collect();
         self.vault_mut()?.teams.retain(|t| t.id != id);
         self.teams.remove(id);
         self.team_errors.remove(id);
-        self.save()
+        self.git_status.remove(id);
+        self.save()?;
+        // A Git team's local copy is only a cache of the repository.
+        for r in gone.iter().filter(|r| r.remote.is_some()) {
+            let _ = std::fs::remove_dir_all(mirror_of(r).files().parent().unwrap_or(Path::new(&r.path)));
+        }
+        Ok(())
     }
 
     /// Re-reads the team's storage (or retries opening it), then does the housekeeping it calls for.
@@ -706,6 +724,138 @@ impl Store {
         let ep = endpoint(&host);
         self.vault_mut()?.known_hosts.retain(|k| k.endpoint != ep);
         self.save()
+    }
+}
+
+/* ---------- teams in Git: what the network operations in `sync` need ---------- */
+
+/// The local copy of a Git team: `path` is its `files` directory.
+fn mirror_of(r: &TeamRef) -> Mirror {
+    Mirror::new(Path::new(&r.path).parent().unwrap_or(Path::new(&r.path)))
+}
+
+impl Store {
+    fn teams_dir(&self) -> PathBuf {
+        self.dir.join("teams")
+    }
+
+    /// A fresh directory for a repository being cloned or a team being created.
+    pub fn staging_dir(&self) -> (String, PathBuf) {
+        let token = format!("stage-{}", crate::new_id());
+        let dir = self.teams_dir().join(&token);
+        (token, dir)
+    }
+
+    /// The staging directory named by a token a UI handed back.
+    pub fn staged(&self, token: &str) -> Result<PathBuf> {
+        let ok = token.starts_with("stage-") && token.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+        let dir = self.teams_dir().join(token);
+        if !ok || !dir.is_dir() {
+            return Err(not_found("staged repository"));
+        }
+        Ok(dir)
+    }
+
+    /// How to reach a repository with this person's keys and pinned server keys.
+    pub fn git_remote(&self, remote: &GitRemote, trust_fingerprint: Option<String>) -> Result<Remote> {
+        if remote.is_https() {
+            let url = HttpUrl::parse(&remote.url)?;
+            let token = remote.token.clone().filter(|t| !t.trim().is_empty()).map(|t| t.trim().to_string());
+            return Ok(Remote::Http(HttpRemote { url, token }));
+        }
+        let url = SshUrl::parse(&remote.url)?;
+        let v = &self.unlocked()?.vault;
+        let key = match &remote.auth {
+            Auth::Key { key_id } => Some(v.keys.iter().find(|k| &k.id == key_id).ok_or_else(|| not_found("key"))?.clone()),
+            Auth::Agent => None,
+            Auth::Password => return Err(Error::Git { message: "repositories need a key or ssh-agent".into() }),
+        };
+        let host = Host {
+            id: "git".into(),
+            group: String::new(),
+            label: url.host.clone(),
+            address: url.host.clone(),
+            port: url.port,
+            user: url.user.clone(),
+            auth: remote.auth.clone(),
+            tags: vec![],
+            last_connected: None,
+            password: None,
+        };
+        let known = v.known_hosts.iter().find(|k| k.endpoint == endpoint(&host)).cloned();
+        Ok(Remote::Ssh { request: ssh::ConnectRequest { host, key, secret: None, known, trust_fingerprint }, path: url.path })
+    }
+
+    /// The local copy and remote of a Git team; `None` for a team in a folder.
+    pub fn git_job(&self, id: &str, trust_fingerprint: Option<String>) -> Result<Option<(Mirror, Remote)>> {
+        let r = self.unlocked()?.vault.teams.iter().find(|t| t.id == id).cloned().ok_or_else(|| not_found("team"))?;
+        match &r.remote {
+            None => Ok(None),
+            Some(remote) => Ok(Some((mirror_of(&r), self.git_remote(remote, trust_fingerprint)?))),
+        }
+    }
+
+    /// Pins a server key the user agreed to trust.
+    pub fn pin_known_host(&mut self, k: Option<KnownHost>) -> Result<()> {
+        let Some(k) = k else { return Ok(()) };
+        let v = self.vault_mut()?;
+        v.known_hosts.retain(|x| x.endpoint != k.endpoint);
+        v.known_hosts.push(k);
+        self.save()
+    }
+
+    /// Replaces the HTTPS token of a team's repository (it expired or was revoked).
+    pub fn set_git_token(&mut self, id: &str, token: &str) -> Result<()> {
+        let v = self.vault_mut()?;
+        let r = v.teams.iter_mut().find(|t| t.id == id).ok_or_else(|| not_found("team"))?;
+        let remote = r.remote.as_mut().filter(|r| r.is_https()).ok_or_else(|| not_found("repository"))?;
+        remote.token = Some(token.trim().to_string()).filter(|t| !t.is_empty());
+        self.save()
+    }
+
+    /// Forgets the pinned server key of a team's repository, so a new one can be trusted.
+    pub fn forget_git_host_key(&mut self, id: &str) -> Result<()> {
+        let r = self.unlocked()?.vault.teams.iter().find(|t| t.id == id).cloned().ok_or_else(|| not_found("team"))?;
+        let remote = r.remote.ok_or_else(|| not_found("repository"))?;
+        let url = SshUrl::parse(&remote.url)?;
+        let ep = format!("{}:{}", url.host, url.port);
+        self.vault_mut()?.known_hosts.retain(|k| k.endpoint != ep);
+        ssh::close_pooled();
+        self.save()
+    }
+
+    /// Remembers how the last attempt to reach a team's repository went.
+    pub fn record_git(&mut self, id: &str, outcome: &Result<()>) {
+        let entry = self.git_status.entry(id.to_string()).or_default();
+        match outcome {
+            Ok(()) => *entry = (None, Some(now_ms())),
+            Err(e) => entry.0 = serde_json::to_value(e).ok(),
+        }
+    }
+
+    /// Creates a team vault in `files` (a staging copy), returning nothing to keep open.
+    pub fn create_team_files(&self, files: &Path, name: &str, my_name: &str, recovery_key: &str) -> Result<()> {
+        let recovery = Identity::from_recovery_key(recovery_key)?;
+        let (me, device) = self.member()?;
+        TeamVault::create(files, name, &me, my_name, &device, &recovery)?;
+        Ok(())
+    }
+
+    /// Makes a staged copy of a repository a joined team. `root` is the creator the user confirmed.
+    pub fn add_git_team(&mut self, staged: &Path, root: &str, remote: GitRemote) -> Result<TeamView> {
+        let info = TeamVault::inspect(staged.join("files"))?;
+        if self.teams.contains_key(&info.id) || self.unlocked()?.vault.teams.iter().any(|t| t.id == info.id) {
+            return Err(Error::AlreadyMember);
+        }
+        let dir = self.teams_dir().join(&info.id);
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir)?;
+        }
+        std::fs::rename(staged, &dir)?;
+        let files = dir.join("files");
+        let (me, device) = self.member()?;
+        let t = TeamVault::open(&files, root, &me, &device, self.known_heads(&info.id))?;
+        self.add_team(t, Some(remote))
     }
 }
 

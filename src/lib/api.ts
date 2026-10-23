@@ -28,6 +28,7 @@ export type CoreError =
   | { kind: "connect" | "io" | "internal"; message: string }
   | { kind: "invalidId"; reason: string }
   | { kind: "forbidden" | "notATeamVault" | "folderNotEmpty" | "rootChanged" | "alreadyMember" }
+  | { kind: "git"; message: string }
   | { kind: "unavailable"; path: string };
 
 export type SecretKind = "password" | "passphrase";
@@ -61,8 +62,22 @@ export function errorText(e: unknown): string {
     case "rootChanged": return "Создатель хранилища изменился";
     case "alreadyMember": return "Уже в команде";
     case "unavailable": return `Хранилище недоступно: ${e.path}`;
+    case "git": return gitReason(e.message);
     default: return e.message;
   }
+}
+
+function gitReason(message: string) {
+  if (message.includes("repository address")) return "Неверный адрес репозитория";
+  if (message.includes("key or ssh-agent")) return "Выберите ключ или ssh-agent";
+  if (message.includes("keeps changing")) return "Репозиторий всё время меняется, повторите позже";
+  if (message.includes("token rejected")) return "Репозиторий не принял токен";
+  if (message.includes("use https")) return "Токен передаётся только по https";
+  if (message.includes("not a smart Git server")) return "По этому адресу нет Git-репозитория";
+  if (message.includes("repository not found")) return "Репозиторий не найден";
+  if (message.includes("unsafe")) return "В репозитории посторонние файлы";
+  if (/not found|does not appear|not a git repository/i.test(message)) return "Репозиторий не найден";
+  return `Репозиторий: ${message}`;
 }
 
 function keyReason(reason: string) {
@@ -129,6 +144,19 @@ export interface TeamView {
   conflicts: Conflict[];
   activity: Omit<ActivityItem, "vaultId">[];
   problems: Problem[];
+  /** Team kept in Git: how mirroring it goes. */
+  remote: { url: string; pending: boolean; error: CoreError | null; syncedAt: number | null } | null;
+}
+
+/** How to reach a team's Git repository: over SSH a personal key or ssh-agent, over HTTPS a token. */
+export type GitAuth = { type: "key"; keyId: string } | { type: "agent" } | { type: "password" };
+
+/** A repository address and how to log in to it. */
+export interface GitLogin {
+  url: string;
+  auth: GitAuth;
+  /** HTTPS only. */
+  token?: string;
 }
 
 export interface TeamEntry {
@@ -336,7 +364,19 @@ export const api = {
   teamJoin: (path: string, root: string): Promise<TeamView> => invoke("team_join", { path, root }),
   teamRecover: (path: string, recoveryKey: string, myName: string): Promise<TeamView> => invoke("team_recover", { path, recoveryKey, myName }),
   teamLeave: (id: string): Promise<void> => invoke("team_leave", { id }),
-  teamSync: (id: string): Promise<TeamView> => invoke("team_sync", { id }),
+  teamSync: (id: string, trustFingerprint?: string): Promise<TeamView> => invoke("team_sync", { id, trustFingerprint: trustFingerprint ?? null }),
+  teamCreateGit: (g: GitLogin, name: string, myName: string, recoveryKey: string, trustFingerprint?: string): Promise<TeamView> =>
+    invoke("team_create_git", { url: g.url, auth: g.auth, token: g.token ?? null, name, myName, recoveryKey, trustFingerprint: trustFingerprint ?? null }),
+  /** Clones a repository to see whose team it is; `token` hands the clone to teamJoinGit. */
+  teamInspectGit: (g: GitLogin, trustFingerprint?: string): Promise<{ info: VaultInfo; clone: string }> =>
+    invoke("team_inspect_git", { url: g.url, auth: g.auth, token: g.token ?? null, trustFingerprint: trustFingerprint ?? null }),
+  /** Trusts a repository server's new key in place of the pinned one. */
+  teamReplaceServerKey: (id: string, fingerprint: string): Promise<TeamView> => invoke("team_replace_server_key", { id, fingerprint }),
+  teamJoinGit: (clone: string, root: string, g: GitLogin): Promise<TeamView> => invoke("team_join_git", { clone, root, url: g.url, auth: g.auth, token: g.token ?? null }),
+  /** Replaces the HTTPS token of a team's repository. */
+  teamSetGitToken: (id: string, token: string): Promise<TeamView> => invoke("team_set_git_token", { id, token }),
+  teamRecoverGit: (g: GitLogin, recoveryKey: string, myName: string, trustFingerprint?: string): Promise<TeamView> =>
+    invoke("team_recover_git", { url: g.url, auth: g.auth, token: g.token ?? null, recoveryKey, myName, trustFingerprint: trustFingerprint ?? null }),
   teamPut: (id: string, data: PersonalData): Promise<TeamView> => invoke("team_put", { id, update: toView(data) }),
   teamRename: (id: string, name: string): Promise<TeamView> => invoke("team_rename", { id, name }),
   teamMemberAdd: (id: string, detourId: string, name: string, role: Role, access: Level): Promise<TeamView> => invoke("team_member_add", { id, detourId, name, role, access }),

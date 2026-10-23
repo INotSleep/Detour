@@ -6,8 +6,9 @@
 //! missing password or passphrase — it fails with a dedicated `Error` and the
 //! UI calls `connect` again with the answer.
 
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 use russh::client;
 use russh::keys::ssh_key::HashAlg;
@@ -19,6 +20,7 @@ use crate::model::{Auth, Host, KeyEntry, KnownHost, now_ms};
 use crate::store::endpoint;
 use crate::{Error, Result, SecretKind, keys};
 
+#[derive(Clone)]
 pub struct ConnectRequest {
     pub host: Host,
     pub key: Option<KeyEntry>,
@@ -96,7 +98,8 @@ fn connect_error(e: impl std::fmt::Display) -> Error {
     Error::Connect { message: e.to_string() }
 }
 
-pub async fn connect(req: ConnectRequest, cols: u32, rows: u32) -> Result<Connected> {
+/// Connects, checks the host key and authenticates.
+async fn open(req: &ConnectRequest) -> Result<(client::Handle<Client>, Option<KnownHost>)> {
     let host = &req.host;
     let pinned = match &req.known {
         Some(k) => Some(PublicKey::from_openssh(&k.key).map_err(|e| Error::Internal { message: format!("pinned key: {e}") })?),
@@ -136,11 +139,92 @@ pub async fn connect(req: ConnectRequest, cols: u32, rows: u32) -> Result<Connec
         _ => None,
     };
 
-    if let Err(e) = authenticate(&mut session, &req).await {
+    if let Err(e) = authenticate(&mut session, req).await {
         let _ = session.disconnect(Disconnect::ByApplication, "", "en").await;
         return Err(e);
     }
+    Ok((session, new_known_host))
+}
 
+/// A connection kept open for more commands (Git sync runs every few seconds).
+#[derive(Clone)]
+pub struct Session(Arc<client::Handle<Client>>);
+
+struct Pooled {
+    session: Session,
+    used: Instant,
+}
+
+/// Open connections by target and login; dropped after a while unused, and on lock.
+static POOL: LazyLock<Mutex<HashMap<String, Pooled>>> = LazyLock::new(Default::default);
+const IDLE: Duration = Duration::from_secs(300);
+
+fn pool_key(req: &ConnectRequest) -> String {
+    let h = &req.host;
+    let login = match &h.auth {
+        Auth::Key { key_id } => format!("key:{key_id}:{}", req.key.as_ref().map(|k| k.fingerprint.as_str()).unwrap_or_default()),
+        Auth::Agent => "agent".into(),
+        Auth::Password => "password".into(),
+    };
+    // A different pinned server key means a different server: never reuse.
+    let pinned = req.known.as_ref().map(|k| k.fingerprint.as_str()).unwrap_or_default();
+    format!("{}@{}|{login}|{pinned}", h.user, endpoint(h))
+}
+
+fn pooled(key: &str) -> Option<Session> {
+    let mut pool = POOL.lock().unwrap_or_else(|e| e.into_inner());
+    pool.retain(|_, p| p.used.elapsed() < IDLE && !p.session.0.is_closed());
+    let p = pool.get_mut(key)?;
+    p.used = Instant::now();
+    Some(p.session.clone())
+}
+
+/// Closes every kept connection (when the vault locks).
+pub fn close_pooled() {
+    POOL.lock().unwrap_or_else(|e| e.into_inner()).clear();
+}
+
+/// A command's stdin and stdout as one stream (Git over SSH).
+pub struct Exec {
+    pub stream: russh::ChannelStream<client::Msg>,
+    pub new_known_host: Option<KnownHost>,
+    /// Keeps the connection open while the stream is used.
+    pub session: Session,
+}
+
+async fn run(session: &Session, command: &str) -> Result<russh::ChannelStream<client::Msg>> {
+    let channel = session.0.channel_open_session().await.map_err(connect_error)?;
+    channel.exec(true, command).await.map_err(connect_error)?;
+    Ok(channel.into_stream())
+}
+
+/// Runs a command, over a kept connection when there is one.
+pub async fn exec(req: &ConnectRequest, command: &str) -> Result<Exec> {
+    let key = pool_key(req);
+    if let Some(session) = pooled(&key) {
+        match run(&session, command).await {
+            Ok(stream) => return Ok(Exec { stream, new_known_host: None, session }),
+            // The server dropped it in the meantime: connect again.
+            Err(_) => {
+                POOL.lock().unwrap_or_else(|e| e.into_inner()).remove(&key);
+            }
+        }
+    }
+    let (handle, new_known_host) = open(req).await?;
+    let session = Session(Arc::new(handle));
+    let stream = run(&session, command).await?;
+    POOL.lock().unwrap_or_else(|e| e.into_inner()).insert(key, Pooled { session: session.clone(), used: Instant::now() });
+    Ok(Exec { stream, new_known_host, session })
+}
+
+/// How many connections are kept open (for tests).
+#[doc(hidden)]
+pub fn pooled_count() -> usize {
+    POOL.lock().unwrap_or_else(|e| e.into_inner()).len()
+}
+
+pub async fn connect(req: ConnectRequest, cols: u32, rows: u32) -> Result<Connected> {
+    let (session, new_known_host) = open(&req).await?;
     let channel = session.channel_open_session().await.map_err(connect_error)?;
     channel.request_pty(false, "xterm-256color", cols, rows, 0, 0, &[]).await.map_err(connect_error)?;
     channel.request_shell(false).await.map_err(connect_error)?;

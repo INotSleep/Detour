@@ -98,9 +98,9 @@ function VaultSwitcher() {
         <span className="vault-names">
           <span className="vault-name">{vault.name}</span>
           {vault.kind === "team" && (
-            <span className={`vault-sync ${vault.removed ? "conflict" : vault.syncStatus}`}>
+            <span className={`vault-sync ${vault.removed || vault.remoteError ? "conflict" : vault.pending ? "syncing" : vault.syncStatus}`}>
               <span className="dot" />
-              {vault.syncStatus === "syncing" || vault.syncStatus === "offline" ? syncStatusText[vault.syncStatus] : vault.removed ? "Вы удалены" : vault.joined === false ? "Ждёт добавления" : formatAgo(vault.lastSync)}
+              {vault.syncStatus === "syncing" || vault.syncStatus === "offline" ? syncStatusText[vault.syncStatus] : vault.removed ? "Вы удалены" : vault.joined === false ? "Ждёт добавления" : vault.remoteError ? "Нет связи с репозиторием" : vault.pending ? "Не отправлено" : formatAgo(vault.lastSync)}
             </span>
           )}
         </span>

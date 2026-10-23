@@ -259,6 +259,9 @@ pub struct TeamRef {
     pub path: String,
     /// Detour ID of the vault's creator, confirmed when joining.
     pub root: String,
+    /// Set for a team kept in a Git repository; `path` is then its local copy.
+    #[serde(default)]
+    pub remote: Option<crate::team::git::GitRemote>,
 }
 
 /// What a UI sees of a vault: no secrets.

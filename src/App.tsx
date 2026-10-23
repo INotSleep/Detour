@@ -100,6 +100,9 @@ export default function App() {
   // Updaters must stay pure: React may run them twice, and a side effect there
   // once made a client save an empty host list and delete a team's hosts.
   const wsRef = useRef<Workspace | null>(null);
+  // Pending re-reads of Git teams after an edit, and the latest applyView for them.
+  const recheck = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const applyViewRef = useRef<(view: TeamView) => void>(() => {});
   wsRef.current = ws;
 
   /** Puts a team's state from the core into the workspace, unless local edits are still on their way. */
@@ -113,7 +116,13 @@ export default function App() {
     wsRef.current = next;
     // Edited in the meantime: keep those edits, take only members, conflicts and activity.
     setWs((cur) => (cur === base ? next : cur && applyTeamView(cur, view, false)));
+    // An edit of a Git team is pushed in the background; look again once it had time to go out.
+    if (view.remote?.pending && !view.remote.error) {
+      clearTimeout(recheck.current.get(view.id));
+      recheck.current.set(view.id, setTimeout(() => api.teamSync(view.id).then(applyViewRef.current).catch(() => {}), 1500));
+    }
   }, []);
+  applyViewRef.current = applyView;
 
   // Persist edits of every writable vault to detour-core.
   useEffect(() => {

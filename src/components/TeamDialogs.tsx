@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
-import { Copy, Download, FolderOpen, KeyRound, ShieldCheck } from "lucide-react";
-import { api, errorText, isCoreError, type TeamView } from "../lib/api";
+import { Copy, Download, FolderOpen, KeyRound, ShieldCheck, ShieldQuestion } from "lucide-react";
+import { api, errorText, isCoreError, type GitLogin, type TeamView } from "../lib/api";
 import { copyText, sleep, uid, useStore } from "../lib/store";
 import type { Level, Role, Vault } from "../lib/types";
-import { Button, Field, IconButton, Modal, Segmented } from "./ui";
+import { Button, Field, IconButton, Modal, PasswordInput, Segmented } from "./ui";
 
 /* ---------- demo stand-ins (plain browser) ---------- */
 
@@ -35,6 +35,91 @@ function FolderField({ value, onChange, label = "Папка" }: { value: string;
   );
 }
 
+/* ---------- where a team vault lives: a folder or a Git repository ---------- */
+
+interface Storage {
+  kind: "folder" | "git";
+  path: string;
+  url: string;
+  /** Personal key id, or "agent". */
+  login: string;
+  /** HTTPS access token. */
+  token: string;
+}
+
+function useStorage(): [Storage, (patch: Partial<Storage>) => void] {
+  const { ws } = useStore();
+  const firstKey = ws.keys.find((k) => k.vaultId === "personal")?.id ?? "agent";
+  const [s, setS] = useState<Storage>({ kind: "folder", path: "", url: "", login: firstKey, token: "" });
+  return [s, (patch) => setS((cur) => ({ ...cur, ...patch }))];
+}
+
+const isHttps = (url: string) => /^https?:\/\//i.test(url.trim());
+const gitLogin = (s: Storage): GitLogin =>
+  isHttps(s.url)
+    ? { url: s.url.trim(), auth: { type: "password" }, token: s.token.trim() }
+    : { url: s.url.trim(), auth: s.login === "agent" ? { type: "agent" } : { type: "key", keyId: s.login } };
+const storageReady = (s: Storage) => (s.kind === "folder" ? !!s.path.trim() : !!s.url.trim() && (!isHttps(s.url) || !!s.token.trim()));
+
+function StorageFields({ value, set, folderLabel }: { value: Storage; set: (p: Partial<Storage>) => void; folderLabel: string }) {
+  const { ws, toast } = useStore();
+  const keys = ws.keys.filter((k) => k.vaultId === "personal");
+  const key = keys.find((k) => k.id === value.login);
+  return (
+    <>
+      <Field label="Хранилище">
+        <Segmented value={value.kind} onChange={(kind) => set({ kind })} options={[{ value: "folder", label: "Папка" }, { value: "git", label: "Git-репозиторий" }]} />
+      </Field>
+      {value.kind === "folder" ? (
+        <FolderField value={value.path} onChange={(path) => set({ path })} label={folderLabel} />
+      ) : (
+        <>
+          <Field label="Адрес репозитория">
+            <input className="input mono" value={value.url} onChange={(e) => set({ url: e.target.value })} placeholder="git@github.com:team/vault.git" spellCheck={false} autoComplete="off" />
+          </Field>
+          {isHttps(value.url) ? (
+            <Field label="Токен доступа">
+              <PasswordInput value={value.token} onChange={(token) => set({ token })} placeholder="github_pat_…" />
+            </Field>
+          ) : (
+          <Field label="Вход в репозиторий">
+            <div className="input-group">
+              <select className="input" value={value.login} onChange={(e) => set({ login: e.target.value })}>
+                {keys.map((k) => <option key={k.id} value={k.id}>{k.name}</option>)}
+                <option value="agent">ssh-agent</option>
+              </select>
+              {key && (
+                <Button type="button" icon={Copy} onClick={async () => toast((await copyText(key.publicKey)) ? { text: `Публичный ключ «${key.name}» скопирован`, tone: "success" } : { text: "Не удалось скопировать", tone: "error" })}>
+                  Публичный ключ
+                </Button>
+              )}
+            </div>
+          </Field>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
+/** The server key of a repository seen for the first time. */
+function ServerKeyCard({ url, fingerprint }: { url: string; fingerprint: string }) {
+  const host = url.replace(/^ssh:\/\//, "").replace(/^[^@]*@/, "").split(/[:/]/)[0];
+  return (
+    <div className="trust-card">
+      <ShieldQuestion size={18} />
+      <div>
+        <div className="strong">Новый сервер {host}</div>
+        <div className="fp mono">{fingerprint}</div>
+        <div className="muted small">Сверьте отпечаток с тем, что публикует хостинг</div>
+      </div>
+    </div>
+  );
+}
+
+/** A new server key from an error, if that is what it is. */
+const unknownServerKey = (e: unknown) => (isCoreError(e) && e.kind === "hostKeyUnknown" ? e.fingerprint : null);
+
 /* ---------- my Detour ID ---------- */
 
 export function MyIdDialog({ onClose }: { onClose: () => void }) {
@@ -57,16 +142,17 @@ export function CreateTeamDialog({ onClose, onDone }: { onClose: () => void; onD
   const { update, setVault, toast, applyTeamView } = useStore();
   const [step, setStep] = useState<"details" | "recovery">("details");
   const [name, setName] = useState("");
-  const [path, setPath] = useState("");
+  const [storage, setStorage] = useStorage();
   const [myName, setMyName] = useState("");
   const [recovery, setRecovery] = useState("");
   const [confirm, setConfirm] = useState("");
+  const [serverKey, setServerKey] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const lastFour = recovery.replace(/[^A-Z0-9]/gi, "").slice(-4).toUpperCase();
   const confirmed = confirm.replace(/[^A-Z0-9]/gi, "").toUpperCase() === lastFour;
-  const detailsOk = name.trim() && path.trim() && myName.trim();
+  const detailsOk = name.trim() && storageReady(storage) && myName.trim();
 
   const next = async () => {
     if (!detailsOk) return;
@@ -77,16 +163,21 @@ export function CreateTeamDialog({ onClose, onDone }: { onClose: () => void; onD
   const create = async () => {
     if (!confirmed || busy) return;
     setBusy(true);
+    setError(null);
     try {
       if (api.real) {
-        const view: TeamView = await api.teamCreate(path.trim(), name.trim(), myName.trim(), recovery);
+        const view: TeamView =
+          storage.kind === "git"
+            ? await api.teamCreateGit(gitLogin(storage), name.trim(), myName.trim(), recovery, serverKey ?? undefined)
+            : await api.teamCreate(storage.path.trim(), name.trim(), myName.trim(), recovery);
         applyTeamView(view);
         setVault(view.id);
       } else {
         await sleep(500);
         const id = uid("v");
         const meId = uid("m");
-        const vault: Vault = { id, name: name.trim(), kind: "team", sync: { type: "folder", path: path.trim() }, syncStatus: "synced", lastSync: Date.now(), conflicts: [], joined: true, myRole: "owner", me: meId, problems: [] };
+        const sync = storage.kind === "git" ? { type: "git" as const, remote: storage.url.trim() } : { type: "folder" as const, path: storage.path.trim() };
+        const vault: Vault = { id, name: name.trim(), kind: "team", sync, syncStatus: "synced", lastSync: Date.now(), conflicts: [], joined: true, myRole: "owner", me: meId, problems: [] };
         update((w) => ({
           ...w,
           vaults: [...w.vaults, vault],
@@ -104,7 +195,9 @@ export function CreateTeamDialog({ onClose, onDone }: { onClose: () => void; onD
       onClose();
     } catch (e) {
       setBusy(false);
-      setError(errorText(e));
+      const fp = unknownServerKey(e);
+      if (fp) setServerKey(fp);
+      else setError(isCoreError(e) && e.kind === "folderNotEmpty" ? (storage.kind === "git" ? "Репозиторий не пустой" : "Папка не пустая") : errorText(e));
     }
   };
 
@@ -112,7 +205,7 @@ export function CreateTeamDialog({ onClose, onDone }: { onClose: () => void; onD
     return (
       <Modal
         title="Новая команда"
-        width={500}
+        width={520}
         onClose={onClose}
         onSubmit={next}
         footer={
@@ -123,9 +216,9 @@ export function CreateTeamDialog({ onClose, onDone }: { onClose: () => void; onD
         }
       >
         <Field label="Название">
-          <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Acme Infra" />
+          <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Acme Infra" autoFocus />
         </Field>
-        <FolderField value={path} onChange={setPath} label="Пустая папка для хранилища" />
+        <StorageFields value={storage} set={(p) => { setStorage(p); setServerKey(null); }} folderLabel="Пустая папка для хранилища" />
         <Field label="Ваше имя в команде">
           <input className="input" value={myName} onChange={(e) => setMyName(e.target.value)} placeholder="Владислав" />
         </Field>
@@ -142,7 +235,7 @@ export function CreateTeamDialog({ onClose, onDone }: { onClose: () => void; onD
       footer={
         <>
           <Button type="button" variant="ghost" onClick={() => setStep("details")}>Назад</Button>
-          <Button type="submit" variant="primary" disabled={!confirmed} loading={busy}>Создать команду</Button>
+          <Button type="submit" variant="primary" disabled={!confirmed} loading={busy}>{serverKey ? "Доверять и создать" : "Создать команду"}</Button>
         </>
       }
     >
@@ -155,10 +248,7 @@ export function CreateTeamDialog({ onClose, onDone }: { onClose: () => void; onD
           icon={Download}
           onClick={async () => {
             const where = await api.saveTextFile(`detour-recovery-${name.trim().toLowerCase().replace(/\s+/g, "-") || "team"}.txt`, `${name.trim()}\n${recovery}\n`);
-            if (where) {
-             
-              toast({ text: `Сохранено: ${where}`, tone: "success" });
-            }
+            if (where) toast({ text: `Сохранено: ${where}`, tone: "success" });
           }}
         >
           Сохранить в файл
@@ -167,6 +257,7 @@ export function CreateTeamDialog({ onClose, onDone }: { onClose: () => void; onD
       <Field label="Последние 4 символа ключа" error={confirm.length >= 4 && !confirmed ? "Не совпадает" : error}>
         <input className={`input mono confirm-input ${confirm.length >= 4 && !confirmed ? "invalid" : ""}`} value={confirm} onChange={(e) => setConfirm(e.target.value.slice(0, 4))} placeholder="••••" autoComplete="off" spellCheck={false} />
       </Field>
+      {serverKey && <ServerKeyCard url={storage.url} fingerprint={serverKey} />}
     </Modal>
   );
 }
@@ -177,12 +268,22 @@ export function JoinTeamDialog({ onClose, onDone }: { onClose: () => void; onDon
   const { setVault, toast, applyTeamView } = useStore();
   const me = useMyId();
   const [mode, setMode] = useState<"join" | "recover">("join");
-  const [path, setPath] = useState("");
+  const [storage, setStorageRaw] = useStorage();
   const [info, setInfo] = useState<{ root: string; rootFingerprint: string } | null>(null);
+  const [clone, setClone] = useState<string | null>(null);
+  const [serverKey, setServerKey] = useState<string | null>(null);
   const [recoveryKey, setRecoveryKey] = useState("");
   const [myName, setMyName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const setStorage = (p: Partial<Storage>) => {
+    setStorageRaw(p);
+    setInfo(null);
+    setClone(null);
+    setServerKey(null);
+    setError(null);
+  };
 
   const finish = (view: TeamView) => {
     applyTeamView(view);
@@ -193,47 +294,66 @@ export function JoinTeamDialog({ onClose, onDone }: { onClose: () => void; onDon
   };
 
   const submit = async () => {
-    if (busy || !path.trim()) return;
+    if (busy || !storageReady(storage)) return;
     if (!api.real) {
       toast({ text: "Подключение работает в приложении Detour", tone: "error" });
       return;
     }
     setBusy(true);
     setError(null);
+    const trust = serverKey ?? undefined;
     try {
-      if (mode === "recover") return finish(await api.teamRecover(path.trim(), recoveryKey, myName.trim() || "Owner"));
+      if (storage.kind === "git") {
+        const login = gitLogin(storage);
+        if (mode === "recover") return finish(await api.teamRecoverGit(login, recoveryKey, myName.trim() || "Owner", trust));
+        if (!info || !clone) {
+          const found = await api.teamInspectGit(login, trust);
+          setInfo(found.info);
+          setClone(found.clone);
+          setServerKey(null);
+          setBusy(false);
+          return;
+        }
+        return finish(await api.teamJoinGit(clone, info.root, login));
+      }
+      const path = storage.path.trim();
+      if (mode === "recover") return finish(await api.teamRecover(path, recoveryKey, myName.trim() || "Owner"));
       if (!info) {
-        setInfo(await api.teamInspect(path.trim()));
+        setInfo(await api.teamInspect(path));
         setBusy(false);
         return;
       }
-      finish(await api.teamJoin(path.trim(), info.root));
+      finish(await api.teamJoin(path, info.root));
     } catch (e) {
       setBusy(false);
-      setError(isCoreError(e) && e.kind === "io" ? "Папка недоступна" : errorText(e));
+      const fp = unknownServerKey(e);
+      if (fp) setServerKey(fp);
+      else setError(isCoreError(e) && e.kind === "io" ? (storage.kind === "git" ? "Нет связи с репозиторием" : "Папка недоступна") : errorText(e));
     }
   };
 
   const title = mode === "recover" ? "Восстановить доступ" : "Подключить команду";
-  const action = mode === "recover" ? "Восстановить" : info ? "Доверять и подключить" : "Далее";
+  const action = serverKey ? "Доверять серверу" : mode === "recover" ? "Восстановить" : info ? "Доверять и подключить" : "Далее";
 
   return (
     <Modal
       title={title}
-      width={520}
+      width={540}
       onClose={onClose}
       onSubmit={submit}
       footer={
         <>
-          <Button type="button" variant="ghost" className="footer-left" onClick={() => { setMode(mode === "join" ? "recover" : "join"); setInfo(null); setError(null); }}>
+          <Button type="button" variant="ghost" className="footer-left" onClick={() => { setMode(mode === "join" ? "recover" : "join"); setInfo(null); setClone(null); setError(null); }}>
             {mode === "join" ? "У меня ключ восстановления" : "Обычное подключение"}
           </Button>
           <Button type="button" variant="ghost" onClick={onClose}>Отмена</Button>
-          <Button type="submit" variant="primary" loading={busy} disabled={!path.trim() || (mode === "recover" && !recoveryKey.trim())}>{action}</Button>
+          <Button type="submit" variant="primary" loading={busy} disabled={!storageReady(storage) || (mode === "recover" && !recoveryKey.trim())}>{action}</Button>
         </>
       }
     >
-      <FolderField value={path} onChange={(v) => { setPath(v); setInfo(null); setError(null); }} label="Папка с хранилищем команды" />
+      <StorageFields value={storage} set={setStorage} folderLabel="Папка с хранилищем команды" />
+
+      {serverKey && <ServerKeyCard url={storage.url} fingerprint={serverKey} />}
 
       {mode === "join" && info && (
         <div className="trust-card">
