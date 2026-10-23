@@ -24,8 +24,10 @@ env:
   CARGO_PROFILE_TEST_DEBUG: 0
 
 jobs:
+  # A tag points at a commit already tested on main, so a tag only builds installers.
   test:
     name: Test (${{ matrix.os }})
+    if: github.ref_type != 'tag'
     strategy:
       fail-fast: false
       matrix:
@@ -62,7 +64,7 @@ jobs:
   bundle:
     name: Installers (${{ matrix.os }})
     needs: test
-    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    if: ${{ !cancelled() && needs.test.result != 'failure' && (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch') }}
     permissions:
       contents: write
     strategy:
