@@ -204,6 +204,10 @@ export interface Settings {
   autoLockMinutes: number;
   /** Look for a new version at start. */
   autoUpdate: boolean;
-  /** What a right click in a terminal does: paste (and copy a selection), or open a menu. */
-  rightClick: "paste" | "menu";
+  /**
+   * Copy and paste in a terminal. `ssh`: as in a system terminal running ssh (right click
+   * copies a selection or pastes; Ctrl+C copies a selection, otherwise interrupts; Ctrl+V pastes).
+   * `termius`: Ctrl+Shift+C and Ctrl+Shift+V, Ctrl+C and Ctrl+V go to the server, right click opens a menu.
+   */
+  clipboard: "ssh" | "termius";
 }

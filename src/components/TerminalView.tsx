@@ -46,8 +46,8 @@ export function TerminalView({ host, active, initialCommand, onStatus, onExit, o
   const [question, setQuestion] = useState<Question | null>(null);
   const [searching, setSearching] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
-  const cb = useRef({ onStatus, onExit, onSplit, splitDirs, rightClick: settings.rightClick });
-  cb.current = { onStatus, onExit, onSplit, splitDirs, rightClick: settings.rightClick };
+  const cb = useRef({ onStatus, onExit, onSplit, splitDirs, clipboard: settings.clipboard });
+  cb.current = { onStatus, onExit, onSplit, splitDirs, clipboard: settings.clipboard };
 
   const copySelection = async () => {
     const term = termRef.current;
@@ -99,17 +99,19 @@ export function TerminalView({ host, active, initialCommand, onStatus, onExit, o
     fitRef.current = fit;
     searchRef.current = search;
 
-    // Keys as in a desktop terminal: Ctrl+C copies a selection and interrupts otherwise,
-    // Ctrl+V and Ctrl+Shift+V paste, Ctrl+Shift+C copies.
+    // Ctrl+Shift+C and Ctrl+Shift+V copy and paste either way. As in a system terminal, Ctrl+C
+    // also copies a selection (and interrupts without one) and Ctrl+V pastes; as in Termius,
+    // those two go to the server.
     term.attachCustomKeyEventHandler((e) => {
       if (e.type !== "keydown" || !(e.ctrlKey || e.metaKey) || e.altKey) return true;
       const key = e.key.toLowerCase();
-      if (key === "c" && (e.shiftKey || term.hasSelection())) {
+      const ssh = cb.current.clipboard === "ssh";
+      if (key === "c" && (e.shiftKey || (ssh && term.hasSelection()))) {
         e.preventDefault();
         void copySelection();
         return false;
       }
-      if (key === "v") {
+      if (key === "v" && (e.shiftKey || ssh)) {
         // Stop the browser's own paste, or the text would arrive twice.
         e.preventDefault();
         void paste();
@@ -215,7 +217,7 @@ export function TerminalView({ host, active, initialCommand, onStatus, onExit, o
 
   const onContextMenu = async (e: React.MouseEvent) => {
     e.preventDefault();
-    if (cb.current.rightClick === "paste") {
+    if (cb.current.clipboard === "ssh") {
       // As in Windows Terminal and PuTTY: copy a selection, otherwise paste.
       if (!(await copySelection())) await paste();
       return;
@@ -241,6 +243,7 @@ export function TerminalView({ host, active, initialCommand, onStatus, onExit, o
           at={menu}
           canCopy={!!termRef.current?.hasSelection()}
           splitDirs={onSplit ? splitDirs : []}
+          shortcuts={settings.clipboard === "ssh" ? ["Ctrl C", "Ctrl V"] : ["Ctrl Shift C", "Ctrl Shift V"]}
           onClose={() => {
             setMenu(null);
             termRef.current?.focus();
@@ -308,6 +311,7 @@ function TerminalMenu({
   at,
   canCopy,
   splitDirs,
+  shortcuts,
   onClose,
   onCopy,
   onPaste,
@@ -317,6 +321,8 @@ function TerminalMenu({
   at: { x: number; y: number };
   canCopy: boolean;
   splitDirs: SplitDir[];
+  /** How copying and pasting are typed, to show beside them. */
+  shortcuts: [string, string];
   onClose: () => void;
   onCopy: () => void;
   onPaste: () => void;
@@ -355,8 +361,8 @@ function TerminalMenu({
 
   return (
     <div ref={ref} className="menu term-menu" role="menu" style={{ top: pos.y, left: pos.x }} onMouseDown={(e) => e.stopPropagation()}>
-      {item("Копировать", Copy, "Ctrl C", onCopy, !canCopy)}
-      {item("Вставить", ClipboardPaste, "Ctrl V", onPaste)}
+      {item("Копировать", Copy, shortcuts[0], onCopy, !canCopy)}
+      {item("Вставить", ClipboardPaste, shortcuts[1], onPaste)}
       {item("Найти", Search, "Ctrl Shift F", onSearch)}
       {splitDirs.includes("row") && item("Разделить вправо", Columns2, "Ctrl Shift D", () => onSplit("row"))}
       {splitDirs.includes("col") && item("Разделить вниз", Rows2, "Ctrl Shift E", () => onSplit("col"))}

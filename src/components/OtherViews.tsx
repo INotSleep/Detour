@@ -149,8 +149,8 @@ export function SettingsView() {
           </select>
         </div>
         <div className="setting">
-          <span>Правая кнопка мыши</span>
-          <Segmented value={settings.rightClick} onChange={(rightClick) => setSettings({ rightClick })} options={[{ value: "paste", label: "Копировать и вставить" }, { value: "menu", label: "Меню" }]} />
+          <span>Копирование и вставка</span>
+          <Segmented value={settings.clipboard} onChange={(clipboard) => setSettings({ clipboard })} options={[{ value: "ssh", label: "ПКМ, Ctrl+C и Ctrl+V" }, { value: "termius", label: "Ctrl+Shift+C и Ctrl+Shift+V" }]} />
         </div>
       </section>
 

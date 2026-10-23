@@ -39,13 +39,17 @@ const sectionMeta: Record<Section, { title: string; icon: typeof Server }> = {
   settings: { title: "Настройки", icon: SettingsIcon },
 };
 
-const defaultSettings: Settings = { theme: "dark", fontSize: 13, scrollback: 5000, autoLockMinutes: 15, rightClick: "paste", autoUpdate: true };
+const defaultSettings: Settings = { theme: "dark", fontSize: 13, scrollback: 5000, autoLockMinutes: 15, clipboard: "ssh", autoUpdate: true };
 const SETTINGS_KEY = "detour.settings";
 
 /** Settings of this device, kept in the webview's storage. */
 function loadSettings(): Settings {
   try {
-    return { ...defaultSettings, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? "{}") };
+    const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? "{}");
+    // An earlier version chose only what a right click does.
+    if (!saved.clipboard && saved.rightClick === "menu") saved.clipboard = "termius";
+    delete saved.rightClick;
+    return { ...defaultSettings, ...saved };
   } catch {
     return defaultSettings;
   }
