@@ -11,7 +11,7 @@ export function HostIcon({ host, size = 30 }: { host: Host; size?: number }) {
   return (
     <span className="host-icon" style={{ width: size, height: size }}>
       <Server size={size * 0.5} />
-      <span className={`host-status ${host.online ? "on" : "off"}`} />
+      {host.online !== undefined && <span className={`host-status ${host.online ? "on" : "off"}`} />}
     </span>
   );
 }
@@ -26,7 +26,7 @@ export function VaultAvatar({ vault, size = 22 }: { vault: Vault; size?: number 
 }
 
 export function Avatar({ member, size = 28 }: { member: Member; size?: number }) {
-  const invited = member.status === "invited";
+  const invited = member.recovery;
   const color = hashColor(member.id + member.name);
   const initials = member.name
     .split(/[\s@.]/)

@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeftRight, Code, KeyRound, Plus, Server, Settings as SettingsIcon, Users, X } from "lucide-react";
-import { api, type CoreInfo } from "./lib/api";
+import { api, errorText, fromView, type CoreInfo, type TeamView, type VaultView } from "./lib/api";
+import { applyTeamEntries, applyTeamView, dataOf, writable } from "./lib/teams";
+import { mockWorkspace } from "./lib/mockData";
 import { StoreContext, uid, type Section, type Store } from "./lib/store";
 import type { Settings, Workspace } from "./lib/types";
 import type { SessionStatus } from "./lib/fakeShell";
@@ -14,6 +16,7 @@ import { TunnelsView } from "./components/TunnelsView";
 import { CommandPalette } from "./components/CommandPalette";
 import { ConflictDialog } from "./components/ConflictDialog";
 import { IconButton, useToaster } from "./components/ui";
+import { LockScreen } from "./components/LockScreen";
 
 interface Session {
   id: string;
@@ -34,10 +37,33 @@ const sectionMeta: Record<Section, { title: string; icon: typeof Server }> = {
 
 const defaultSettings: Settings = { theme: "dark", fontSize: 13, scrollback: 5000, autoLockMinutes: 15 };
 
+type Phase = "loading" | "setup" | "locked" | "ready";
+
+const emptyWorkspace = (): Workspace => ({
+  vaults: [{ id: "personal", name: "Личное", kind: "personal", sync: { type: "local" }, syncStatus: "synced", conflicts: [] }],
+  hosts: [],
+  members: [],
+  keys: [],
+  snippets: [],
+  tunnels: [],
+  activity: [],
+});
+
+/** The real personal vault and teams from detour-core; demo data in a plain browser. */
+async function loadWorkspace(view: VaultView | null): Promise<Workspace> {
+  if (!api.real) return structuredClone(mockWorkspace);
+  const personal = fromView(view ?? (await api.vaultGet()));
+  const ws = { ...emptyWorkspace(), ...personal };
+  return applyTeamEntries(ws, await api.teamsList());
+}
+
 export default function App() {
+  const [phase, setPhase] = useState<Phase>("loading");
+  // What each vault looked like when last saved to / read from detour-core.
+  const lastSaved = useRef(new Map<string, string>());
   const [ws, setWs] = useState<Workspace | null>(null);
   const [coreInfo, setCoreInfo] = useState<CoreInfo | null>(null);
-  const [vaultId, setVaultId] = useState("acme");
+  const [vaultId, setVaultId] = useState(api.real ? "personal" : "acme");
   const [section, setSection] = useState<Section>("hosts");
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeId, setActiveId] = useState("home");
@@ -47,9 +73,103 @@ export default function App() {
   const toaster = useToaster();
 
   useEffect(() => {
-    api.loadWorkspace().then(setWs);
     api.coreInfo().then(setCoreInfo).catch(() => setCoreInfo(null));
+    api.vaultStatus().then(async (st) => {
+      if (!st.initialized) return setPhase("setup");
+      if (!st.unlocked) return setPhase("locked");
+      setWs(await loadWorkspace(null));
+      setPhase("ready");
+    });
   }, []);
+
+  const unlocked = async (view: VaultView | null) => {
+    lastSaved.current.clear();
+    const fresh = await loadWorkspace(view);
+    // Keep tunnel switches and other in-memory state of a workspace that was only locked.
+    setWs((prev) => (prev && api.real ? { ...fresh, tunnels: fresh.tunnels.map((t) => prev.tunnels.find((p) => p.id === t.id) ?? t) } : prev ?? fresh));
+    setPhase("ready");
+  };
+
+  const lock = useCallback(async () => {
+    await api.vaultLock();
+    setPhase("locked");
+  }, []);
+
+  // The latest workspace, for decisions made outside React's state updaters.
+  // Updaters must stay pure: React may run them twice, and a side effect there
+  // once made a client save an empty host list and delete a team's hosts.
+  const wsRef = useRef<Workspace | null>(null);
+  wsRef.current = ws;
+
+  /** Puts a team's state from the core into the workspace, unless local edits are still on their way. */
+  const applyView = useCallback((view: TeamView) => {
+    const base = wsRef.current;
+    if (!base) return;
+    const saved = lastSaved.current.get(view.id);
+    const pending = saved !== undefined && saved !== JSON.stringify(dataOf(base, view.id));
+    const next = applyTeamView(base, view, !pending);
+    if (!pending) lastSaved.current.set(view.id, JSON.stringify(dataOf(next, view.id)));
+    wsRef.current = next;
+    // Edited in the meantime: keep those edits, take only members, conflicts and activity.
+    setWs((cur) => (cur === base ? next : cur && applyTeamView(cur, view, false)));
+  }, []);
+
+  // Persist edits of every writable vault to detour-core.
+  useEffect(() => {
+    if (!api.real || !ws || phase !== "ready") return;
+    for (const v of ws.vaults) {
+      const data = dataOf(ws, v.id);
+      const json = JSON.stringify(data);
+      const prev = lastSaved.current.get(v.id);
+      if (prev === undefined || !writable(v)) {
+        lastSaved.current.set(v.id, json);
+        continue;
+      }
+      if (json === prev) continue;
+      lastSaved.current.set(v.id, json);
+      const fail = (e: unknown) => toaster.push({ text: `Не удалось сохранить: ${errorText(e)}`, tone: "error" });
+      if (v.kind === "personal") {
+        api
+          .vaultPut(data)
+          .then(() => {
+            // A typed password is now in the vault: drop it from UI memory without another save.
+            const base = wsRef.current;
+            if (!base || !data.hosts.some((h) => h.newPassword)) return;
+            const next = { ...base, hosts: base.hosts.map(({ newPassword: _p, ...h }) => h) };
+            lastSaved.current.set(v.id, JSON.stringify(dataOf(next, v.id)));
+            wsRef.current = next;
+            setWs((cur) => (cur === base ? next : cur));
+          })
+          .catch(fail);
+      } else {
+        api.teamPut(v.id, data).then(applyView).catch(fail);
+      }
+    }
+  }, [ws, phase, toaster.push, applyView]);
+
+  // Pick up teammates' changes in the background.
+  const teamIds = ws?.vaults.filter((v) => v.kind === "team").map((v) => v.id).join(",") ?? "";
+  useEffect(() => {
+    if (!api.real || phase !== "ready" || !teamIds) return;
+    const timer = setInterval(() => {
+      for (const id of teamIds.split(",")) api.teamSync(id).then(applyView).catch(() => {});
+    }, 20_000);
+    return () => clearInterval(timer);
+  }, [phase, teamIds, applyView]);
+
+  // Auto-lock after inactivity.
+  useEffect(() => {
+    if (!api.real || phase !== "ready" || !settings.autoLockMinutes) return;
+    let last = Date.now();
+    const touch = () => (last = Date.now());
+    const events = ["keydown", "mousedown", "wheel"] as const;
+    events.forEach((e) => window.addEventListener(e, touch, true));
+    const timer = setInterval(() => Date.now() - last > settings.autoLockMinutes * 60_000 && lock(), 15_000);
+    return () => {
+      events.forEach((e) => window.removeEventListener(e, touch, true));
+      clearInterval(timer);
+    };
+  }, [phase, settings.autoLockMinutes, lock]);
 
   useEffect(() => {
     const apply = () => {
@@ -101,7 +221,7 @@ export default function App() {
     return {
       ws,
       update: (fn) => setWs((w) => (w ? fn(w) : w)),
-      vault: ws.vaults.find((v) => v.id === vaultId)!,
+      vault: ws.vaults.find((v) => v.id === vaultId) ?? ws.vaults[0]!,
       setVault: (id) => {
         setVaultId(id);
         setActiveId("home");
@@ -118,17 +238,20 @@ export default function App() {
       connect,
       openPalette: () => setPalette(true),
       resolveConflicts: (id) => setConflictVaultId(id ?? vaultId),
+      lock,
+      applyTeamView: applyView,
     };
-  }, [ws, vaultId, section, settings, coreInfo, connect, toaster.push]);
+  }, [ws, vaultId, section, settings, coreInfo, connect, toaster.push, lock, applyView]);
 
-  if (!store) return null;
+  if (phase === "loading") return null;
+  if (!store) return <LockScreen mode={phase === "setup" ? "setup" : "unlock"} onUnlocked={(v) => void unlocked(v)} />;
 
   const conflictVault = ws!.vaults.find((v) => v.id === conflictVaultId);
   const Home = section === "team" && store.vault.kind === "personal" ? { ...sectionMeta.team, title: "Команды" } : sectionMeta[section];
 
   return (
     <StoreContext.Provider value={store}>
-      <div className="app">
+      <div className="app" inert={phase !== "ready"}>
         <Sidebar homeActive={activeId === "home"} />
 
         <main className="main">
@@ -191,6 +314,7 @@ export default function App() {
       {palette && <CommandPalette onClose={() => setPalette(false)} />}
       {conflictVault && conflictVault.conflicts.length > 0 && <ConflictDialog vault={conflictVault} onClose={() => setConflictVaultId(null)} />}
       {toaster.view}
+      {phase === "locked" && <LockScreen mode="unlock" onUnlocked={(v) => void unlocked(v)} />}
     </StoreContext.Provider>
   );
 }

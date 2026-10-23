@@ -15,7 +15,7 @@ const C = {
   red: "\x1b[31m",
 };
 
-const osPretty: Record<Host["os"], string> = {
+const osPretty: Record<NonNullable<Host["os"]>, string> = {
   ubuntu: "Ubuntu 26.04 LTS",
   debian: "Debian GNU/Linux 13",
   fedora: "Fedora Linux 44",
@@ -96,9 +96,9 @@ export function runFakeSession(term: Terminal, host: Host, { initialCommand, sec
     mode = "busy";
     onStatus("connecting");
     term.write(`${C.dim}${host.user}@${host.address}:${host.port}${C.reset}`);
-    await sleep(host.online ? 700 : 1600);
+    await sleep(host.online !== false ? 700 : 1600);
     if (disposed) return;
-    if (!host.online) {
+    if (host.online === false) {
       println(`${C.red}Не удалось подключиться: ${host.address}:${host.port} не отвечает${C.reset}`);
       println(`${C.dim}Enter: повторить${C.reset}`);
       mode = "failed";
@@ -147,7 +147,7 @@ export function runFakeSession(term: Terminal, host: Host, { initialCommand, sec
     await sleep(300);
     if (disposed) return;
     println();
-    println(`Welcome to ${osPretty[host.os]}`);
+    println(`Welcome to ${osPretty[host.os ?? "ubuntu"]}`);
     println(`${C.dim}Last login: Thu Oct 22 18:04:51 2026 from 10.0.0.42${C.reset}`);
     mode = "ready";
     onStatus("connected");

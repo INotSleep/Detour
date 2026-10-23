@@ -18,7 +18,7 @@ export function fakeKeyMaterial(algorithm: SshKey["algorithm"], comment: string)
   };
 }
 
-export type ParsedKey = { ok: true; algorithm: SshKey["algorithm"] } | { ok: false; error: string };
+export type ParsedKey = { ok: true; algorithm: "ed25519" | "rsa" } | { ok: false; error: string };
 
 /** Recognises the private key formats ssh-keygen and PuTTYgen (OpenSSH export) produce. */
 export function parsePrivateKey(text: string): ParsedKey {
@@ -28,7 +28,7 @@ export function parsePrivateKey(text: string): ParsedKey {
   if (/PuTTY-User-Key-File/.test(t)) return { ok: false, error: "Формат PuTTY: экспортируйте ключ в OpenSSH" };
   const m = t.match(/-----BEGIN (OPENSSH|RSA|EC) PRIVATE KEY-----[\s\S]+-----END \1 PRIVATE KEY-----/);
   if (!m) return { ok: false, error: "Не похоже на приватный ключ" };
-  return { ok: true, algorithm: m[1] === "RSA" ? "rsa-4096" : "ed25519" };
+  return { ok: true, algorithm: m[1] === "RSA" ? "rsa" : "ed25519" };
 }
 
 /** Name for an imported key: the file name or the comment after the key block. */

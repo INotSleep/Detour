@@ -1,14 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronRight, CopyPlus, Ellipsis, Plus, Search, Server, SquareTerminal, Terminal, Trash2, TriangleAlert, X } from "lucide-react";
-import { copyText, sshCommand, uid, useStore } from "../lib/store";
+import { api, errorText } from "../lib/api";
+import { copyText, formatAgo, sshCommand, uid, useStore } from "../lib/store";
 import type { Host } from "../lib/types";
 import { HostIcon } from "./common";
+import { writable } from "../lib/teams";
 import { Button, Empty, IconButton, Menu, Modal, PageHeader } from "./ui";
 import { HostFields, applyDraft, draftErrors, draftFromHost, emptyDraft, useHostDraft } from "./HostForm";
 
 export function HostsView() {
   const { ws, vault, update, toast, connect, resolveConflicts } = useStore();
-  const conflicted = new Set(vault.conflicts.map((c) => c.hostId));
+  const conflicted = new Set(vault.conflicts.filter((c) => c.coll === "host").map((c) => c.record));
+  const canEdit = writable(vault);
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -44,7 +47,7 @@ export function HostsView() {
   };
 
   const duplicate = (h: Host) => {
-    const copy: Host = { ...h, id: uid("h"), label: `${h.label}-copy`, lastConnected: undefined };
+    const copy: Host = { ...h, id: uid("h"), label: `${h.label}-copy`, lastConnected: undefined, hasPassword: false };
     update((w) => ({ ...w, hosts: [...w.hosts, copy] }));
     setSelectedId(copy.id);
     toast({ text: `Создана копия «${h.label}»`, tone: "success" });
@@ -74,11 +77,11 @@ export function HostsView() {
                 {query && <IconButton icon={X} label="Очистить" size={13} onClick={() => setQuery("")} />}
               </label>
             )}
-            <Button variant="primary" icon={Plus} onClick={() => setCreating(true)}>Добавить хост</Button>
+            {canEdit && <Button variant="primary" icon={Plus} onClick={() => setCreating(true)}>Добавить хост</Button>}
           </PageHeader>
 
           {hosts.length === 0 && (
-            <Empty icon={Server} title="Нет хостов" action={<Button variant="primary" icon={Plus} onClick={() => setCreating(true)}>Добавить хост</Button>} />
+            <Empty icon={Server} title="Нет хостов" action={canEdit ? <Button variant="primary" icon={Plus} onClick={() => setCreating(true)}>Добавить хост</Button> : undefined} />
           )}
           {hosts.length > 0 && filtered.length === 0 && <Empty icon={Search} title={`Ничего не найдено по «${query}»`} />}
 
@@ -103,7 +106,7 @@ export function HostsView() {
                         onDoubleClick={() => connect(h.id)}
                         onKeyDown={(e) => {
                           if (e.key === "Enter") connect(h.id);
-                          if (e.key === "Delete") remove(h);
+                          if (e.key === "Delete" && canEdit) remove(h);
                         }}
                       >
                         <HostIcon host={h} />
@@ -128,7 +131,7 @@ export function HostsView() {
                             <TriangleAlert size={12} /> Конфликт
                           </button>
                         ) : (
-                          <span className="host-last">{h.lastConnected ?? ""}</span>
+                          <span className="host-last">{formatAgo(h.lastConnected)}</span>
                         )}
                         <div className="row-actions">
                           <Button
@@ -146,8 +149,12 @@ export function HostsView() {
                             trigger={(toggle, open) => <IconButton icon={Ellipsis} label="Ещё" className={open ? "pressed" : ""} onClick={toggle} />}
                             items={[
                               { label: "Копировать команду ssh", icon: Terminal, onSelect: () => copyCmd(h) },
-                              { label: "Дублировать", icon: CopyPlus, onSelect: () => duplicate(h) },
-                              { label: "Удалить", icon: Trash2, danger: true, hint: "Del", onSelect: () => remove(h) },
+                              ...(canEdit
+                                ? [
+                                    { label: "Дублировать", icon: CopyPlus, onSelect: () => duplicate(h) },
+                                    { label: "Удалить", icon: Trash2, danger: true, hint: "Del", onSelect: () => remove(h) },
+                                  ]
+                                : []),
                             ]}
                           />
                         </div>
@@ -173,20 +180,30 @@ export function HostsView() {
 function HostPanel({ host, groups, onClose, onDelete, onCopy }: { host: Host; groups: string[]; onClose: () => void; onDelete: () => void; onCopy: () => void }) {
   const { ws, vault, update, toast, connect, resolveConflicts } = useStore();
   const keys = ws.keys.filter((k) => k.vaultId === vault.id || k.vaultId === "personal");
-  const conflict = vault.conflicts.find((c) => c.hostId === host.id);
-  const conflictBy = conflict && ws.members.find((m) => m.id === conflict.theirsBy)?.name.split(" ")[0];
+  const conflict = vault.conflicts.find((c) => c.coll === "host" && c.record === host.id);
+  const canEdit = writable(vault);
   const initial = draftFromHost(host);
   const { draft, set, setDraft, touched, setTouched } = useHostDraft(initial);
   const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
   const errors = draftErrors(draft);
   const invalid = !!(errors.address || errors.port);
-  const addedBy = ws.members.find((m) => m.id === host.addedBy);
 
   const save = () => {
     setTouched(true);
     if (invalid) return;
-    update((w) => ({ ...w, hosts: w.hosts.map((h) => (h.id === host.id ? { ...h, ...applyDraft(draft) } : h)) }));
+    const typed = draft.authType === "password" && draft.password ? draft.password : null;
+    update((w) => ({ ...w, hosts: w.hosts.map((h) => (h.id === host.id ? withPassword({ ...h, ...applyDraft(draft) }, typed) : h)) }));
     toast({ text: "Сохранено", tone: "success" });
+  };
+
+  const forgetPassword = async () => {
+    try {
+      await api.hostSetPassword(host, null);
+      update((w) => ({ ...w, hosts: w.hosts.map((h) => (h.id === host.id ? { ...h, hasPassword: false } : h)) }));
+      toast({ text: "Пароль удалён из vault", tone: "success" });
+    } catch (e) {
+      toast({ text: errorText(e), tone: "error" });
+    }
   };
 
   return (
@@ -195,7 +212,7 @@ function HostPanel({ host, groups, onClose, onDelete, onCopy }: { host: Host; gr
         <HostIcon host={host} size={36} />
         <div className="panel-title">
           <h2>{host.label}</h2>
-          <span className={`status-text ${host.online ? "on" : "off"}`}>{host.online ? "В сети" : "Недоступен"}</span>
+          {host.online !== undefined && <span className={`status-text ${host.online ? "on" : "off"}`}>{host.online ? "В сети" : "Недоступен"}</span>}
         </div>
         <IconButton icon={X} label="Закрыть" tipSide="left" onClick={onClose} />
       </div>
@@ -203,7 +220,7 @@ function HostPanel({ host, groups, onClose, onDelete, onCopy }: { host: Host; gr
       {conflict && (
         <button className="banner warn banner-btn" onClick={() => resolveConflicts()}>
           <TriangleAlert size={15} />
-          <span className="grow">Изменён у вас и у {conflictBy}</span>
+          <span className="grow">{conflict.kind === "deleted" ? "Удалён, но его изменили" : "Изменён несколькими участниками"}</span>
           <span className="sidebar-alert-action">Решить</span>
         </button>
       )}
@@ -220,7 +237,9 @@ function HostPanel({ host, groups, onClose, onDelete, onCopy }: { host: Host; gr
         }}
         onKeyDown={(e) => e.key === "Escape" && dirty && (e.stopPropagation(), setDraft(initial))}
       >
-        <HostFields draft={draft} set={set} keys={keys} groups={groups} showErrors={touched} />
+        <fieldset className="plain-fieldset" disabled={!canEdit}>
+          <HostFields draft={draft} set={set} keys={keys} groups={groups} showErrors={touched} passwordSaved={host.hasPassword} onForgetPassword={canEdit ? forgetPassword : undefined} />
+        </fieldset>
         {dirty && (
           <div className="panel-save">
             <Button type="button" variant="ghost" onClick={() => setDraft(initial)}>Отменить</Button>
@@ -235,20 +254,14 @@ function HostPanel({ host, groups, onClose, onDelete, onCopy }: { host: Host; gr
         {host.lastConnected && (
           <>
             <dt>Последний вход</dt>
-            <dd>{host.lastConnected}</dd>
-          </>
-        )}
-        {addedBy && (
-          <>
-            <dt>Добавил</dt>
-            <dd>{addedBy.isYou ? "Вы" : addedBy.name}</dd>
+            <dd>{formatAgo(host.lastConnected)}</dd>
           </>
         )}
       </dl>
 
       <div className="panel-foot">
         <Button variant="ghost" icon={Terminal} onClick={onCopy}>Копировать ssh</Button>
-        <Button variant="ghost" icon={Trash2} className="danger-text" onClick={onDelete}>Удалить</Button>
+        {canEdit && <Button variant="ghost" icon={Trash2} className="danger-text" onClick={onDelete}>Удалить</Button>}
       </div>
     </aside>
   );
@@ -263,14 +276,16 @@ function NewHostDialog({ groups, onClose, onCreated }: { groups: string[]; onClo
   const submit = () => {
     setTouched(true);
     if (errors.address || errors.port) return;
-    const host: Host = {
-      id: uid("h"),
-      vaultId: vault.id,
-      ...applyDraft(draft),
-      os: "ubuntu",
-      online: true,
-      addedBy: ws.members.find((m) => m.vaultId === vault.id && m.isYou)?.id,
-    };
+    const host: Host = withPassword(
+      {
+        id: uid("h"),
+        vaultId: vault.id,
+        ...applyDraft(draft),
+        hasPassword: false,
+        ...(api.usesCore(vault.id) ? {} : { os: "ubuntu" as const, online: true }),
+      },
+      draft.authType === "password" && draft.password ? draft.password : null,
+    );
     update((w) => ({ ...w, hosts: [...w.hosts, host] }));
     onCreated(host);
     toast({ text: `«${host.label}» добавлен`, tone: "success", action: { label: "Подключиться", run: () => connect(host.id) } });
@@ -293,4 +308,12 @@ function NewHostDialog({ groups, onClose, onCreated }: { groups: string[]; onClo
       <HostFields draft={draft} set={set} keys={keys} groups={groups} showErrors={touched} />
     </Modal>
   );
+}
+
+/** Attaches a typed password: detour-core receives it with the next vault save, demo vaults keep it in memory. */
+function withPassword(h: Host, password: string | null): Host {
+  if (!password) return h;
+  if (api.usesCore(h.vaultId)) return { ...h, newPassword: password, hasPassword: true };
+  void api.hostSetPassword(h, password);
+  return { ...h, hasPassword: true };
 }

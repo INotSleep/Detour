@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { Auth, Host, SshKey } from "../lib/types";
-import { Field, PasswordInput, Segmented } from "./ui";
+import { Button, Field, PasswordInput, Segmented } from "./ui";
 
 export interface HostDraft {
   label: string;
@@ -24,7 +24,7 @@ export function draftFromHost(h: Host): HostDraft {
     authType: h.auth.type,
     keyId: h.auth.type === "key" ? h.auth.keyId : "",
     tags: h.tags.join(", "),
-    password: h.password ?? "",
+    password: "",
   };
 }
 
@@ -40,7 +40,8 @@ export function draftErrors(d: HostDraft) {
   };
 }
 
-export function applyDraft(d: HostDraft): Pick<Host, "label" | "address" | "port" | "user" | "group" | "auth" | "tags" | "password"> {
+/** The typed password is not part of the host; it goes to the vault via api.hostSetPassword. */
+export function applyDraft(d: HostDraft): Pick<Host, "label" | "address" | "port" | "user" | "group" | "auth" | "tags"> {
   return {
     label: d.label.trim() || d.address.trim(),
     address: d.address.trim(),
@@ -49,7 +50,6 @@ export function applyDraft(d: HostDraft): Pick<Host, "label" | "address" | "port
     group: d.group.trim() || "Без группы",
     auth: d.authType === "key" ? { type: "key", keyId: d.keyId } : { type: d.authType },
     tags: d.tags.split(",").map((t) => t.trim()).filter(Boolean),
-    password: d.authType === "password" && d.password ? d.password : undefined,
   };
 }
 
@@ -60,7 +60,18 @@ export function useHostDraft(initial: HostDraft) {
   return { draft, set, setDraft, touched, setTouched };
 }
 
-export function HostFields({ draft, set, keys, groups, showErrors }: { draft: HostDraft; set: (p: Partial<HostDraft>) => void; keys: SshKey[]; groups: string[]; showErrors: boolean }) {
+interface HostFieldsProps {
+  draft: HostDraft;
+  set: (p: Partial<HostDraft>) => void;
+  keys: SshKey[];
+  groups: string[];
+  showErrors: boolean;
+  /** A password is already saved for this host. */
+  passwordSaved?: boolean;
+  onForgetPassword?: () => void;
+}
+
+export function HostFields({ draft, set, keys, groups, showErrors, passwordSaved, onForgetPassword }: HostFieldsProps) {
   const errors = draftErrors(draft);
   return (
     <>
@@ -102,7 +113,12 @@ export function HostFields({ draft, set, keys, groups, showErrors }: { draft: Ho
       )}
       {draft.authType === "password" && (
         <Field label="Пароль">
-          <PasswordInput value={draft.password} onChange={(password) => set({ password })} placeholder="Спрашивать при подключении" />
+          <div className="input-group">
+            <PasswordInput value={draft.password} onChange={(password) => set({ password })} placeholder={passwordSaved ? "Сохранён" : "Спрашивать при подключении"} />
+            {passwordSaved && !draft.password && onForgetPassword && (
+              <Button type="button" variant="ghost" size="sm" onClick={onForgetPassword}>Забыть</Button>
+            )}
+          </div>
         </Field>
       )}
       <div className="row">

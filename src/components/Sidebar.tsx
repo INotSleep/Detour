@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowLeftRight, Check, ChevronsUpDown, Code, KeyRound, LogIn, Plus, Search, Server, Settings, TriangleAlert, Users } from "lucide-react";
-import { plural, useStore, type Section } from "../lib/store";
+import { formatAgo, plural, useStore, type Section } from "../lib/store";
 import type { Vault } from "../lib/types";
 import { VaultAvatar, syncStatusText } from "./common";
 import { Kbd } from "./ui";
@@ -16,7 +16,7 @@ const nav: { id: Section; label: string; icon: typeof Server }[] = [
 
 export function Sidebar({ homeActive }: { homeActive: boolean }) {
   const { ws, vault, section, navigate, openPalette, resolveConflicts } = useStore();
-  const conflictHost = vault.conflicts.length === 1 ? ws.hosts.find((h) => h.id === vault.conflicts[0]!.hostId) : null;
+  const conflictHost = new Set(vault.conflicts.map((c) => c.record)).size === 1 && vault.conflicts[0]!.coll === "host" ? ws.hosts.find((h) => h.id === vault.conflicts[0]!.record) : null;
 
   const counts: Partial<Record<Section, number>> = {
     hosts: ws.hosts.filter((h) => h.vaultId === vault.id).length,
@@ -98,9 +98,9 @@ function VaultSwitcher() {
         <span className="vault-names">
           <span className="vault-name">{vault.name}</span>
           {vault.kind === "team" && (
-            <span className={`vault-sync ${vault.syncStatus}`}>
+            <span className={`vault-sync ${vault.removed ? "conflict" : vault.syncStatus}`}>
               <span className="dot" />
-              {vault.syncStatus === "syncing" || vault.syncStatus === "offline" ? syncStatusText[vault.syncStatus] : vault.lastSync}
+              {vault.syncStatus === "syncing" || vault.syncStatus === "offline" ? syncStatusText[vault.syncStatus] : vault.removed ? "Вы удалены" : vault.joined === false ? "Ждёт добавления" : formatAgo(vault.lastSync)}
             </span>
           )}
         </span>
@@ -122,7 +122,7 @@ function VaultSwitcher() {
             <Plus size={15} className="muted" /> Создать команду
           </button>
           <button className="menu-row" onClick={() => { setOpen(false); setDialog("join"); }}>
-            <LogIn size={15} className="muted" /> Вступить по коду
+            <LogIn size={15} className="muted" /> Подключить команду
           </button>
         </div>
       )}

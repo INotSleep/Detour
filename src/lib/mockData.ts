@@ -1,18 +1,26 @@
 import type { Workspace } from "./types";
 import { fakePrivateKey } from "./keys";
 
+const ago = (min: number) => Date.now() - min * 60_000;
+const H = 60;
+const D = 24 * H;
+
 // Fake workspace for the mockup. Replaced piece by piece as features move into detour-core.
 export const mockWorkspace: Workspace = {
   vaults: [
-    { id: "personal", name: "Личное", kind: "personal", sync: { type: "local" }, syncStatus: "synced", lastSync: "только что", conflicts: [] },
+    { id: "personal", name: "Личное", kind: "personal", sync: { type: "local" }, syncStatus: "synced", lastSync: ago(0), conflicts: [] },
     {
       id: "acme",
       name: "Acme Infra",
       kind: "team",
-      sync: { type: "git", remote: "git@github.com:acme/detour-vault.git", branch: "main" },
+      sync: { type: "folder", path: "D:\\Sync\\acme-vault" },
       syncStatus: "synced",
-      lastSync: "2 мин назад",
+      lastSync: ago(2),
       conflicts: [],
+      joined: true,
+      myRole: "owner",
+      canReveal: true,
+      problems: 0,
     },
     {
       id: "homelab",
@@ -20,40 +28,65 @@ export const mockWorkspace: Workspace = {
       kind: "team",
       sync: { type: "folder", path: "~/Syncthing/detour-homelab" },
       syncStatus: "conflict",
-      lastSync: "1 ч назад",
-      conflicts: [{ id: "c1", hostId: "h21", theirsBy: "m7", when: "1 ч назад", theirs: { address: "10.10.0.54", port: 2222 } }],
+      lastSync: ago(60),
+      joined: true,
+      myRole: "admin",
+      canReveal: true,
+      problems: 0,
+      conflicts: [
+        {
+          kind: "field",
+          coll: "host",
+          record: "h21",
+          field: "address",
+          values: [
+            { value: "10.10.0.53", author: "m6", authorName: "Владислав", at: ago(70) },
+            { value: "10.10.0.54", author: "m7", authorName: "Dima", at: ago(60) },
+          ],
+        },
+        {
+          kind: "field",
+          coll: "host",
+          record: "h21",
+          field: "port",
+          values: [
+            { value: 22, author: "m6", authorName: "Владислав", at: ago(70) },
+            { value: 2222, author: "m7", authorName: "Dima", at: ago(60) },
+          ],
+        },
+      ],
     },
   ],
 
   hosts: [
-    { id: "h1", vaultId: "personal", group: "Дом", label: "laptop", address: "192.168.1.30", port: 22, user: "me", auth: { type: "key", keyId: "k1" }, tags: ["ubuntu"], os: "ubuntu", online: true, lastConnected: "сегодня" },
-    { id: "h2", vaultId: "personal", group: "Дом", label: "nas", address: "192.168.1.10", port: 22, user: "admin", auth: { type: "password" }, tags: ["storage"], password: "nas-admin-2026", os: "freebsd", online: true, lastConnected: "5 дней назад" },
-    { id: "h3", vaultId: "personal", group: "VPS", label: "vpn-fra", address: "203.0.113.17", port: 2222, user: "root", auth: { type: "key", keyId: "k1" }, tags: ["wireguard"], os: "debian", online: false, lastConnected: "3 дня назад" },
+    { id: "h1", vaultId: "personal", group: "Дом", label: "laptop", address: "192.168.1.30", port: 22, user: "me", auth: { type: "key", keyId: "k1" }, tags: ["ubuntu"], hasPassword: false, os: "ubuntu", online: true, lastConnected: ago(3 * H) },
+    { id: "h2", vaultId: "personal", group: "Дом", label: "nas", address: "192.168.1.10", port: 22, user: "admin", auth: { type: "password" }, tags: ["storage"], hasPassword: true, os: "freebsd", online: true, lastConnected: ago(5 * D) },
+    { id: "h3", vaultId: "personal", group: "VPS", label: "vpn-fra", address: "203.0.113.17", port: 2222, user: "root", auth: { type: "key", keyId: "k1" }, tags: ["wireguard"], hasPassword: false, os: "debian", online: false, lastConnected: ago(3 * D) },
 
-    { id: "h10", vaultId: "acme", group: "Production", label: "api-1", address: "10.0.1.11", port: 22, user: "deploy", auth: { type: "key", keyId: "k2" }, tags: ["api", "prod"], os: "ubuntu", online: true, addedBy: "m2", lastConnected: "вчера" },
-    { id: "h11", vaultId: "acme", group: "Production", label: "api-2", address: "10.0.1.12", port: 22, user: "deploy", auth: { type: "key", keyId: "k2" }, tags: ["api", "prod"], os: "ubuntu", online: true, addedBy: "m2", lastConnected: "вчера" },
-    { id: "h12", vaultId: "acme", group: "Production", label: "db-primary", address: "10.0.2.5", port: 22, user: "dba", auth: { type: "key", keyId: "k2" }, tags: ["postgres", "prod"], os: "debian", online: true, addedBy: "m3", lastConnected: "2 дня назад" },
-    { id: "h13", vaultId: "acme", group: "Staging", label: "staging", address: "staging.acme.internal", port: 22, user: "deploy", auth: { type: "agent" }, tags: ["staging"], os: "alpine", online: true, addedBy: "m1", lastConnected: "сегодня" },
-    { id: "h14", vaultId: "acme", group: "Staging", label: "ci-runner", address: "10.0.9.3", port: 22, user: "runner", auth: { type: "key", keyId: "k2" }, tags: ["ci"], os: "fedora", online: false, addedBy: "m4" },
+    { id: "h10", vaultId: "acme", group: "Production", label: "api-1", address: "10.0.1.11", port: 22, user: "deploy", auth: { type: "key", keyId: "k2" }, tags: ["api", "prod"], hasPassword: false, os: "ubuntu", online: true, lastConnected: ago(D + 2 * H) },
+    { id: "h11", vaultId: "acme", group: "Production", label: "api-2", address: "10.0.1.12", port: 22, user: "deploy", auth: { type: "key", keyId: "k2" }, tags: ["api", "prod"], hasPassword: false, os: "ubuntu", online: true, lastConnected: ago(D + 2 * H) },
+    { id: "h12", vaultId: "acme", group: "Production", label: "db-primary", address: "10.0.2.5", port: 22, user: "dba", auth: { type: "key", keyId: "k2" }, tags: ["postgres", "prod"], hasPassword: false, os: "debian", online: true, lastConnected: ago(2 * D) },
+    { id: "h13", vaultId: "acme", group: "Staging", label: "staging", address: "staging.acme.internal", port: 22, user: "deploy", auth: { type: "agent" }, tags: ["staging"], hasPassword: false, os: "alpine", online: true, lastConnected: ago(3 * H) },
+    { id: "h14", vaultId: "acme", group: "Staging", label: "ci-runner", address: "10.0.9.3", port: 22, user: "runner", auth: { type: "key", keyId: "k2" }, tags: ["ci"], hasPassword: false, os: "fedora", online: false },
 
-    { id: "h20", vaultId: "homelab", group: "Rack", label: "proxmox", address: "10.10.0.2", port: 22, user: "root", auth: { type: "key", keyId: "k3" }, tags: ["hypervisor"], os: "debian", online: true, addedBy: "m6", lastConnected: "сегодня" },
-    { id: "h21", vaultId: "homelab", group: "Rack", label: "pi-hole", address: "10.10.0.53", port: 22, user: "pi", auth: { type: "password" }, tags: ["dns"], os: "debian", online: true, addedBy: "m7" },
+    { id: "h20", vaultId: "homelab", group: "Rack", label: "proxmox", address: "10.10.0.2", port: 22, user: "root", auth: { type: "key", keyId: "k3" }, tags: ["hypervisor"], hasPassword: false, os: "debian", online: true, lastConnected: ago(3 * H) },
+    { id: "h21", vaultId: "homelab", group: "Rack", label: "pi-hole", address: "10.10.0.53", port: 22, user: "pi", auth: { type: "password" }, tags: ["dns"], hasPassword: false, os: "debian", online: true },
   ],
 
   members: [
-    { id: "m1", vaultId: "acme", name: "Владислав", email: "vlad@acme.dev", role: "owner", fingerprint: "age1q8m…r4xz", status: "active", isYou: true },
-    { id: "m2", vaultId: "acme", name: "Anna Kovalenko", email: "anna@acme.dev", role: "admin", fingerprint: "age1zt3…9wkd", status: "active" },
-    { id: "m3", vaultId: "acme", name: "Max Petrenko", email: "max@acme.dev", role: "member", fingerprint: "age1v0p…c2ln", status: "active" },
-    { id: "m4", vaultId: "acme", name: "Oleh Shevchuk", email: "oleh@acme.dev", role: "readOnly", fingerprint: "age1hh7…u8fa", status: "active" },
-    { id: "m5", vaultId: "acme", name: "sam@acme.dev", email: "sam@acme.dev", role: "member", fingerprint: "", status: "invited" },
-    { id: "m6", vaultId: "homelab", name: "Владислав", email: "vlad@acme.dev", role: "admin", fingerprint: "age1q8m…r4xz", status: "active", isYou: true },
-    { id: "m7", vaultId: "homelab", name: "Dima", email: "dima@mail.example", role: "owner", fingerprint: "age1k2j…p0qe", status: "active" },
+    { id: "m1", vaultId: "acme", name: "Владислав", role: "owner", canReveal: true, recovery: false, fingerprint: "K7QM-2XPA-9DTE-WN4F", isYou: true },
+    { id: "m2", vaultId: "acme", name: "Anna Kovalenko", role: "admin", canReveal: true, recovery: false, fingerprint: "R2TV-8HCE-QM4P-LX7A", isYou: false },
+    { id: "m3", vaultId: "acme", name: "Max Petrenko", role: "member", canReveal: false, recovery: false, fingerprint: "WD3N-6KQY-T2MB-9PEC", isYou: false },
+    { id: "m4", vaultId: "acme", name: "Oleh Shevchuk", role: "readOnly", canReveal: false, recovery: false, fingerprint: "HF8C-4ZRW-M7QN-2TLD", isYou: false },
+    { id: "m5", vaultId: "acme", name: "Recovery key", role: "owner", canReveal: true, recovery: true, fingerprint: "J9PL-3QWE-X6RT-B4NM", isYou: false },
+    { id: "m6", vaultId: "homelab", name: "Владислав", role: "admin", canReveal: true, recovery: false, fingerprint: "K7QM-2XPA-9DTE-WN4F", isYou: true },
+    { id: "m7", vaultId: "homelab", name: "Dima", role: "owner", canReveal: true, recovery: false, fingerprint: "P4XC-7NMQ-2LWA-DE8K", isYou: false },
   ],
 
   keys: [
-    { id: "k1", vaultId: "personal", name: "id_ed25519", algorithm: "ed25519", fingerprint: "SHA256:Xq3eT0n…v9Lk", publicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK9x3rQm0vJ2c8fQe1Yt7Zp4WbN5hL2sD6uG8kR1aXo me@laptop", privateKey: fakePrivateKey("id_ed25519"), hasPassphrase: true, createdAt: "14 мар 2026" },
-    { id: "k2", vaultId: "acme", name: "acme-deploy", algorithm: "ed25519", fingerprint: "SHA256:b7RtWq1…Qm2c", publicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIM2pT6vH9cX1bR4nK7wQ3eY8uL5jF0aS2dG6hZ9oNiVt acme-deploy", privateKey: fakePrivateKey("acme-deploy"), hasPassphrase: false, createdAt: "9 янв 2026" },
-    { id: "k3", vaultId: "homelab", name: "homelab-root", algorithm: "rsa-4096", fingerprint: "SHA256:Pz0wLk8…aH5s", publicKey: "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQC7… homelab-root", privateKey: fakePrivateKey("homelab-root"), hasPassphrase: true, passphrase: "rack-key", createdAt: "30 ноя 2025" },
+    { id: "k1", vaultId: "personal", name: "id_ed25519", algorithm: "ed25519", fingerprint: "SHA256:Xq3eT0n…v9Lk", publicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK9x3rQm0vJ2c8fQe1Yt7Zp4WbN5hL2sD6uG8kR1aXo me@laptop", hasPassphrase: true, passphraseSaved: false, createdAt: Date.UTC(2026, 2, 14) },
+    { id: "k2", vaultId: "acme", name: "acme-deploy", algorithm: "ed25519", fingerprint: "SHA256:b7RtWq1…Qm2c", publicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIM2pT6vH9cX1bR4nK7wQ3eY8uL5jF0aS2dG6hZ9oNiVt acme-deploy", hasPassphrase: false, passphraseSaved: false, createdAt: Date.UTC(2026, 0, 9) },
+    { id: "k3", vaultId: "homelab", name: "homelab-root", algorithm: "rsa", bits: 4096, fingerprint: "SHA256:Pz0wLk8…aH5s", publicKey: "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQC7… homelab-root", hasPassphrase: true, passphraseSaved: true, createdAt: Date.UTC(2025, 10, 30) },
   ],
 
   snippets: [
@@ -72,10 +105,21 @@ export const mockWorkspace: Workspace = {
   ],
 
   activity: [
-    { id: "a1", vaultId: "acme", memberId: "m2", action: "добавила", target: "api-2", when: "2 мин назад" },
-    { id: "a2", vaultId: "acme", memberId: "m3", action: "изменил", target: "Перезапуск API", when: "1 ч назад" },
-    { id: "a3", vaultId: "acme", memberId: "m1", action: "пригласили", target: "sam@acme.dev", when: "вчера" },
-    { id: "a4", vaultId: "acme", memberId: "m2", action: "обновила ключ", target: "acme-deploy", when: "3 дня назад" },
-    { id: "a5", vaultId: "homelab", memberId: "m7", action: "изменил", target: "pi-hole", when: "1 ч назад" },
+    { vaultId: "acme", authorName: "Anna Kovalenko", isYou: false, at: ago(2), kind: "added", coll: "host", id: "h11" },
+    { vaultId: "acme", authorName: "Max Petrenko", isYou: false, at: ago(60), kind: "changed", coll: "snippet", id: "s1" },
+    { vaultId: "acme", authorName: "Владислав", isYou: true, at: ago(D), kind: "memberAdded", member: "Oleh Shevchuk" },
+    { vaultId: "acme", authorName: "Anna Kovalenko", isYou: false, at: ago(3 * D), kind: "changed", coll: "key", id: "k2" },
+    { vaultId: "homelab", authorName: "Dima", isYou: false, at: ago(60), kind: "changed", coll: "host", id: "h21" },
   ],
+};
+
+/** Secrets of the demo data; the real ones live only in detour-core. */
+export const mockSecrets = {
+  hostPasswords: new Map<string, string>([["h2", "nas-admin-2026"]]),
+  keyPassphrases: new Map<string, string>([["k3", "rack-key"]]),
+  privateKeys: new Map<string, string>([
+    ["k1", fakePrivateKey("id_ed25519")],
+    ["k2", fakePrivateKey("acme-deploy")],
+    ["k3", fakePrivateKey("homelab-root")],
+  ]),
 };

@@ -1,5 +1,5 @@
-// Mirrors crates/detour-core/src/model.rs. Fields marked "mock" don't exist in
-// the core yet and only drive the mockup.
+// Mirrors crates/detour-core/src/model.rs and team/*. Fields marked "mock"
+// exist only for demo data.
 
 export type VaultKind = "personal" | "team";
 
@@ -10,31 +10,34 @@ export type SyncBackend =
 
 export type SyncStatus = "synced" | "syncing" | "offline" | "conflict";
 
+export type Role = "owner" | "admin" | "member" | "readOnly";
+
 export interface Vault {
   id: string;
   name: string;
   kind: VaultKind;
   sync: SyncBackend;
-  /** mock */
   syncStatus: SyncStatus;
-  /** mock */
-  lastSync: string;
-  /** mock */
-  conflicts: SyncConflict[];
+  /** Unix ms of the last successful read of the storage. */
+  lastSync?: number;
+  conflicts: Conflict[];
+  /** Team only: you are in the member list. */
+  joined?: boolean;
+  /** Team only: you were removed from the member list. */
+  removed?: boolean;
+  myRole?: Role;
+  /** Team only: you may view and export secrets. */
+  canReveal?: boolean;
+  /** Team only: log entries that failed verification. */
+  problems?: number;
 }
 
-/** Fields a teammate's synced version of a host may differ in. */
-export type ConflictField = "label" | "address" | "port" | "user" | "group";
+export type Coll = "host" | "key" | "snippet" | "tunnel";
 
-/** The same host was changed here and by a teammate before either synced. */
-export interface SyncConflict {
-  id: string;
-  hostId: string;
-  /** member whose version is in the storage */
-  theirsBy: string;
-  when: string;
-  theirs: Partial<Pick<Host, ConflictField>>;
-}
+/** A team edit that could not be merged automatically (detour_core::team::ConflictView). */
+export type Conflict =
+  | { kind: "field"; coll: Coll; record: string; field: string; values: { value: unknown; author: string; authorName: string; at: number }[] }
+  | { kind: "deleted"; coll: Coll; record: string; by: string; byName: string; at: number };
 
 export type Auth = { type: "key"; keyId: string } | { type: "password" } | { type: "agent" };
 
@@ -50,48 +53,45 @@ export interface Host {
   user: string;
   auth: Auth;
   tags: string[];
-  /** Saved password for password auth; absent = ask on every connect. Stored encrypted in the vault. */
-  password?: string;
-  /** mock */
-  os: Os;
-  /** mock */
-  online: boolean;
-  /** mock: member id of whoever added it to a team vault */
-  addedBy?: string;
-  /** mock */
-  lastConnected?: string;
+  /** A password is saved in the vault (the value never reaches the UI). */
+  hasPassword: boolean;
+  /** Transient: a password just typed in, sent to the vault with the next save. */
+  newPassword?: string;
+  /** Unix ms of the last successful login. */
+  lastConnected?: number;
+  /** mock: demo hosts only */
+  os?: Os;
+  /** mock: demo hosts only; real reachability is known only when connecting */
+  online?: boolean;
 }
 
-export type Role = "owner" | "admin" | "member" | "readOnly";
-
 export interface Member {
+  /** Signing key id */
   id: string;
   vaultId: string;
   name: string;
   role: Role;
+  canReveal: boolean;
+  /** The team's recovery key, listed as an owner. */
+  recovery: boolean;
   fingerprint: string;
-  /** mock */
-  email: string;
-  /** mock */
-  status: "active" | "invited";
-  /** mock */
-  isYou?: boolean;
+  isYou: boolean;
 }
 
 export interface SshKey {
   id: string;
   vaultId: string;
   name: string;
-  algorithm: "ed25519" | "rsa-4096";
+  algorithm: "ed25519" | "rsa" | "ecdsa";
+  bits?: number;
   fingerprint: string;
   publicKey: string;
-  /** mock: stands in for the encrypted private key file */
-  privateKey: string;
   /** The private key is protected with a passphrase. */
   hasPassphrase: boolean;
-  /** Saved passphrase; absent = ask when the key is used. Stored encrypted in the vault. */
-  passphrase?: string;
-  createdAt: string;
+  /** The passphrase is saved in the vault (otherwise asked when the key is used). */
+  passphraseSaved: boolean;
+  /** Unix ms */
+  createdAt: number;
 }
 
 export interface Snippet {
@@ -120,14 +120,13 @@ export interface Tunnel {
   error?: string;
 }
 
-export interface ActivityItem {
-  id: string;
-  vaultId: string;
-  memberId: string;
-  action: string;
-  target: string;
-  when: string;
-}
+/** detour_core::team::ActivityView */
+export type ActivityItem = { vaultId: string; authorName: string; isYou: boolean; at: number } & (
+  | { kind: "created" }
+  | { kind: "renamed"; name: string }
+  | { kind: "added" | "changed" | "deleted"; coll: Coll; id: string }
+  | { kind: "memberAdded" | "memberChanged" | "memberRemoved"; member: string }
+);
 
 export interface Workspace {
   vaults: Vault[];

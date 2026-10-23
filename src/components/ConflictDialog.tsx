@@ -1,74 +1,160 @@
-import { useStore } from "../lib/store";
-import type { ConflictField, SyncConflict, Vault } from "../lib/types";
-import { HostIcon } from "./common";
+import { useState } from "react";
+import { api, errorText } from "../lib/api";
+import { formatAgo, useStore } from "../lib/store";
+import type { Coll, Conflict, Vault, Workspace } from "../lib/types";
 import { Button, Modal } from "./ui";
 
-const fieldLabel: Record<ConflictField, string> = {
+const fieldLabel: Record<string, string> = {
   label: "Название",
   address: "Адрес",
   port: "Порт",
   user: "Пользователь",
   group: "Группа",
+  tags: "Теги",
+  auth: "Вход",
+  password: "Пароль",
+  name: "Название",
+  command: "Команда",
+  bindPort: "Порт",
+  target: "Назначение",
+  viaHostId: "Через хост",
+  kind: "Тип",
+  passphrase: "Пароль ключа",
 };
 
-export function ConflictDialog({ vault, onClose }: { vault: Vault; onClose: () => void }) {
-  const { ws, update, toast } = useStore();
+const collTitle: Record<Coll, string> = { host: "Хост", key: "Ключ", snippet: "Сниппет", tunnel: "Туннель" };
 
-  const resolve = (c: SyncConflict, keep: "mine" | "theirs") => {
-    const left = vault.conflicts.filter((x) => x.id !== c.id);
-    update((w) => ({
-      ...w,
-      hosts: keep === "theirs" ? w.hosts.map((h) => (h.id === c.hostId ? { ...h, ...c.theirs } : h)) : w.hosts,
-      vaults: w.vaults.map((v) =>
-        v.id === vault.id ? { ...v, conflicts: left, ...(left.length ? {} : { syncStatus: "synced" as const, lastSync: "только что" }) } : v,
-      ),
-    }));
-    if (!left.length) {
-      toast({ text: "Конфликт решён, синхронизировано", tone: "success" });
-      onClose();
-    }
+function recordName(ws: Workspace, coll: Coll, id: string) {
+  const list = coll === "host" ? ws.hosts : coll === "key" ? ws.keys : coll === "snippet" ? ws.snippets : ws.tunnels;
+  const r = list.find((x) => x.id === id) as { label?: string; name?: string } | undefined;
+  return r?.label ?? r?.name ?? id;
+}
+
+function show(v: unknown): string {
+  if (Array.isArray(v)) return v.join(", ") || "пусто";
+  if (v && typeof v === "object") return "type" in v ? String((v as { type: string }).type) : JSON.stringify(v);
+  if (v === null || v === undefined || v === "") return "пусто";
+  return String(v);
+}
+
+type Group = { coll: Coll; record: string; fields: Extract<Conflict, { kind: "field" }>[]; deleted?: Extract<Conflict, { kind: "deleted" }> };
+
+export function ConflictDialog({ vault, onClose }: { vault: Vault; onClose: () => void }) {
+  const { ws, update, toast, applyTeamView } = useStore();
+  const you = ws.members.find((m) => m.vaultId === vault.id && m.isYou)?.id;
+
+  const groups: Group[] = [];
+  for (const c of vault.conflicts) {
+    let g = groups.find((x) => x.coll === c.coll && x.record === c.record);
+    if (!g) groups.push((g = { coll: c.coll, record: c.record, fields: [] }));
+    if (c.kind === "field") g.fields.push(c);
+    else g.deleted = c;
+  }
+
+  // Default choice for each field: the latest value.
+  const [picks, setPicks] = useState<Record<string, number>>(() =>
+    Object.fromEntries(vault.conflicts.filter((c) => c.kind === "field").map((c) => [`${c.coll}/${c.record}/${c.field}`, c.values.length - 1])),
+  );
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const finish = () => {
+    toast({ text: "Конфликт решён", tone: "success" });
   };
 
+  const applyFields = async (g: Group) => {
+    setBusy(g.record);
+    try {
+      if (api.real) {
+        for (const f of g.fields) applyTeamView(await api.teamResolveField(vault.id, g.coll, g.record, f.field, picks[`${g.coll}/${g.record}/${f.field}`] ?? 0));
+      } else {
+        update((w) => ({
+          ...w,
+          hosts: w.hosts.map((h) => (h.id === g.record ? { ...h, ...Object.fromEntries(g.fields.map((f) => [f.field, f.values[picks[`${g.coll}/${g.record}/${f.field}`] ?? 0]!.value])) } : h)),
+          vaults: w.vaults.map((v) => (v.id === vault.id ? dropConflicts(v, g) : v)),
+        }));
+      }
+      finish();
+    } catch (e) {
+      toast({ text: errorText(e), tone: "error" });
+    }
+    setBusy(null);
+  };
+
+  const resolveDeleted = async (g: Group, keep: boolean) => {
+    setBusy(g.record);
+    try {
+      if (api.real) applyTeamView(await api.teamResolveDeleted(vault.id, g.coll, g.record, keep));
+      else
+        update((w) => ({
+          ...w,
+          hosts: keep ? w.hosts : w.hosts.filter((h) => h.id !== g.record),
+          vaults: w.vaults.map((v) => (v.id === vault.id ? dropConflicts(v, g) : v)),
+        }));
+      finish();
+    } catch (e) {
+      toast({ text: errorText(e), tone: "error" });
+    }
+    setBusy(null);
+  };
+
+  if (groups.length === 0) {
+    onClose();
+    return null;
+  }
+
   return (
-    <Modal title={vault.conflicts.length > 1 ? `Конфликты · ${vault.name}` : `Конфликт · ${vault.name}`} width={560} onClose={onClose}>
-      {vault.conflicts.map((c) => {
-        const host = ws.hosts.find((h) => h.id === c.hostId);
-        const who = ws.members.find((m) => m.id === c.theirsBy);
-        const whoName = who?.name.split(" ")[0] ?? "участника";
-        if (!host) return null;
-        const fields = (Object.keys(c.theirs) as ConflictField[]).filter((f) => c.theirs[f] !== host[f]);
-        return (
-          <section className="conflict-item" key={c.id}>
-            <div className="conflict-head">
-              <HostIcon host={host} size={32} />
-              <div>
-                <div className="strong">{host.label}</div>
+    <Modal title={`Конфликт · ${vault.name}`} width={620} onClose={onClose}>
+      {groups.map((g) => (
+        <section className="conflict-item" key={`${g.coll}/${g.record}`}>
+          <div className="conflict-head">
+            <div>
+              <div className="strong">{collTitle[g.coll]} «{recordName(ws, g.coll, g.record)}»</div>
+              {g.deleted && (
                 <div className="muted small">
-                  Изменён у вас и у {whoName} · {c.when}
+                  {g.deleted.by === you ? "Вы удалили" : `Удалён: ${g.deleted.byName}`}, но его изменили · {formatAgo(g.deleted.at)}
                 </div>
-              </div>
+              )}
             </div>
+          </div>
 
-            <div className="diff">
-              <span />
-              <span className="diff-col">У вас</span>
-              <span className="diff-col">У {whoName}</span>
-              {fields.map((f) => (
-                <div className="diff-row" key={f}>
-                  <span className="diff-field">{fieldLabel[f]}</span>
-                  <span className="diff-val mono">{String(host[f])}</span>
-                  <span className="diff-val mono">{String(c.theirs[f])}</span>
-                </div>
-              ))}
+          {g.fields.length > 0 && (
+            <div className="choice-table">
+              {g.fields.map((f) => {
+                const key = `${g.coll}/${g.record}/${f.field}`;
+                return (
+                  <div className="choice-row" key={key}>
+                    <span className="diff-field">{fieldLabel[f.field] ?? f.field}</span>
+                    <div className="choices" role="radiogroup">
+                      {f.values.map((v, i) => (
+                        <button key={i} type="button" role="radio" aria-checked={picks[key] === i} className={`choice ${picks[key] === i ? "on" : ""}`} onClick={() => setPicks((p) => ({ ...p, [key]: i }))}>
+                          <span className="choice-value mono">{show(v.value)}</span>
+                          <span className="choice-who">{v.author === you ? "Вы" : v.authorName} · {formatAgo(v.at)}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
+          )}
 
-            <div className="conflict-actions">
-              <Button onClick={() => resolve(c, "mine")}>Оставить мою</Button>
-              <Button variant="primary" onClick={() => resolve(c, "theirs")}>Взять у {whoName}</Button>
-            </div>
-          </section>
-        );
-      })}
+          <div className="conflict-actions">
+            {g.deleted ? (
+              <>
+                <Button variant="ghost" className="danger-text" loading={busy === g.record} onClick={() => resolveDeleted(g, false)}>Удалить</Button>
+                <Button variant="primary" loading={busy === g.record} onClick={() => resolveDeleted(g, true)}>Оставить</Button>
+              </>
+            ) : (
+              <Button variant="primary" loading={busy === g.record} onClick={() => applyFields(g)}>Применить</Button>
+            )}
+          </div>
+        </section>
+      ))}
     </Modal>
   );
+}
+
+function dropConflicts(v: Vault, g: Group): Vault {
+  const conflicts = v.conflicts.filter((c) => !(c.coll === g.coll && c.record === g.record));
+  return { ...v, conflicts, syncStatus: conflicts.length ? "conflict" : "synced" };
 }

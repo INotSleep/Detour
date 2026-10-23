@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { ArrowLeftRight, ArrowRight, Copy, Ellipsis, Globe, Laptop, Loader2, Pencil, Plus, RotateCw, Server, Trash2, type LucideIcon } from "lucide-react";
 import { copyText, sleep, uid, useStore } from "../lib/store";
 import type { Host, Tunnel } from "../lib/types";
+import { writable } from "../lib/teams";
 import { Button, Empty, Field, IconButton, Menu, Modal, PageHeader, Switch } from "./ui";
 
 /* ---------- route ---------- */
@@ -56,6 +57,7 @@ function endpoint(t: Tunnel, via?: Host) {
 
 export function TunnelsView() {
   const { ws, vault, update, toast, navigate } = useStore();
+  const canEdit = writable(vault);
   const [editing, setEditing] = useState<Tunnel | "new" | null>(null);
   // Each start attempt gets a token; a click while starting invalidates it, so a late result can't flip the switch.
   const attempts = useRef(new Map<string, number>());
@@ -83,7 +85,7 @@ export function TunnelsView() {
     const now = latest.current;
     const via = now.hosts.find((h) => h.id === t.viaHostId);
     const busy = t.kind !== "remote" && now.tunnels.find((o) => o.id !== t.id && o.kind !== "remote" && o.state === "on" && o.bindPort === t.bindPort);
-    if (!via?.online) return patch(t.id, { state: "error", error: `${via?.label ?? "Сервер"} не отвечает` });
+    if (!via || via.online === false) return patch(t.id, { state: "error", error: `${via?.label ?? "Сервер"} не отвечает` });
     if (busy) return patch(t.id, { state: "error", error: `Порт ${t.bindPort} занят «${busy.name}»` });
     patch(t.id, { state: "on" });
   };
@@ -124,16 +126,16 @@ export function TunnelsView() {
   return (
     <div className="page">
       <PageHeader title="Туннели" count={tunnels.length || undefined}>
-        <Button variant="primary" icon={Plus} onClick={() => setEditing("new")}>Создать туннель</Button>
+        {canEdit && <Button variant="primary" icon={Plus} onClick={() => setEditing("new")}>Создать туннель</Button>}
       </PageHeader>
 
-      {tunnels.length === 0 && <Empty icon={ArrowLeftRight} title="Нет туннелей" action={<Button variant="primary" icon={Plus} onClick={() => setEditing("new")}>Создать туннель</Button>} />}
+      {tunnels.length === 0 && <Empty icon={ArrowLeftRight} title="Нет туннелей" action={canEdit ? <Button variant="primary" icon={Plus} onClick={() => setEditing("new")}>Создать туннель</Button> : undefined} />}
 
       <div className="rows">
         {tunnels.map((t) => {
           const via = ws.hosts.find((h) => h.id === t.viaHostId);
           return (
-            <div className={`item-row tunnel-row ${t.state}`} key={t.id} onDoubleClick={() => setEditing(t)}>
+            <div className={`item-row tunnel-row ${t.state}`} key={t.id} onDoubleClick={() => canEdit && setEditing(t)}>
               <Switch label={t.state === "on" ? "Закрыть туннель" : "Открыть туннель"} checked={t.state === "on" || t.state === "starting"} busy={t.state === "starting"} onChange={() => toggle(t.id)} />
               <div className="item-main">
                 <span className="item-title">{t.name}</span>
@@ -158,13 +160,17 @@ export function TunnelsView() {
                 )}
               </div>
 
-              <Menu
-                trigger={(open, isOpen) => <IconButton icon={Ellipsis} label="Ещё" className={isOpen ? "pressed" : ""} onClick={open} />}
-                items={[
-                  { label: "Изменить", icon: Pencil, onSelect: () => setEditing(t) },
-                  { label: "Удалить", icon: Trash2, danger: true, onSelect: () => remove(t) },
-                ]}
-              />
+              {canEdit ? (
+                <Menu
+                  trigger={(open, isOpen) => <IconButton icon={Ellipsis} label="Ещё" className={isOpen ? "pressed" : ""} onClick={open} />}
+                  items={[
+                    { label: "Изменить", icon: Pencil, onSelect: () => setEditing(t) },
+                    { label: "Удалить", icon: Trash2, danger: true, onSelect: () => remove(t) },
+                  ]}
+                />
+              ) : (
+                <span className="icon-spacer" />
+              )}
             </div>
           );
         })}
@@ -355,7 +361,7 @@ function HostSelect({ hosts, value, onChange }: { hosts: Host[]; value: string; 
       {hosts.map((h) => (
         <option key={h.id} value={h.id}>
           {h.label}
-          {h.online ? "" : " (недоступен)"}
+          {h.online === false ? " (недоступен)" : ""}
         </option>
       ))}
     </select>

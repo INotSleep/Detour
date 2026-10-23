@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ArrowLeftRight, Code, CornerDownLeft, KeyRound, Search, Settings, Users, type LucideIcon } from "lucide-react";
+import { ArrowLeftRight, Code, CornerDownLeft, KeyRound, Lock, Search, Settings, Users, type LucideIcon } from "lucide-react";
+import { api } from "../lib/api";
 import { useStore, type Section } from "../lib/store";
 import { HostIcon } from "./common";
 import type { Host } from "../lib/types";
 
 type Item =
   | { kind: "host"; id: string; host: Host; vaultName: string | null }
-  | { kind: "go"; id: string; label: string; icon: LucideIcon; section: Section };
+  | { kind: "go"; id: string; label: string; icon: LucideIcon; section: Section }
+  | { kind: "lock"; id: string; label: string; icon: LucideIcon };
 
 const goItems: { label: string; icon: LucideIcon; section: Section }[] = [
   { label: "Ключи", icon: KeyRound, section: "keys" },
@@ -18,7 +20,7 @@ const goItems: { label: string; icon: LucideIcon; section: Section }[] = [
 ];
 
 export function CommandPalette({ onClose }: { onClose: () => void }) {
-  const { ws, vault, connect, navigate } = useStore();
+  const { ws, vault, connect, navigate, lock } = useStore();
   const [q, setQ] = useState("");
   const [index, setIndex] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
@@ -31,7 +33,8 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
       .filter((h) => match(h.label, h.address, h.user, ...h.tags))
       .map<Item>((h) => ({ kind: "host", id: h.id, host: h, vaultName: h.vaultId === vault.id ? null : ws.vaults.find((v) => v.id === h.vaultId)?.name ?? null }));
     const go = goItems.filter((g) => match(g.label)).map<Item>((g) => ({ kind: "go", id: g.section, ...g }));
-    return [...hosts, ...go];
+    const actions: Item[] = api.real && match("заблокировать", "lock") ? [{ kind: "lock", id: "lock", label: "Заблокировать", icon: Lock }] : [];
+    return [...hosts, ...go, ...actions];
   }, [q, ws, vault.id]);
 
   useEffect(() => setIndex(0), [q]);
@@ -44,7 +47,8 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
     if (!it) return;
     onClose();
     if (it.kind === "host") connect(it.host.id);
-    else navigate(it.section);
+    else if (it.kind === "go") navigate(it.section);
+    else void lock();
   };
 
   const hostCount = items.filter((i) => i.kind === "host").length;

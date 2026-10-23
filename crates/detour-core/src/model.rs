@@ -1,54 +1,21 @@
 //! Domain model shared by every frontend.
 //!
-//! Field names are serialized in camelCase to match the TypeScript types in
-//! `src/lib/types.ts`.
+//! Two shapes exist for records that hold secrets: the stored one (`Host`,
+//! `KeyEntry`) and the view handed to a UI (`HostView`, `KeyView`), which never
+//! contains passwords, passphrases or private keys. Field names are serialized
+//! in camelCase to match `src/lib/types.ts`.
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Vault {
-    pub id: String,
-    pub name: String,
-    pub kind: VaultKind,
-    pub sync: SyncBackend,
+/// Unix time in milliseconds.
+pub type Millis = i64;
+
+pub fn now_ms() -> Millis {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as Millis).unwrap_or(0)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum VaultKind {
-    /// Lives only on this device (optionally synced between the user's own devices).
-    Personal,
-    /// Shared with a team, end-to-end encrypted to every member's key.
-    Team,
-}
-
-/// Where a vault's ciphertext is stored. Detour runs no server of its own:
-/// teams bring their own dumb storage.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
-pub enum SyncBackend {
-    Local,
-    Git { remote: String, branch: String },
-    Folder { path: String },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Host {
-    pub id: String,
-    pub vault_id: String,
-    pub group: String,
-    pub label: String,
-    pub address: String,
-    pub port: u16,
-    pub user: String,
-    pub auth: Auth,
-    pub tags: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Auth {
     Key { key_id: String },
     Password,
@@ -57,21 +24,210 @@ pub enum Auth {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Member {
+pub struct Host {
     pub id: String,
-    pub name: String,
-    pub role: Role,
-    /// Fingerprint of the member's public key; vault data is encrypted to it.
-    pub fingerprint: String,
+    pub group: String,
+    pub label: String,
+    pub address: String,
+    pub port: u16,
+    pub user: String,
+    pub auth: Auth,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub last_connected: Option<Millis>,
+    /// Saved password for `Auth::Password`; `None` = ask every time.
+    #[serde(default)]
+    pub password: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostView {
+    pub id: String,
+    pub group: String,
+    pub label: String,
+    pub address: String,
+    pub port: u16,
+    pub user: String,
+    pub auth: Auth,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub last_connected: Option<Millis>,
+    #[serde(default)]
+    pub has_password: bool,
+    /// Incoming only: a password typed in the UI to save with this edit.
+    #[serde(default, skip_serializing)]
+    pub new_password: Option<String>,
+}
+
+impl From<&Host> for HostView {
+    fn from(h: &Host) -> Self {
+        Self {
+            id: h.id.clone(),
+            group: h.group.clone(),
+            label: h.label.clone(),
+            address: h.address.clone(),
+            port: h.port,
+            user: h.user.clone(),
+            auth: h.auth.clone(),
+            tags: h.tags.clone(),
+            last_connected: h.last_connected,
+            has_password: h.password.is_some(),
+            new_password: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum Role {
-    Owner,
-    Admin,
-    Member,
-    ReadOnly,
+pub enum KeyAlgorithm {
+    Ed25519,
+    Rsa,
+    Ecdsa,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyEntry {
+    pub id: String,
+    pub name: String,
+    pub algorithm: KeyAlgorithm,
+    #[serde(default)]
+    pub bits: Option<u32>,
+    pub fingerprint: String,
+    /// OpenSSH public key line.
+    pub public_key: String,
+    /// OpenSSH private key; encrypted with the passphrase when `has_passphrase`.
+    pub private_key: String,
+    pub has_passphrase: bool,
+    /// Saved passphrase; `None` = ask when the key is used.
+    #[serde(default)]
+    pub passphrase: Option<String>,
+    pub created_at: Millis,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyView {
+    pub id: String,
+    pub name: String,
+    pub algorithm: KeyAlgorithm,
+    #[serde(default)]
+    pub bits: Option<u32>,
+    pub fingerprint: String,
+    pub public_key: String,
+    pub has_passphrase: bool,
+    #[serde(default)]
+    pub passphrase_saved: bool,
+    pub created_at: Millis,
+}
+
+impl From<&KeyEntry> for KeyView {
+    fn from(k: &KeyEntry) -> Self {
+        Self {
+            id: k.id.clone(),
+            name: k.name.clone(),
+            algorithm: k.algorithm,
+            bits: k.bits,
+            fingerprint: k.fingerprint.clone(),
+            public_key: k.public_key.clone(),
+            has_passphrase: k.has_passphrase,
+            passphrase_saved: k.passphrase.is_some(),
+            created_at: k.created_at,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Snippet {
+    pub id: String,
+    pub name: String,
+    pub command: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TunnelKind {
+    /// `ssh -L`
+    Local,
+    /// `ssh -R`
+    Remote,
+    /// `ssh -D` (SOCKS5)
+    Dynamic,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Tunnel {
+    pub id: String,
+    pub name: String,
+    pub kind: TunnelKind,
+    pub bind_port: u16,
+    pub via_host_id: String,
+    #[serde(default)]
+    pub target: Option<String>,
+}
+
+/// A pinned server key (trust on first use).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KnownHost {
+    /// `address:port`
+    pub endpoint: String,
+    /// OpenSSH public key line of the server.
+    pub key: String,
+    pub fingerprint: String,
+    pub added_at: Millis,
+}
+
+/// Everything stored in one vault file.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultData {
+    #[serde(default)]
+    pub hosts: Vec<Host>,
+    #[serde(default)]
+    pub keys: Vec<KeyEntry>,
+    #[serde(default)]
+    pub snippets: Vec<Snippet>,
+    #[serde(default)]
+    pub tunnels: Vec<Tunnel>,
+    #[serde(default)]
+    pub known_hosts: Vec<KnownHost>,
+    /// This person's team identity (Detour ID secret keys).
+    #[serde(default)]
+    pub member_identity: Option<crate::identity::StoredIdentity>,
+    /// This installation's id in team logs.
+    #[serde(default)]
+    pub device_id: Option<String>,
+    #[serde(default)]
+    pub teams: Vec<TeamRef>,
+    /// Last login per team host (`<team id>/<host id>`), kept locally.
+    #[serde(default)]
+    pub team_last_connected: std::collections::BTreeMap<String, Millis>,
+}
+
+/// A team vault this person has joined.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamRef {
+    pub id: String,
+    pub path: String,
+    /// Detour ID of the vault's creator, confirmed when joining.
+    pub root: String,
+}
+
+/// What a UI sees of a vault: no secrets.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultView {
+    pub hosts: Vec<HostView>,
+    pub keys: Vec<KeyView>,
+    pub snippets: Vec<Snippet>,
+    pub tunnels: Vec<Tunnel>,
 }
 
 #[cfg(test)]
@@ -79,9 +235,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sync_backend_serializes_with_type_tag() {
-        let git = SyncBackend::Git { remote: "git@example.com:team/vault.git".into(), branch: "main".into() };
-        let json = serde_json::to_string(&git).unwrap();
-        assert_eq!(json, r#"{"type":"git","remote":"git@example.com:team/vault.git","branch":"main"}"#);
+    fn auth_serializes_with_type_tag_and_camel_case_fields() {
+        let json = serde_json::to_string(&Auth::Key { key_id: "k1".into() }).unwrap();
+        assert_eq!(json, r#"{"type":"key","keyId":"k1"}"#);
+        assert_eq!(serde_json::to_string(&Auth::Agent).unwrap(), r#"{"type":"agent"}"#);
+    }
+
+    #[test]
+    fn host_view_hides_password() {
+        let host = Host {
+            id: "h".into(),
+            group: "g".into(),
+            label: "l".into(),
+            address: "a".into(),
+            port: 22,
+            user: "u".into(),
+            auth: Auth::Password,
+            tags: vec![],
+            last_connected: None,
+            password: Some("secret".into()),
+        };
+        let json = serde_json::to_string(&HostView::from(&host)).unwrap();
+        assert!(!json.contains("secret"));
+        assert!(json.contains(r#""hasPassword":true"#));
     }
 }
