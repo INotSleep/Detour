@@ -1,0 +1,20 @@
+name: Feature request
+description: Something Detour should do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you're trying to do
+      description: The task, not the solution. What do you do today instead?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How it could work
+  - type: textarea
+    id: more
+    attributes:
+      label: Anything else
+      description: How other SSH clients handle it, screenshots, links.
