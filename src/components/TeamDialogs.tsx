@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Copy, Download, FolderOpen, KeyRound, ShieldCheck, ShieldQuestion } from "lucide-react";
 import { api, errorText, isCoreError, type GitLogin, type TeamView } from "../lib/api";
 import { copyText, sleep, uid, useStore } from "../lib/store";
-import type { Level, Role, Vault } from "../lib/types";
+import type { Level, Role, SshKey, Vault } from "../lib/types";
 import { Button, Field, IconButton, Modal, PasswordInput, Segmented } from "./ui";
 import { tr, useT } from "../i18n";
 
@@ -65,9 +65,29 @@ export const storageReady = (s: Storage) => (s.kind === "folder" ? !!s.path.trim
 
 export function StorageFields({ value, set, folderLabel, folderPlaceholder }: { value: Storage; set: (p: Partial<Storage>) => void; folderLabel: string; folderPlaceholder?: string }) {
   const t = useT();
-  const { ws, toast } = useStore();
+  const { ws, toast, update } = useStore();
   const keys = ws.keys.filter((k) => k.vaultId === "personal");
   const key = keys.find((k) => k.id === value.login);
+  const [creating, setCreating] = useState(false);
+  // A key made here still has to be added to the repository: show it until then.
+  const [created, setCreated] = useState<string | null>(null);
+
+  const createKey = async () => {
+    setCreating(true);
+    try {
+      const name = repoName(value.url) ?? "git";
+      const k = await api.keyGenerate("personal", name, "ed25519", null, true);
+      update((w) => ({ ...w, keys: [...w.keys, k] }));
+      setCreated(k.id);
+      set({ login: k.id });
+    } catch (e) {
+      toast({ text: errorText(e), tone: "error" });
+    } finally {
+      setCreating(false);
+    }
+  };
+  const copyPublic = async (k: SshKey) =>
+    toast((await copyText(k.publicKey)) ? { text: t.teams.storage.publicKeyCopied(k.name), tone: "success" } : { text: t.common.copyFailed, tone: "error" });
   return (
     <>
       <Field label={t.teams.storage.title}>
@@ -85,25 +105,40 @@ export function StorageFields({ value, set, folderLabel, folderPlaceholder }: { 
               <PasswordInput value={value.token} onChange={(token) => set({ token })} placeholder="github_pat_…" />
             </Field>
           ) : (
+          <>
           <Field label={t.teams.storage.login}>
             <div className="input-group">
-              <select className="input" value={value.login} onChange={(e) => set({ login: e.target.value })}>
+              <select className="input" value={creating ? "new" : value.login} disabled={creating} onChange={(e) => (e.target.value === "new" ? void createKey() : set({ login: e.target.value }))}>
                 {keys.map((k) => <option key={k.id} value={k.id}>{k.name}</option>)}
+                <option value="new">{creating ? t.teams.storage.creatingKey : t.teams.storage.newKey}</option>
                 <option value="agent">ssh-agent</option>
               </select>
-              {key && (
-                <Button type="button" icon={Copy} onClick={async () => toast((await copyText(key.publicKey)) ? { text: t.teams.storage.publicKeyCopied(key.name), tone: "success" } : { text: t.common.copyFailed, tone: "error" })}>
+              {key && key.id !== created && (
+                <Button type="button" icon={Copy} onClick={() => void copyPublic(key)}>
                   {t.teams.storage.publicKey}
                 </Button>
               )}
             </div>
           </Field>
+          {key && key.id === created && (
+            <div className="deploy-key">
+              <div className="input-group">
+                <div className="id-box mono grow">{key.publicKey}</div>
+                <IconButton type="button" icon={Copy} label={t.common.copy} onClick={() => void copyPublic(key)} />
+              </div>
+              <span className="muted small">{t.teams.storage.deployKeyHint}</span>
+            </div>
+          )}
+          </>
           )}
         </>
       )}
     </>
   );
 }
+
+/** The repository name in a Git URL, to name a key made for it. */
+const repoName = (url: string) => url.trim().replace(/\.git$/, "").split(/[/:]/).pop()?.replace(/[^A-Za-z0-9._-]/g, "") || null;
 
 /** The server key of a repository seen for the first time. */
 export function ServerKeyCard({ url, fingerprint }: { url: string; fingerprint: string }) {

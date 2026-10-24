@@ -975,3 +975,6 @@ body.resizing-col, body.resizing-col * { cursor: row-resize !important; }
 .update-row { display: flex; align-items: center; gap: 10px; }
 
 .selectable { user-select: text; }
+
+.deploy-key { display: flex; flex-direction: column; gap: 6px; margin-top: -4px; }
+.deploy-key .id-box { font-size: 11.5px; padding: 8px 10px; }
