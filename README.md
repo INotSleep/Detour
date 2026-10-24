@@ -15,7 +15,7 @@ encrypted end to end and signed on every change.
 
 [**Download**](https://github.com/INotSleep/Detour/releases/latest) · [Security design](docs/teams.md) · [Build from source](#build-from-source)
 
-<img src="docs/images/terminal.png" alt="Two terminal panes connected to a server" width="100%">
+<img src="docs/images/demo.gif" alt="Importing a key, adding a host, connecting, splitting the terminal and browsing files" width="100%">
 
 </div>
 
