@@ -64,6 +64,9 @@ export const uid = (p: string) => `${p}${Date.now().toString(36)}${Math.random()
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** The letter of a shortcut whatever the keyboard layout: Ctrl+K stays Ctrl+K on a Cyrillic layout. */
+export const shortcutKey = (e: { code: string; key: string }) => (/^Key[A-Z]$/.test(e.code) ? e.code.slice(3).toLowerCase() : e.key.toLowerCase());
+
 export async function copyText(text: string): Promise<boolean> {
   try {
     await navigator.clipboard.writeText(text);

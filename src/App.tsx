@@ -4,7 +4,7 @@ import { LangContext, lang as currentLang, resolveLang, setLang, tr, useT } from
 import { api, errorText, fromView, type CoreInfo, type SyncInfo, type TeamView, type VaultView } from "./lib/api";
 import { applyTeamEntries, applyTeamView, dataOf, removeVault, writable } from "./lib/teams";
 import { mockWorkspace } from "./lib/mockData";
-import { StoreContext, uid, type Section, type Store, type UpdateState } from "./lib/store";
+import { StoreContext, shortcutKey, uid, type Section, type Store, type UpdateState } from "./lib/store";
 import { checkForUpdate, installUpdate as installFound, updateErrorText } from "./lib/updates";
 import type { Settings, Workspace } from "./lib/types";
 import type { SessionStatus } from "./lib/fakeShell";
@@ -359,7 +359,7 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+      if ((e.ctrlKey || e.metaKey) && shortcutKey(e) === "k") {
         e.preventDefault();
         setPalette((p) => !p);
       }

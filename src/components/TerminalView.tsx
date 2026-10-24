@@ -9,7 +9,7 @@ import { runFakeSession, type SessionSecret, type SessionStatus } from "../lib/f
 import { runRealSession, type HostKeyAnswer, type HostKeyQuestion } from "../lib/realSession";
 import { api, errorText, type SecretKind } from "../lib/api";
 import { mockSecrets } from "../lib/mockData";
-import { useStore } from "../lib/store";
+import { shortcutKey, useStore } from "../lib/store";
 import { tr, useT } from "../i18n";
 import { Button, IconButton } from "./ui";
 
@@ -105,7 +105,7 @@ export function TerminalView({ host, active, initialCommand, onStatus, onExit, o
     // those two go to the server.
     term.attachCustomKeyEventHandler((e) => {
       if (e.type !== "keydown" || !(e.ctrlKey || e.metaKey) || e.altKey) return true;
-      const key = e.key.toLowerCase();
+      const key = shortcutKey(e);
       const ssh = cb.current.clipboard === "ssh";
       if (key === "c" && (e.shiftKey || (ssh && term.hasSelection()))) {
         e.preventDefault();

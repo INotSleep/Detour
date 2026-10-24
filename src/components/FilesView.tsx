@@ -3,7 +3,7 @@ import {
   ArrowDown, ArrowUp, Check, ChevronDown, ChevronUp, Copy, Download, Ellipsis, File, FolderOpen, FolderPlus, FolderUp, Folder, House, KeyRound, Link2, Loader2, Pencil, RotateCw, ShieldAlert, ShieldQuestion, SquareTerminal, Trash2, Upload, X,
 } from "lucide-react";
 import { api, errorText, isCoreError, trustMore, type FileEntry, type LocalFile, type SecretKind } from "../lib/api";
-import { copyText, uid, useStore } from "../lib/store";
+import { copyText, shortcutKey, uid, useStore } from "../lib/store";
 import { locale, tr, useT } from "../i18n";
 import type { Host } from "../lib/types";
 import type { SessionStatus } from "../lib/fakeShell";
@@ -426,10 +426,10 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
     else if (ev.key === "F5") {
       ev.preventDefault();
       void refresh();
-    } else if (ctrl && ev.key.toLowerCase() === "a") {
+    } else if (ctrl && shortcutKey(ev) === "a") {
       ev.preventDefault();
       setSel(sorted.map((e) => e.name));
-    } else if (ctrl && ev.key.toLowerCase() === "l") {
+    } else if (ctrl && shortcutKey(ev) === "l") {
       ev.preventDefault();
       setEditingPath(path);
     }
