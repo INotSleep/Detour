@@ -222,6 +222,71 @@ export function sortEntries(list: FileEntry[], by: SortBy, desc: boolean) {
 /** A shell command that goes to `path`. */
 const cdTo = (path: string) => `cd '${path.replace(/'/g, `'\\''`)}'`;
 
+const SPLIT_KEY = "detour.sftpSplit";
+
+/** The share of an SFTP tab's width this computer's side last had. */
+function savedSplit() {
+  try {
+    const v = Number(localStorage.getItem(SPLIT_KEY));
+    return v > 0.1 && v < 0.9 ? v : 0.5;
+  } catch {
+    return 0.5;
+  }
+}
+
+/**
+ * The divider between the two sides. It moves the left side's width itself,
+ * frame by frame, and keeps it once let go: the lists don't redraw while it moves.
+ */
+function useSplit() {
+  const [split, setSplit] = useState(savedSplit);
+  const box = useRef<HTMLDivElement>(null);
+  const left = useRef<HTMLDivElement>(null);
+  const keep = (v: number) => {
+    setSplit(v);
+    try {
+      localStorage.setItem(SPLIT_KEY, String(v));
+    } catch {
+      /* private mode: this tab keeps it */
+    }
+  };
+  const start = (e: React.MouseEvent) => {
+    if (e.button !== 0 || !box.current || !left.current) return;
+    e.preventDefault();
+    const rect = box.current.getBoundingClientRect();
+    const min = Math.min(240 / rect.width, 0.45);
+    let x = e.clientX;
+    let next = split;
+    let frame = 0;
+    // A cover over the window holds the cursor: nothing below has to be restyled.
+    const cover = Object.assign(document.createElement("div"), { className: "resize-capture" });
+    document.body.append(cover);
+    const apply = () => {
+      frame = 0;
+      next = Math.min(Math.max((x - rect.left) / rect.width, min), 1 - min);
+      if (left.current) left.current.style.width = `${next * 100}%`;
+    };
+    const move = (ev: MouseEvent) => {
+      x = ev.clientX;
+      if (!frame) frame = requestAnimationFrame(apply);
+    };
+    const up = () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      cancelAnimationFrame(frame);
+      cover.remove();
+      keep(next);
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  };
+  const reset = () => {
+    if (left.current) left.current.style.width = "50%";
+    keep(0.5);
+  };
+  return { box, left, width: `${split * 100}%`, start, reset };
+}
+
 /** An SFTP tab: this computer on the left, the server on the right (or which host to open). */
 export function FilesView({ host, active, onStatus, onClose, onPickHost }: Props) {
   const [localDir, setLocalDir] = useState<string | null>(null);
@@ -231,11 +296,15 @@ export function FilesView({ host, active, onStatus, onClose, onPickHost }: Props
   const target = host ? remoteDir : null;
   const t = useT().files;
   const drag = usePaneDrag((to) => (to === "remote" ? (target ? t.local.uploadTo(target) : null) : localDir ? t.downloadTo(localDir) : null));
+  const split = useSplit();
   return (
     <div className="files">
       {drag.view}
-      <div className="files-panes">
-        <LocalPane dir={localDir} onDir={setLocalDir} refreshKey={localRefresh} target={target} onUpload={(items) => remote.current?.upload(items)} onDragRows={drag.start("local")} />
+      <div className="files-panes" ref={split.box}>
+        <div className="files-left" ref={split.left} style={{ width: split.width }}>
+          <LocalPane dir={localDir} onDir={setLocalDir} refreshKey={localRefresh} target={target} onUpload={(items) => remote.current?.upload(items)} onDragRows={drag.start("local")} />
+        </div>
+        <div className="files-divider" onMouseDown={split.start} onDoubleClick={split.reset} />
         {host ? (
           <RemotePane
             key={host.id}

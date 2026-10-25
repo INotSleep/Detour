@@ -214,4 +214,6 @@ export interface Settings {
   clipboard: "ssh" | "termius";
   /** What "Edit" opens a file in; null: the app the system uses for it. */
   editor: { name: string; path: string } | null;
+  /** The sidebar shows only icons. */
+  sidebarCollapsed: boolean;
 }

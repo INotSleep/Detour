@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeftRight, Check, ChevronsUpDown, Code, KeyRound, LogIn, Plus, Search, Server, Settings, TriangleAlert, Users } from "lucide-react";
+import { ArrowLeftRight, Check, ChevronsUpDown, Code, KeyRound, LogIn, PanelLeftClose, PanelLeftOpen, Plus, Search, Server, Settings, TriangleAlert, Users } from "lucide-react";
 import { useT } from "../i18n";
 import { formatAgo, useStore, type Section } from "../lib/store";
 import type { Vault } from "../lib/types";
@@ -17,8 +17,11 @@ const nav: { id: Exclude<Section, "settings">; icon: typeof Server }[] = [
 ];
 
 export function Sidebar({ homeActive }: { homeActive: boolean }) {
-  const { ws, vault, section, navigate, openPalette, resolveConflicts } = useStore();
+  const { ws, vault, section, navigate, openPalette, resolveConflicts, settings, setSettings } = useStore();
   const t = useT().app;
+  const mini = settings.sidebarCollapsed;
+  // With only icons shown, each item says what it is on hover.
+  const tip = (label: string) => (mini ? { "data-tip": label, "data-tip-side": "right" } : {});
   const conflictHost = new Set(vault.conflicts.map((c) => c.record)).size === 1 && vault.conflicts[0]!.coll === "host" ? ws.hosts.find((h) => h.id === vault.conflicts[0]!.record) : null;
 
   const counts: Partial<Record<Section, number>> = {
@@ -30,11 +33,11 @@ export function Sidebar({ homeActive }: { homeActive: boolean }) {
   };
 
   return (
-    <aside className="sidebar">
-      <VaultSwitcher />
+    <aside className={`sidebar ${mini ? "mini" : ""}`}>
+      <VaultSwitcher mini={mini} />
 
       {vault.conflicts.length > 0 && (
-        <button className="sidebar-alert" onClick={() => resolveConflicts()}>
+        <button className="sidebar-alert" onClick={() => resolveConflicts()} {...tip(conflictHost ? t.conflictWith(conflictHost.label) : t.conflicts(vault.conflicts.length))}>
           <TriangleAlert size={15} />
           <span className="grow ellipsis">
             {conflictHost ? t.conflictWith(conflictHost.label) : t.conflicts(vault.conflicts.length)}
@@ -43,35 +46,42 @@ export function Sidebar({ homeActive }: { homeActive: boolean }) {
         </button>
       )}
 
-      <button className="quick" onClick={openPalette}>
+      <button className="quick" onClick={openPalette} {...tip(`${t.quickConnect} · Ctrl K`)}>
         <Search size={14} />
         <span>{t.quickConnect}</span>
         <Kbd>Ctrl K</Kbd>
       </button>
 
       <nav className="nav">
-        {nav.map(({ id, icon: Icon }) => (
-          <button key={id} className={`nav-item ${section === id && homeActive ? "active" : ""}`} onClick={() => navigate(id)}>
+        {nav.map(({ id, icon: Icon }) => {
+          const label = id === "team" && vault.kind === "personal" ? t.section.teams : t.section[id];
+          return (
+          <button key={id} className={`nav-item ${section === id && homeActive ? "active" : ""}`} onClick={() => navigate(id)} {...tip(label)}>
             <Icon size={16} />
-            <span>{id === "team" && vault.kind === "personal" ? t.section.teams : t.section[id]}</span>
+            <span>{label}</span>
             {!!counts[id] && <span className="nav-count">{counts[id]}</span>}
           </button>
-        ))}
+          );
+        })}
       </nav>
 
       <div className="grow" />
 
       <nav className="nav">
-        <button className={`nav-item ${section === "settings" && homeActive ? "active" : ""}`} onClick={() => navigate("settings")}>
+        <button className={`nav-item ${section === "settings" && homeActive ? "active" : ""}`} onClick={() => navigate("settings")} {...tip(t.section.settings)}>
           <Settings size={16} />
           <span>{t.section.settings}</span>
+        </button>
+        <button className="nav-item" onClick={() => setSettings({ sidebarCollapsed: !mini })} aria-label={mini ? t.expand : t.collapse} {...tip(t.expand)}>
+          {mini ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+          <span>{t.collapse}</span>
         </button>
       </nav>
     </aside>
   );
 }
 
-function VaultSwitcher() {
+function VaultSwitcher({ mini }: { mini: boolean }) {
   const { ws, vault, setVault, navigate, sync } = useStore();
   const all = useT();
   const t = all.app;
@@ -98,7 +108,7 @@ function VaultSwitcher() {
 
   return (
     <div className="vault-switcher" ref={ref}>
-      <button className={`vault-current ${open ? "open" : ""}`} onClick={() => setOpen((o) => !o)}>
+      <button className={`vault-current ${open ? "open" : ""}`} onClick={() => setOpen((o) => !o)} {...(mini && !open ? { "data-tip": vault.name, "data-tip-side": "right" } : {})}>
         <VaultAvatar vault={vault} size={26} />
         <span className="vault-names">
           <span className="vault-name">{vault.name}</span>

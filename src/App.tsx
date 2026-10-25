@@ -41,7 +41,7 @@ const sectionIcon: Record<Section, typeof Server> = {
   settings: SettingsIcon,
 };
 
-const defaultSettings: Settings = { theme: "dark", language: "system", fontSize: 13, scrollback: 5000, autoLockMinutes: 15, clipboard: "ssh", autoUpdate: true, editor: null };
+const defaultSettings: Settings = { theme: "dark", language: "system", fontSize: 13, scrollback: 5000, autoLockMinutes: 15, clipboard: "ssh", autoUpdate: true, editor: null, sidebarCollapsed: false };
 const SETTINGS_KEY = "detour.settings";
 
 /** Settings of this device, kept in the webview's storage. */
@@ -463,7 +463,7 @@ export default function App() {
   return (
     <LangContext.Provider value={lang}>
       <StoreContext.Provider value={store}>
-        <div className="app" inert={phase !== "ready"}>
+        <div className={`app ${settings.sidebarCollapsed ? "sidebar-mini" : ""}`} inert={phase !== "ready"}>
           <Sidebar homeActive={activeId === "home"} />
 
           <main className="main">
