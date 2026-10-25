@@ -9,7 +9,7 @@ use detour_core::ssh::{self, SessionEvent, SessionHandle};
 use detour_core::personal::Pairing;
 use detour_core::store::{ImportPreview, ImportResult, MyId, PERSONAL, PendingTeam, Store, SyncStatus, TeamEntry, VaultUpdate};
 use detour_core::team::state::{Coll, Level, Role};
-use detour_core::sync;
+use detour_core::{github, sync};
 use detour_core::sftp::{self, FileEntry, Files};
 use detour_core::tunnel::{self, TunnelStatus, Tunnels};
 use detour_core::team::git::GitRemote;
@@ -279,8 +279,8 @@ fn sync_enable_folder(app: State<App>, path: String) -> Result<SyncStatus> {
 }
 
 #[tauri::command]
-async fn sync_enable_git(app: State<'_, App>, url: String, auth: Auth, token: Option<String>, trust_fingerprint: Option<String>) -> Result<SyncStatus> {
-    sync::enable_git_sync(&app.store, git_remote(url, auth, token), trust_fingerprint).await?;
+async fn sync_enable_git(app: State<'_, App>, url: String, auth: Auth, token: Option<String>, github: Option<bool>, trust_fingerprint: Option<String>) -> Result<SyncStatus> {
+    sync::enable_git_sync(&app.store, git_remote(url, auth, token, github), trust_fingerprint).await?;
     sync_status_now(&app)
 }
 
@@ -292,8 +292,8 @@ async fn sync_join_folder(app: State<'_, App>, path: String, code: String) -> Re
 }
 
 #[tauri::command]
-async fn sync_join_git(app: State<'_, App>, url: String, auth: Auth, token: Option<String>, code: String, trust_fingerprint: Option<String>) -> Result<SyncStatus> {
-    sync::join_git_sync(&app.store, git_remote(url, auth, token), code, trust_fingerprint).await?;
+async fn sync_join_git(app: State<'_, App>, url: String, auth: Auth, token: Option<String>, github: Option<bool>, code: String, trust_fingerprint: Option<String>) -> Result<SyncStatus> {
+    sync::join_git_sync(&app.store, git_remote(url, auth, token, github), code, trust_fingerprint).await?;
     sync_status_now(&app)
 }
 
@@ -422,8 +422,55 @@ async fn team_sync(app: State<'_, App>, id: String, trust_fingerprint: Option<St
     sync::sync_team(&app.store, &id, trust_fingerprint).await
 }
 
-fn git_remote(url: String, auth: Auth, token: Option<String>) -> GitRemote {
-    GitRemote { url, auth, token }
+fn git_remote(url: String, auth: Auth, token: Option<String>, github: Option<bool>) -> GitRemote {
+    let github = github.unwrap_or(false);
+    GitRemote { url, auth, token: token.filter(|_| !github), github }
+}
+
+/* ---------- signing in with GitHub ---------- */
+
+/// Who this device is signed in to GitHub as, if anyone.
+#[tauri::command]
+fn github_user(app: State<App>) -> Result<Option<String>> {
+    Ok(app.store.lock().map_err(poisoned)?.github_login()?.map(|l| l.user))
+}
+
+/// Starts signing in: the code to enter on GitHub.
+#[tauri::command]
+async fn github_start() -> Result<github::DeviceCode> {
+    github::start(&github::Endpoints::default()).await
+}
+
+/// Whether the code was entered yet; keeps the sign-in once it was.
+#[tauri::command]
+async fn github_poll(app: State<'_, App>, device_code: String) -> Result<github::Poll> {
+    github::poll(&app.store, &github::Endpoints::default(), &device_code).await
+}
+
+/// Whether the sign-in reaches a github.com repository (the app is installed on it).
+#[tauri::command]
+async fn github_repo_access(app: State<'_, App>, url: String) -> Result<bool> {
+    github::repo_access(&app.store, &github::Endpoints::default(), &url).await
+}
+
+#[tauri::command]
+fn github_sign_out(app: State<App>) -> Result<()> {
+    app.store.lock().map_err(poisoned)?.set_github_login(None)
+}
+
+/// A team's repository is reached with the GitHub sign-in from now on; then syncs.
+#[tauri::command]
+async fn team_use_github(app: State<'_, App>, id: String) -> Result<TeamView> {
+    app.store.lock().map_err(poisoned)?.team_use_github(&id)?;
+    sync::sync_team(&app.store, &id, None).await
+}
+
+/// The sync repository is reached with the GitHub sign-in from now on; then syncs.
+#[tauri::command]
+async fn sync_use_github(app: State<'_, App>) -> Result<Synced> {
+    app.store.lock().map_err(poisoned)?.sync_use_github()?;
+    let changed = sync::sync_personal(&app.store, None).await?;
+    synced(&app, changed)
 }
 
 /// Replaces the HTTPS token of a team's repository, then syncs.
@@ -440,8 +487,8 @@ async fn team_replace_server_key(app: State<'_, App>, id: String, fingerprint: S
 }
 
 #[tauri::command]
-async fn team_create_git(app: State<'_, App>, url: String, auth: Auth, token: Option<String>, name: String, my_name: String, recovery_key: String, trust_fingerprint: Option<String>) -> Result<TeamView> {
-    sync::create_git_team(&app.store, git_remote(url, auth, token), &name, &my_name, &recovery_key, trust_fingerprint).await
+async fn team_create_git(app: State<'_, App>, url: String, auth: Auth, token: Option<String>, github: Option<bool>, name: String, my_name: String, recovery_key: String, trust_fingerprint: Option<String>) -> Result<TeamView> {
+    sync::create_git_team(&app.store, git_remote(url, auth, token, github), &name, &my_name, &recovery_key, trust_fingerprint).await
 }
 
 #[derive(Serialize)]
@@ -453,19 +500,19 @@ struct GitInspected {
 }
 
 #[tauri::command]
-async fn team_inspect_git(app: State<'_, App>, url: String, auth: Auth, token: Option<String>, trust_fingerprint: Option<String>) -> Result<GitInspected> {
-    let (info, clone) = sync::inspect_git_team(&app.store, &git_remote(url, auth, token), trust_fingerprint).await?;
+async fn team_inspect_git(app: State<'_, App>, url: String, auth: Auth, token: Option<String>, github: Option<bool>, trust_fingerprint: Option<String>) -> Result<GitInspected> {
+    let (info, clone) = sync::inspect_git_team(&app.store, &git_remote(url, auth, token, github), trust_fingerprint).await?;
     Ok(GitInspected { info, clone })
 }
 
 #[tauri::command]
-fn team_join_git(app: State<App>, clone: String, root: String, url: String, auth: Auth, token: Option<String>) -> Result<TeamView> {
-    sync::join_git_team(&app.store, &clone, &root, git_remote(url, auth, token))
+fn team_join_git(app: State<App>, clone: String, root: String, url: String, auth: Auth, token: Option<String>, github: Option<bool>) -> Result<TeamView> {
+    sync::join_git_team(&app.store, &clone, &root, git_remote(url, auth, token, github))
 }
 
 #[tauri::command]
-async fn team_recover_git(app: State<'_, App>, url: String, auth: Auth, token: Option<String>, recovery_key: String, my_name: String, trust_fingerprint: Option<String>) -> Result<TeamView> {
-    sync::recover_git_team(&app.store, git_remote(url, auth, token), &recovery_key, &my_name, trust_fingerprint).await
+async fn team_recover_git(app: State<'_, App>, url: String, auth: Auth, token: Option<String>, github: Option<bool>, recovery_key: String, my_name: String, trust_fingerprint: Option<String>) -> Result<TeamView> {
+    sync::recover_git_team(&app.store, git_remote(url, auth, token, github), &recovery_key, &my_name, trust_fingerprint).await
 }
 
 #[tauri::command]
@@ -644,6 +691,7 @@ pub fn builder<R: tauri::Runtime>(builder: tauri::Builder<R>, data_dir: std::pat
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(App { store: Arc::new(Mutex::new(Store::open(data_dir))), sessions: Mutex::new(HashMap::new()), tunnels: Tunnels::new(), files: Files::new() })
         .invoke_handler(tauri::generate_handler![
             core_info,
@@ -670,6 +718,12 @@ pub fn builder<R: tauri::Runtime>(builder: tauri::Builder<R>, data_dir: std::pat
             sync_disable,
             sync_replace_server_key,
             sync_set_token,
+            sync_use_github,
+            github_user,
+            github_start,
+            github_poll,
+            github_repo_access,
+            github_sign_out,
             host_set_password,
             host_forget_key,
             host_password,
@@ -710,6 +764,7 @@ pub fn builder<R: tauri::Runtime>(builder: tauri::Builder<R>, data_dir: std::pat
             team_create_git,
             team_replace_server_key,
             team_set_git_token,
+            team_use_github,
             team_inspect_git,
             team_join_git,
             team_recover_git,

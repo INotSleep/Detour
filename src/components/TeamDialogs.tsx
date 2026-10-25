@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { Copy, Download, FolderOpen, KeyRound, ShieldCheck, ShieldQuestion } from "lucide-react";
-import { api, errorText, isCoreError, type GitLogin, type TeamView } from "../lib/api";
+import { Check, Copy, Download, ExternalLink, FolderOpen, KeyRound, Loader2, ShieldAlert, ShieldCheck, ShieldQuestion } from "lucide-react";
+import { api, errorText, isCoreError, type GitLogin, type GithubCode, type TeamView } from "../lib/api";
 import { copyText, sleep, uid, useStore } from "../lib/store";
 import type { Level, Role, SshKey, Vault } from "../lib/types";
 import { Button, Field, IconButton, Modal, PasswordInput, Segmented } from "./ui";
@@ -47,21 +47,29 @@ export interface Storage {
   login: string;
   /** HTTPS access token. */
   token: string;
+  /** A github.com repository: a token instead of the GitHub sign-in. */
+  useToken: boolean;
+  /** The GitHub sign-in reaches the repository. */
+  githubReady: boolean;
 }
 
 export function useStorage(): [Storage, (patch: Partial<Storage>) => void] {
   const { ws } = useStore();
   const firstKey = ws.keys.find((k) => k.vaultId === "personal")?.id ?? "agent";
-  const [s, setS] = useState<Storage>({ kind: "folder", path: "", url: "", login: firstKey, token: "" });
+  const [s, setS] = useState<Storage>({ kind: "folder", path: "", url: "", login: firstKey, token: "", useToken: false, githubReady: false });
   return [s, (patch) => setS((cur) => ({ ...cur, ...patch }))];
 }
 
 const isHttps = (url: string) => /^https?:\/\//i.test(url.trim());
+const viaGithub = (s: Storage) => !!githubRepo(s.url) && !s.useToken;
 export const gitLogin = (s: Storage): GitLogin =>
-  isHttps(s.url)
-    ? { url: s.url.trim(), auth: { type: "password" }, token: s.token.trim() }
-    : { url: s.url.trim(), auth: s.login === "agent" ? { type: "agent" } : { type: "key", keyId: s.login } };
-export const storageReady = (s: Storage) => (s.kind === "folder" ? !!s.path.trim() : !!s.url.trim() && (!isHttps(s.url) || !!s.token.trim()));
+  viaGithub(s)
+    ? { url: s.url.trim(), auth: { type: "password" }, github: true }
+    : isHttps(s.url)
+      ? { url: s.url.trim(), auth: { type: "password" }, token: s.token.trim() }
+      : { url: s.url.trim(), auth: s.login === "agent" ? { type: "agent" } : { type: "key", keyId: s.login } };
+export const storageReady = (s: Storage) =>
+  s.kind === "folder" ? !!s.path.trim() : !!s.url.trim() && (viaGithub(s) ? s.githubReady : !isHttps(s.url) || !!s.token.trim());
 
 export function StorageFields({ value, set, folderLabel, folderPlaceholder }: { value: Storage; set: (p: Partial<Storage>) => void; folderLabel: string; folderPlaceholder?: string }) {
   const t = useT();
@@ -100,10 +108,18 @@ export function StorageFields({ value, set, folderLabel, folderPlaceholder }: { 
           <Field label={t.teams.storage.url}>
             <input className="input mono" value={value.url} onChange={(e) => set({ url: e.target.value })} placeholder="git@github.com:team/vault.git" spellCheck={false} autoComplete="off" />
           </Field>
-          {isHttps(value.url) ? (
-            <Field label={t.teams.storage.token}>
-              <PasswordInput value={value.token} onChange={(token) => set({ token })} placeholder="github_pat_…" />
-            </Field>
+          {viaGithub(value) ? (
+            <>
+              <GithubAccess url={value.url} onReady={(githubReady) => set({ githubReady })} />
+              <Button type="button" variant="ghost" size="sm" className="self-start" onClick={() => set({ useToken: true })}>{t.teams.storage.useToken}</Button>
+            </>
+          ) : isHttps(value.url) ? (
+            <>
+              <TokenField label={t.teams.storage.token} repoUrl={value.url} value={value.token} onChange={(token) => set({ token })} placeholder="github_pat_…" />
+              {githubRepo(value.url) && (
+                <Button type="button" variant="ghost" size="sm" className="self-start" onClick={() => set({ useToken: false })}>{t.teams.storage.useGithub}</Button>
+              )}
+            </>
           ) : (
           <>
           <Field label={t.teams.storage.login}>
@@ -134,6 +150,220 @@ export function StorageFields({ value, set, folderLabel, folderPlaceholder }: { 
         </>
       )}
     </>
+  );
+}
+
+/** A GitHub repository given by its https URL. */
+export const githubRepo = (url: string) => {
+  const m = /^https:\/\/github\.com\/([A-Za-z0-9-]+)\/([A-Za-z0-9._-]+?)(?:\.git)?\/?$/i.exec(url.trim());
+  return m ? { owner: m[1], repo: m[2] } : null;
+};
+
+/** GitHub's fine-grained token form, filled in for one repository: write access to its contents. */
+const githubTokenForm = (owner: string, repo: string) => {
+  // Token names must be unique on an account, so a renewed token gets today's date.
+  const name = `Detour ${repo}`.slice(0, 29) + ` ${new Date().toISOString().slice(0, 10)}`;
+  const q = new URLSearchParams({ name, description: `${owner}/${repo}`, target_name: owner, expires_in: "366", contents: "write" });
+  return `https://github.com/settings/personal-access-tokens/new?${q}`;
+};
+
+/** A Git error about the GitHub sign-in or the Detour Sync app, which signing in or installing fixes. */
+export const githubIssue = (e: { kind: string; message?: string } | null | undefined) =>
+  e?.kind === "git" && /github sign-in needed|github app has no access/.test(e.message ?? "");
+
+/**
+ * A new login for an https repository: the GitHub sign-in for a github.com
+ * repository (or a token instead), a token for others. `submit` saves it.
+ */
+export function RepoLoginFields({ url, token, setToken, error, setError, useToken, setUseToken, onGithubReady }: { url: string; token: string; setToken: (v: string) => void; error: string | null; setError: (e: string | null) => void; useToken: boolean; setUseToken: (v: boolean) => void; onGithubReady: (ready: boolean) => void }) {
+  const t = useT();
+  if (githubRepo(url) && !useToken) {
+    return (
+      <>
+        <GithubAccess url={url} onReady={onGithubReady} />
+        {error && <span className="field-error">{error}</span>}
+        <Button type="button" variant="ghost" size="sm" className="self-start" onClick={() => setUseToken(true)}>{t.teams.storage.useToken}</Button>
+      </>
+    );
+  }
+  return (
+    <>
+      <TokenField label={t.teams.token.label} repoUrl={url} value={token} onChange={(v) => { setToken(v); setError(null); }} error={error} autoFocus />
+      {githubRepo(url) && <Button type="button" variant="ghost" size="sm" className="self-start" onClick={() => setUseToken(false)}>{t.teams.storage.useGithub}</Button>}
+    </>
+  );
+}
+
+/** An HTTPS token input; for a GitHub repository it also opens GitHub's token form, filled in. */
+export function TokenField({ label, repoUrl, value, onChange, error, autoFocus, placeholder }: { label: string; repoUrl: string; value: string; onChange: (v: string) => void; error?: string | null; autoFocus?: boolean; placeholder?: string }) {
+  const t = useT();
+  const { toast } = useStore();
+  const gh = githubRepo(repoUrl);
+  const [opened, setOpened] = useState(false);
+  const openForm = async () => {
+    if (!gh) return;
+    try {
+      await api.openInBrowser(githubTokenForm(gh.owner, gh.repo));
+      setOpened(true);
+    } catch (e) {
+      toast({ text: errorText(e), tone: "error" });
+    }
+  };
+  return (
+    <Field label={label} error={error}>
+      <div className="input-group">
+        <PasswordInput value={value} onChange={onChange} invalid={!!error} autoFocus={autoFocus} placeholder={placeholder} />
+        {gh && (
+          <Button type="button" icon={ExternalLink} onClick={() => void openForm()}>
+            {t.teams.storage.createToken}
+          </Button>
+        )}
+      </div>
+      {gh && opened && !value.trim() && <span className="muted small">{t.teams.storage.tokenHint(`${gh.owner}/${gh.repo}`)}</span>}
+    </Field>
+  );
+}
+
+const INSTALL_URL = "https://github.com/apps/detour-sync/installations/new";
+
+/**
+ * This device's GitHub sign-in for one github.com repository: signing in with
+ * a code entered on GitHub, then whether the Detour Sync app reaches the
+ * repository, with a way to install it there. `onReady` follows "it does".
+ */
+export function GithubAccess({ url, onReady }: { url: string; onReady: (ready: boolean) => void }) {
+  const t = useT();
+  const g = t.teams.github;
+  const { toast } = useStore();
+  const repo = githubRepo(url);
+  const [user, setUser] = useState<string | null | undefined>(undefined);
+  const [code, setCode] = useState<GithubCode | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [access, setAccess] = useState<boolean | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.githubUser().then(setUser).catch(() => setUser(null));
+  }, []);
+
+  // Waits for the code to be entered on GitHub, as often as GitHub allows.
+  useEffect(() => {
+    if (!code) return;
+    let stop = false;
+    let interval = code.interval;
+    let timer: ReturnType<typeof setTimeout>;
+    const next = () => {
+      timer = setTimeout(async () => {
+        try {
+          const r = await api.githubPoll(code.deviceCode);
+          if (stop) return;
+          if (r.status === "done") {
+            setCode(null);
+            setUser(r.user);
+            toast({ text: g.signedIn(r.user), tone: "success" });
+            return;
+          }
+          if (r.status === "slowDown") interval = r.interval;
+          next();
+        } catch (e) {
+          if (stop) return;
+          setCode(null);
+          setError(errorText(e));
+        }
+      }, interval * 1000);
+    };
+    next();
+    return () => {
+      stop = true;
+      clearTimeout(timer);
+    };
+  }, [code]);
+
+  // Whether the app reaches the repository; while it doesn't, checks again now and then (after installing it).
+  const repoKey = repo ? `${repo.owner}/${repo.repo}` : "";
+  useEffect(() => {
+    setAccess(null);
+    if (!user || !repo) return;
+    let stop = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const check = async () => {
+      try {
+        const ok = await api.githubRepoAccess(url);
+        if (stop) return;
+        setAccess(ok);
+        setError(null);
+        if (!ok) timer = setTimeout(check, 4000);
+      } catch (e) {
+        if (stop) return;
+        setError(errorText(e));
+        if (isCoreError(e) && e.kind === "git" && e.message.includes("sign-in needed")) setUser(null);
+      }
+    };
+    void check();
+    return () => {
+      stop = true;
+      clearTimeout(timer);
+    };
+  }, [user, repoKey]);
+
+  useEffect(() => onReady(!!user && access === true), [user, access]);
+
+  const start = async () => {
+    setStarting(true);
+    setError(null);
+    try {
+      setCode(await api.githubStart());
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setStarting(false);
+    }
+  };
+  const copyAndOpen = async (c: GithubCode) => {
+    await copyText(c.userCode);
+    try {
+      await api.openInBrowser(c.verificationUri);
+    } catch (e) {
+      toast({ text: errorText(e), tone: "error" });
+    }
+  };
+  const install = async () => {
+    try {
+      await api.openInBrowser(INSTALL_URL);
+    } catch (e) {
+      toast({ text: errorText(e), tone: "error" });
+    }
+  };
+
+  if (!repo || user === undefined) return null;
+  return (
+    <div className="field">
+      <span className="field-label">GitHub</span>
+      {code ? (
+        <div className="github-code">
+          <div className="input-group">
+            <div className="id-box mono grow github-user-code">{code.userCode}</div>
+            <Button type="button" variant="primary" icon={ExternalLink} onClick={() => void copyAndOpen(code)}>{g.copyOpen}</Button>
+          </div>
+          <span className="muted small github-status"><Loader2 size={13} className="spin" />{g.waiting}</span>
+        </div>
+      ) : !user ? (
+        <Button type="button" variant="primary" className="self-start" loading={starting} onClick={() => void start()}>{g.signIn}</Button>
+      ) : (
+        <div className="github-account">
+          <span className="mono small">{g.account(user)}</span>
+          {access === null && !error && <span className="muted small github-status"><Loader2 size={13} className="spin" />{g.checking}</span>}
+          {access === true && <span className="small github-status ok"><Check size={13} />{g.hasAccess(repoKey)}</span>}
+          {access === false && (
+            <div className="github-install">
+              <span className="small github-status warn"><ShieldAlert size={13} />{g.noAccess(repoKey)}</span>
+              <Button type="button" size="sm" icon={ExternalLink} onClick={() => void install()}>{g.install}</Button>
+            </div>
+          )}
+        </div>
+      )}
+      {error && <span className="field-error">{error}</span>}
+    </div>
   );
 }
 

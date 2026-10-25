@@ -6,8 +6,8 @@ import { atLeast, canManage, removeVault } from "../lib/teams";
 import type { ActivityItem, Coll, Level, Member, Problem, Role, Vault } from "../lib/types";
 import { tr, useT, type Dict } from "../i18n";
 import { Avatar, SyncIcon, VaultAvatar, syncTarget } from "./common";
-import { Button, ConfirmDialog, Empty, Field, IconButton, Menu, Modal, PageHeader, PasswordInput, Segmented } from "./ui";
-import { AddMemberDialog, CreateTeamDialog, JoinTeamDialog, MyIdDialog, useMyId } from "./TeamDialogs";
+import { Button, ConfirmDialog, Empty, IconButton, Menu, Modal, PageHeader, Segmented } from "./ui";
+import { AddMemberDialog, CreateTeamDialog, JoinTeamDialog, MyIdDialog, RepoLoginFields, githubIssue, githubRepo, useMyId } from "./TeamDialogs";
 
 export function TeamsView() {
   const { vault } = useStore();
@@ -78,7 +78,8 @@ function TeamPage({ vault }: { vault: Vault }) {
   const [syncing, setSyncing] = useState(false);
   const [showProblems, setShowProblems] = useState(false);
   const [tokenDialog, setTokenDialog] = useState(false);
-  const tokenRejected = vault.remoteError?.kind === "git" && vault.remoteError.message.includes("token rejected");
+  const loginIssue = githubIssue(vault.remoteError);
+  const tokenRejected = loginIssue || (vault.remoteError?.kind === "git" && vault.remoteError.message.includes("token rejected"));
 
   const members = ws.members.filter((m) => m.vaultId === vault.id).sort(byRank);
   const activity = ws.activity.filter((a) => a.vaultId === vault.id).sort((a, b) => b.at - a.at);
@@ -216,7 +217,7 @@ function TeamPage({ vault }: { vault: Vault }) {
           <TriangleAlert size={16} />
           <span className="grow">{remoteErrorText(vault.remoteError)}</span>
           {tokenRejected ? (
-            <Button size="sm" variant="primary" onClick={() => setTokenDialog(true)}>{t.teams.page.newToken}</Button>
+            <Button size="sm" variant="primary" onClick={() => setTokenDialog(true)}>{loginIssue ? t.teams.github.fix : t.teams.page.newToken}</Button>
           ) : (
             <Button size="sm" loading={syncing} onClick={() => sync()}>{t.common.retry}</Button>
           )}
@@ -364,26 +365,31 @@ function TeamPage({ vault }: { vault: Vault }) {
   );
 }
 
-/** A new HTTPS token for a team's repository. */
+/** A new login for a team's https repository: the GitHub sign-in or a token. */
 export function TokenDialog({ vault, onClose }: { vault: Vault; onClose: () => void }) {
   const t = useT();
   const { toast, applyTeamView } = useStore();
+  const url = vault.sync.type === "git" ? vault.sync.remote : "";
   const [token, setToken] = useState("");
+  const [useToken, setUseToken] = useState(false);
+  const [githubReady, setGithubReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const viaGithub = !!githubRepo(url) && !useToken;
+  const ready = viaGithub ? githubReady : !!token.trim();
 
   const submit = async () => {
-    if (!token.trim() || busy) return;
+    if (!ready || busy) return;
     setBusy(true);
     try {
-      const view = await api.teamSetGitToken(vault.id, token.trim());
+      const view = viaGithub ? await api.teamUseGithub(vault.id) : await api.teamSetGitToken(vault.id, token.trim());
       applyTeamView(view);
       if (view.remote?.error) {
         setError(remoteErrorText(view.remote.error));
         setBusy(false);
         return;
       }
-      toast({ text: t.teams.token.replaced, tone: "success" });
+      toast({ text: viaGithub ? t.teams.github.saved : t.teams.token.replaced, tone: "success" });
       onClose();
     } catch (e) {
       setError(errorText(e));
@@ -393,19 +399,17 @@ export function TokenDialog({ vault, onClose }: { vault: Vault; onClose: () => v
 
   return (
     <Modal
-      title={t.teams.token.title}
+      title={viaGithub ? t.teams.storage.login : t.teams.token.title}
       onClose={onClose}
       onSubmit={submit}
       footer={
         <>
           <Button type="button" variant="ghost" onClick={onClose}>{t.common.cancel}</Button>
-          <Button type="submit" variant="primary" loading={busy} disabled={!token.trim()}>{t.common.save}</Button>
+          <Button type="submit" variant="primary" loading={busy} disabled={!ready}>{viaGithub ? t.teams.github.use : t.common.save}</Button>
         </>
       }
     >
-      <Field label={t.teams.token.label} error={error}>
-        <PasswordInput value={token} onChange={(v) => { setToken(v); setError(null); }} invalid={!!error} autoFocus />
-      </Field>
+      <RepoLoginFields url={url} token={token} setToken={setToken} error={error} setError={setError} useToken={useToken} setUseToken={setUseToken} onGithubReady={setGithubReady} />
     </Modal>
   );
 }

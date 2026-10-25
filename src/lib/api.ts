@@ -9,6 +9,7 @@ import { Channel, invoke, isTauri } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { open, save } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { fakeKeyMaterial, parsePrivateKey } from "./keys";
 import { mockSecrets } from "./mockData";
 import { mockFiles } from "./mockFiles";
@@ -100,6 +101,10 @@ function gitReason(message: string) {
   if (message.includes("repository address")) return t.badAddress;
   if (message.includes("key or ssh-agent")) return t.needKey;
   if (message.includes("keeps changing")) return t.keepsChanging;
+  if (message.includes("github sign-in needed")) return t.githubSignIn;
+  if (message.includes("github app has no access")) return t.githubNoAccess;
+  if (message.includes("github sign-in expired")) return t.githubCodeExpired;
+  if (message.includes("github sign-in denied")) return t.githubDenied;
   if (message.includes("token rejected")) return t.tokenRejected;
   if (message.includes("use https")) return t.httpsOnly;
   if (message.includes("not a smart Git server")) return t.notGit;
@@ -189,7 +194,23 @@ export interface GitLogin {
   auth: GitAuth;
   /** HTTPS only. */
   token?: string;
+  /** HTTPS: log in with this device's GitHub sign-in instead of `token`. */
+  github?: boolean;
 }
+
+/** The code a person enters on GitHub to sign this device in (detour_core::github::DeviceCode). */
+export interface GithubCode {
+  deviceCode: string;
+  userCode: string;
+  verificationUri: string;
+  expiresIn: number;
+  interval: number;
+}
+
+export type GithubPoll = { status: "pending" } | { status: "slowDown"; interval: number } | { status: "done"; user: string };
+
+/* demo stand-ins for signing in with GitHub (plain browser) */
+const demoGithub = { user: null as string | null, polls: 0, installed: false };
 
 export interface TeamEntry {
   id: string;
@@ -508,17 +529,19 @@ export const api = {
   teamLeave: (id: string): Promise<void> => invoke("team_leave", { id }),
   teamSync: (id: string, trustFingerprint?: string): Promise<TeamView> => invoke("team_sync", { id, trustFingerprint: trustFingerprint ?? null }),
   teamCreateGit: (g: GitLogin, name: string, myName: string, recoveryKey: string, trustFingerprint?: string): Promise<TeamView> =>
-    invoke("team_create_git", { url: g.url, auth: g.auth, token: g.token ?? null, name, myName, recoveryKey, trustFingerprint: trustFingerprint ?? null }),
+    invoke("team_create_git", { url: g.url, auth: g.auth, token: g.token ?? null, github: g.github ?? false, name, myName, recoveryKey, trustFingerprint: trustFingerprint ?? null }),
   /** Clones a repository to see whose team it is; `token` hands the clone to teamJoinGit. */
   teamInspectGit: (g: GitLogin, trustFingerprint?: string): Promise<{ info: VaultInfo; clone: string }> =>
-    invoke("team_inspect_git", { url: g.url, auth: g.auth, token: g.token ?? null, trustFingerprint: trustFingerprint ?? null }),
+    invoke("team_inspect_git", { url: g.url, auth: g.auth, token: g.token ?? null, github: g.github ?? false, trustFingerprint: trustFingerprint ?? null }),
   /** Trusts a repository server's new key in place of the pinned one. */
   teamReplaceServerKey: (id: string, fingerprint: string): Promise<TeamView> => invoke("team_replace_server_key", { id, fingerprint }),
-  teamJoinGit: (clone: string, root: string, g: GitLogin): Promise<TeamView> => invoke("team_join_git", { clone, root, url: g.url, auth: g.auth, token: g.token ?? null }),
+  teamJoinGit: (clone: string, root: string, g: GitLogin): Promise<TeamView> => invoke("team_join_git", { clone, root, url: g.url, auth: g.auth, token: g.token ?? null, github: g.github ?? false }),
   /** Replaces the HTTPS token of a team's repository. */
   teamSetGitToken: (id: string, token: string): Promise<TeamView> => invoke("team_set_git_token", { id, token }),
+  /** From now on reaches a team's repository with this device's GitHub sign-in. */
+  teamUseGithub: (id: string): Promise<TeamView> => invoke("team_use_github", { id }),
   teamRecoverGit: (g: GitLogin, recoveryKey: string, myName: string, trustFingerprint?: string): Promise<TeamView> =>
-    invoke("team_recover_git", { url: g.url, auth: g.auth, token: g.token ?? null, recoveryKey, myName, trustFingerprint: trustFingerprint ?? null }),
+    invoke("team_recover_git", { url: g.url, auth: g.auth, token: g.token ?? null, github: g.github ?? false, recoveryKey, myName, trustFingerprint: trustFingerprint ?? null }),
   teamPut: (id: string, data: PersonalData): Promise<TeamView> => invoke("team_put", { id, update: toView(data) }),
   teamRename: (id: string, name: string): Promise<TeamView> => invoke("team_rename", { id, name }),
   teamMemberAdd: (id: string, detourId: string, name: string, role: Role, access: Level): Promise<TeamView> => invoke("team_member_add", { id, detourId, name, role, access }),
@@ -531,6 +554,13 @@ export const api = {
   teamResolveDeleted: (id: string, coll: string, record: string, keep: boolean): Promise<TeamView> => invoke("team_resolve_deleted", { id, coll, record, keep }),
 
   /** Native folder picker; null if cancelled or not in the app window. */
+  /** Opens a page in the system browser (only github.com is allowed). */
+  async openInBrowser(url: string): Promise<void> {
+    if (real) return openUrl(url);
+    if (url.includes("/installations/")) demoGithub.installed = true;
+    window.open(url, "_blank", "noopener");
+  },
+
   async pickFolder(): Promise<string | null> {
     if (!real) return null;
     const r = await open({ directory: true, multiple: false });
@@ -584,19 +614,42 @@ export const api = {
   syncEnable: (place: SyncPlace, trustFingerprint?: string): Promise<SyncInfo> => {
     if (!real) return demoSync.enable(place);
     if ("path" in place) return invoke("sync_enable_folder", { path: place.path });
-    return invoke("sync_enable_git", { url: place.url, auth: place.auth, token: place.token ?? null, trustFingerprint: trustFingerprint ?? null });
+    return invoke("sync_enable_git", { url: place.url, auth: place.auth, token: place.token ?? null, github: place.github ?? false, trustFingerprint: trustFingerprint ?? null });
   },
   /** Joins the vault this person syncs on other devices, with a pairing code or the recovery key. */
   syncJoin: (place: SyncPlace, code: string, trustFingerprint?: string): Promise<SyncInfo> => {
     if (!real) return demoSync.join(place, code);
     if ("path" in place) return invoke("sync_join_folder", { path: place.path, code });
-    return invoke("sync_join_git", { url: place.url, auth: place.auth, token: place.token ?? null, code, trustFingerprint: trustFingerprint ?? null });
+    return invoke("sync_join_git", { url: place.url, auth: place.auth, token: place.token ?? null, github: place.github ?? false, code, trustFingerprint: trustFingerprint ?? null });
   },
   syncAddDevice: (): Promise<Pairing> => (real ? invoke("sync_add_device") : demoSync.addDevice()),
   syncRecoveryKey: (): Promise<string> => (real ? invoke("sync_recovery_key") : demoSync.recoveryKey()),
   syncDisable: (): Promise<void> => (real ? invoke("sync_disable") : demoSync.disable()),
   syncReplaceServerKey: (fingerprint: string): Promise<{ changed: boolean; status: SyncInfo }> => invoke("sync_replace_server_key", { fingerprint }),
   syncSetToken: (token: string): Promise<{ changed: boolean; status: SyncInfo }> => invoke("sync_set_token", { token }),
+  syncUseGithub: (): Promise<{ changed: boolean; status: SyncInfo }> => invoke("sync_use_github"),
+
+  /* signing in with GitHub (the Detour Sync app, device flow) */
+
+  /** Who this device is signed in to GitHub as. */
+  githubUser: async (): Promise<string | null> => (real ? invoke("github_user") : demoGithub.user),
+  githubStart: async (): Promise<GithubCode> => {
+    if (real) return invoke("github_start");
+    demoGithub.polls = 0;
+    return { deviceCode: "demo", userCode: "WDJB-MJHT", verificationUri: "https://github.com/login/device", expiresIn: 900, interval: 2 };
+  },
+  githubPoll: async (deviceCode: string): Promise<GithubPoll> => {
+    if (real) return invoke("github_poll", { deviceCode });
+    if (++demoGithub.polls < 3) return { status: "pending" };
+    demoGithub.user = "inotsleep";
+    return { status: "done", user: demoGithub.user };
+  },
+  /** Whether the sign-in reaches a github.com repository: the app is installed on it. */
+  githubRepoAccess: async (url: string): Promise<boolean> => (real ? invoke("github_repo_access", { url }) : demoGithub.installed),
+  githubSignOut: async (): Promise<void> => {
+    if (real) return invoke("github_sign_out");
+    demoGithub.user = null;
+  },
 
   /* files (SFTP) */
 

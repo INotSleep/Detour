@@ -38,11 +38,14 @@ pub struct GitRemote {
     /// HTTPS access token; kept only in the personal vault.
     #[serde(default)]
     pub token: Option<String>,
+    /// HTTPS with this device's GitHub sign-in instead of `token`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub github: bool,
 }
 
 impl std::fmt::Debug for GitRemote {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("GitRemote").field("url", &self.url).field("auth", &self.auth).field("token", &self.token.as_ref().map(|_| "…")).finish()
+        f.debug_struct("GitRemote").field("url", &self.url).field("auth", &self.auth).field("token", &self.token.as_ref().map(|_| "…")).field("github", &self.github).finish()
     }
 }
 
@@ -143,6 +146,8 @@ impl HttpUrl {
 pub struct HttpRemote {
     pub url: HttpUrl,
     pub token: Option<String>,
+    /// The token is a GitHub sign-in: refusals mean signing in again or installing the app.
+    pub github: bool,
 }
 
 /// How to reach a repository.
@@ -265,12 +270,15 @@ mod http {
 
     fn auth(r: &HttpRemote) -> Option<String> {
         // The name hardly matters with a token; some hosts want a real one, given in the address.
-        let user = r.url.user.clone().unwrap_or_else(|| "detour".into());
+        let fallback = if r.github { "x-access-token" } else { "detour" };
+        let user = r.url.user.clone().unwrap_or_else(|| fallback.into());
         r.token.as_ref().map(|t| format!("Basic {}", B64.encode(format!("{user}:{t}"))))
     }
 
-    fn status_error(status: u16, host: &str) -> Error {
+    fn status_error(status: u16, host: &str, github: bool) -> Error {
         match status {
+            401 if github => Error::Git { message: "github sign-in needed".into() },
+            403 | 404 if github => Error::Git { message: "github app has no access".into() },
             401 | 403 => Error::Git { message: "token rejected".into() },
             404 => Error::Git { message: "repository not found".into() },
             _ => Error::Git { message: format!("{host} answered {status}") },
@@ -291,7 +299,7 @@ mod http {
     pub async fn refs(r: &HttpRemote, service: Service) -> Result<proto::Advert> {
         let name = format!("git-{}", service.name());
         let url = format!("{}/info/refs?service={name}", r.url.base);
-        let (host, header) = (r.url.host.clone(), auth(r));
+        let (host, header, github) = (r.url.host.clone(), auth(r), r.github);
         let want = format!("application/x-{name}-advertisement");
         let body = run(move || {
             let mut req = AGENT.get(&url);
@@ -300,7 +308,7 @@ mod http {
             }
             let mut resp = req.call().map_err(|e| net_error(e, &host))?;
             if resp.status() != 200 {
-                return Err(status_error(resp.status().as_u16(), &host));
+                return Err(status_error(resp.status().as_u16(), &host, github));
             }
             let smart = resp.headers().get("content-type").and_then(|v| v.to_str().ok()).is_some_and(|v| v.starts_with(&want));
             if !smart {
@@ -315,7 +323,7 @@ mod http {
     pub async fn post(r: &HttpRemote, service: Service, request: Vec<u8>) -> Result<Vec<u8>> {
         let name = format!("git-{}", service.name());
         let url = format!("{}/{name}", r.url.base);
-        let (host, header) = (r.url.host.clone(), auth(r));
+        let (host, header, github) = (r.url.host.clone(), auth(r), r.github);
         run(move || {
             let mut req = AGENT
                 .post(&url)
@@ -326,7 +334,7 @@ mod http {
             }
             let mut resp = req.send(&request[..]).map_err(|e| net_error(e, &host))?;
             if resp.status() != 200 {
-                return Err(status_error(resp.status().as_u16(), &host));
+                return Err(status_error(resp.status().as_u16(), &host, github));
             }
             resp.body_mut().with_config().limit(MAX_BODY).read_to_vec().map_err(|e| net_error(e, &host))
         })

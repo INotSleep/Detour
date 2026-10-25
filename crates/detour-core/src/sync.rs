@@ -19,6 +19,11 @@ fn team_lock(id: &str) -> Arc<tokio::sync::Mutex<()>> {
     LOCKS.lock().unwrap_or_else(|e| e.into_inner()).entry(id.to_string()).or_default().clone()
 }
 
+/// Renews this device's GitHub token first when it is about to expire.
+async fn fresh(store: &Mutex<Store>) {
+    let _ = crate::github::renew(store, &crate::github::Endpoints::default()).await;
+}
+
 fn locked(store: &Mutex<Store>) -> Result<MutexGuard<'_, Store>> {
     store.lock().map_err(|_| Error::Internal { message: "state lock poisoned".into() })
 }
@@ -26,6 +31,7 @@ fn locked(store: &Mutex<Store>) -> Result<MutexGuard<'_, Store>> {
 /// Reads a team again. For a Git team: pull, re-read, then push what is pending.
 /// Failing to reach the repository is reported in the view, not as an error.
 pub async fn sync_team(store: &Mutex<Store>, id: &str, trust_fingerprint: Option<String>) -> Result<TeamView> {
+    fresh(store).await;
     let job = locked(store)?.git_job(id, trust_fingerprint)?;
     let Some((mirror, remote)) = job else { return locked(store)?.sync_team(id) };
     let lock = team_lock(id);
@@ -60,6 +66,7 @@ pub async fn replace_server_key(store: &Mutex<Store>, id: &str, fingerprint: Str
 
 /// Sends local changes of a Git team (after an edit). Does nothing for a folder team.
 pub async fn push_team(store: &Mutex<Store>, id: &str) -> Result<()> {
+    fresh(store).await;
     let job = locked(store)?.git_job(id, None)?;
     let Some((mirror, remote)) = job else { return Ok(()) };
     let lock = team_lock(id);
@@ -76,6 +83,7 @@ pub async fn push_team(store: &Mutex<Store>, id: &str) -> Result<()> {
 
 /// Creates a team in an empty repository.
 pub async fn create_git_team(store: &Mutex<Store>, remote: GitRemote, name: &str, my_name: &str, recovery_key: &str, trust_fingerprint: Option<String>) -> Result<TeamView> {
+    fresh(store).await;
     let (r, (_, staged)) = {
         let s = locked(store)?;
         (s.git_remote(&remote, trust_fingerprint)?, s.staging_dir())
@@ -106,6 +114,7 @@ fn joined(store: &Mutex<Store>, add: impl FnOnce(&mut Store) -> Result<TeamView>
 
 /// Clones a repository to see whose team it is. Returns the creator to confirm and a token for `join_git_team`.
 pub async fn inspect_git_team(store: &Mutex<Store>, remote: &GitRemote, trust_fingerprint: Option<String>) -> Result<(VaultInfo, String)> {
+    fresh(store).await;
     let (r, (token, staged)) = {
         let s = locked(store)?;
         (s.git_remote(remote, trust_fingerprint)?, s.staging_dir())
@@ -180,6 +189,7 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'sta
 /// pull, merge, push. Returns true if records changed here; failing to reach
 /// the repository is reported in the status, not as an error.
 pub async fn sync_personal(store: &Mutex<Store>, trust_fingerprint: Option<String>) -> Result<bool> {
+    fresh(store).await;
     let job = locked(store)?.sync_git_job(trust_fingerprint)?;
     let Some((mirror, remote)) = job else { return locked(store)?.sync_personal() };
     let lock = team_lock(PERSONAL);
@@ -208,6 +218,7 @@ pub async fn sync_personal(store: &Mutex<Store>, trust_fingerprint: Option<Strin
 
 /// Sends local changes of the personal vault to its repository (after an edit).
 pub async fn push_personal(store: &Mutex<Store>) -> Result<()> {
+    fresh(store).await;
     let job = locked(store)?.sync_git_job(None)?;
     let Some((mirror, remote)) = job else { return Ok(()) };
     let lock = team_lock(PERSONAL);
@@ -219,6 +230,7 @@ pub async fn push_personal(store: &Mutex<Store>) -> Result<()> {
 
 /// Starts syncing the personal vault through an empty repository.
 pub async fn enable_git_sync(store: &Mutex<Store>, remote: GitRemote, trust_fingerprint: Option<String>) -> Result<()> {
+    fresh(store).await;
     let (r, (_, staged)) = {
         let s = locked(store)?;
         (s.git_remote(&remote, trust_fingerprint)?, s.staging_dir())
@@ -265,6 +277,7 @@ pub async fn join_folder_sync(store: &Mutex<Store>, path: String, code: String) 
 
 /// Joins the personal vault this person syncs through a repository, with a pairing code or recovery key.
 pub async fn join_git_sync(store: &Mutex<Store>, remote: GitRemote, code: String, trust_fingerprint: Option<String>) -> Result<()> {
+    fresh(store).await;
     let (r, (_, staged)) = {
         let s = locked(store)?;
         (s.git_remote(&remote, trust_fingerprint)?, s.staging_dir())

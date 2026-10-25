@@ -5,6 +5,7 @@
 //! never depend on Tauri or any other UI toolkit, so the frontend can be
 //! replaced without touching it.
 
+pub mod github;
 pub mod identity;
 pub mod import;
 pub mod keys;

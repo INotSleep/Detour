@@ -412,8 +412,9 @@ mod over_http {
         }
         log.lock().unwrap().push(format!("{method} {target}"));
 
-        let expected = format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(format!("detour:{token}")));
-        if header("authorization").as_deref() != Some(expected.as_str()) {
+        // Detour's own name for a token, or the one GitHub wants for an app's token.
+        let basic = |user: &str| format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(format!("{user}:{token}")));
+        if !["detour", "x-access-token"].iter().any(|u| header("authorization") == Some(basic(u))) {
             sock.write_all(b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"git\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await?;
             return Ok(());
         }
@@ -456,7 +457,7 @@ mod over_http {
     }
 
     fn remote(port: u16, token: &str) -> Remote {
-        Remote::Http(HttpRemote { url: HttpUrl::parse(&format!("http://127.0.0.1:{port}/vault.git")).unwrap(), token: Some(token.into()) })
+        Remote::Http(HttpRemote { url: HttpUrl::parse(&format!("http://127.0.0.1:{port}/vault.git")).unwrap(), token: Some(token.into()), github: false })
     }
 
     #[tokio::test]
@@ -502,18 +503,42 @@ mod stores {
     use detour_core::model::{Auth, KeyAlgorithm};
     use detour_core::store::{Store, VaultUpdate};
     use detour_core::sync;
-    use detour_core::team::git::GitRemote;
+    use detour_core::github::GithubLogin;
+    use detour_core::team::git::{GitRemote, Mirror};
     use detour_core::team::state::{Level, Role};
 
     fn store(tag: &str) -> (Mutex<Store>, GitRemote) {
         let mut s = Store::open(super::temp_dir(tag));
         s.create("m").unwrap();
         let key = s.generate_key("repo-key", KeyAlgorithm::Ed25519, None, false).unwrap();
-        (Mutex::new(s), GitRemote { url: String::new(), auth: Auth::Key { key_id: key.id }, token: None })
+        (Mutex::new(s), GitRemote { url: String::new(), auth: Auth::Key { key_id: key.id }, token: None, github: false })
     }
 
     fn put(s: &Mutex<Store>, id: &str, hosts: Vec<detour_core::model::HostView>) {
         s.lock().unwrap().team_put(id, VaultUpdate { hosts, keys: vec![], snippets: vec![], tunnels: vec![] }).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_github_remote_logs_in_with_this_devices_github_sign_in() {
+        if !super::git_available() {
+            return;
+        }
+        let (repo, _) = super::bare_repo();
+        let (port, _) = super::over_http::start(repo.parent().unwrap().to_path_buf(), "ghu_tok").await;
+        let remote = GitRemote { url: format!("http://127.0.0.1:{port}/vault.git"), auth: Auth::Password, token: Some("not this one".into()), github: true };
+        let (s, _) = store("gh");
+
+        // Not signed in: Git asks to sign in with GitHub, not for a token.
+        let r = s.lock().unwrap().git_remote(&remote, None).unwrap();
+        match Mirror::remote_is_empty(&r).await {
+            Err(Error::Git { message }) => assert_eq!(message, "github sign-in needed"),
+            other => panic!("{other:?}"),
+        }
+
+        let login = GithubLogin { user: "me".into(), access_token: "ghu_tok".into(), expires_at: 0, refresh_token: None, refresh_expires_at: 0 };
+        s.lock().unwrap().set_github_login(Some(login)).unwrap();
+        let r = s.lock().unwrap().git_remote(&remote, None).unwrap();
+        assert!(Mirror::remote_is_empty(&r).await.unwrap().0);
     }
 
     #[tokio::test]
@@ -523,7 +548,7 @@ mod stores {
         }
         let (repo, _) = super::bare_repo();
         let (port, _) = super::over_http::start(repo.parent().unwrap().to_path_buf(), "tok").await;
-        let remote = GitRemote { url: format!("http://127.0.0.1:{port}/vault.git"), auth: Auth::Agent, token: Some("tok".into()) };
+        let remote = GitRemote { url: format!("http://127.0.0.1:{port}/vault.git"), auth: Auth::Agent, token: Some("tok".into()), github: false };
 
         let (laptop, _) = store("laptop");
         laptop.lock().unwrap().put(VaultUpdate { hosts: vec![super::host("h1", "in-git")], keys: vec![], snippets: vec![], tunnels: vec![] }).unwrap();
@@ -558,7 +583,7 @@ mod stores {
         }
         let (repo, _) = super::bare_repo();
         let (port, _) = super::over_http::start(repo.parent().unwrap().to_path_buf(), "tok").await;
-        let remote = GitRemote { url: format!("http://127.0.0.1:{port}/vault.git"), auth: Auth::Password, token: Some("tok".into()) };
+        let remote = GitRemote { url: format!("http://127.0.0.1:{port}/vault.git"), auth: Auth::Password, token: Some("tok".into()), github: false };
 
         let (laptop, _) = store("laptop");
         let team = sync::create_git_team(&laptop, remote, "Acme", "Me", &Store::new_recovery_key(), None).await.unwrap();

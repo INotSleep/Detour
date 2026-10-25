@@ -3,8 +3,8 @@ import { ChevronRight, Copy, Download, FolderSync, GitBranch, Laptop, RotateCw, 
 import { api, errorText, isCoreError, type CoreError, type Pairing, type SyncInfo, type SyncPlace } from "../lib/api";
 import { locale, tr, useT } from "../i18n";
 import { copyText, formatAgo, useStore } from "../lib/store";
-import { Button, ConfirmDialog, Field, Modal, PasswordInput } from "./ui";
-import { ServerKeyCard, StorageFields, gitLogin, storageReady, unknownServerKey, useStorage, type Storage } from "./TeamDialogs";
+import { Button, ConfirmDialog, Field, Modal } from "./ui";
+import { RepoLoginFields, ServerKeyCard, StorageFields, githubIssue, githubRepo, gitLogin, storageReady, unknownServerKey, useStorage, type Storage } from "./TeamDialogs";
 import { problemText, remoteErrorText } from "./TeamsView";
 
 const placeOf = (s: Storage): SyncPlace => (s.kind === "folder" ? { path: s.path.trim() } : gitLogin(s));
@@ -17,7 +17,7 @@ export function syncErrorText(s: SyncInfo): string {
   return remoteErrorText(e);
 }
 
-const tokenRejected = (e: CoreError | null) => e?.kind === "git" && e.message.includes("token rejected");
+const tokenRejected = (e: CoreError | null) => githubIssue(e) || (e?.kind === "git" && e.message.includes("token rejected"));
 
 /** Settings: syncing the personal vault between this person's devices. */
 export function SyncSettings() {
@@ -78,7 +78,7 @@ export function SyncSettings() {
         {keyChanged ? (
           <Button size="sm" onClick={() => setDialog("serverKey")}>{t.replaceServerKey}</Button>
         ) : tokenRejected(sync.error) ? (
-          <Button size="sm" onClick={() => setDialog("token")}>{t.newToken}</Button>
+          <Button size="sm" onClick={() => setDialog("token")}>{githubIssue(sync.error) ? all.teams.github.fix : t.newToken}</Button>
         ) : (
           <Button size="sm" icon={RotateCw} loading={syncing} onClick={() => void run(() => api.syncNow())}>{t.syncNow}</Button>
         )}
@@ -114,7 +114,7 @@ export function SyncSettings() {
 
       {dialog === "device" && <AddDeviceDialog onClose={() => setDialog(null)} />}
       {dialog === "recovery" && <RecoveryDialog onClose={() => setDialog(null)} />}
-      {dialog === "token" && <TokenDialog onClose={() => setDialog(null)} onSaved={(go) => run(go)} />}
+      {dialog === "token" && <TokenDialog repoUrl={sync.location ?? ""} onClose={() => setDialog(null)} onSaved={(go) => run(go)} />}
       {dialog === "serverKey" && sync.error?.kind === "hostKeyChanged" && (
         <ServerKeyChangedDialog
           expected={sync.error.expected}
@@ -359,29 +359,32 @@ function RecoveryDialog({ onClose }: { onClose: () => void }) {
 
 /* ---------- repository problems ---------- */
 
-function TokenDialog({ onClose, onSaved }: { onClose: () => void; onSaved: (go: () => Promise<{ changed: boolean; status: SyncInfo }>) => Promise<void> }) {
+function TokenDialog({ repoUrl, onClose, onSaved }: { repoUrl: string; onClose: () => void; onSaved: (go: () => Promise<{ changed: boolean; status: SyncInfo }>) => Promise<void> }) {
   const all = useT();
   const t = all.sync;
   const [token, setToken] = useState("");
+  const [useToken, setUseToken] = useState(false);
+  const [githubReady, setGithubReady] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const viaGithub = !!githubRepo(repoUrl) && !useToken;
+  const ready = viaGithub ? githubReady : !!token.trim();
   return (
     <Modal
-      title={t.tokenTitle}
+      title={viaGithub ? all.teams.storage.login : t.tokenTitle}
       onClose={onClose}
       onSubmit={() => {
-        if (!token.trim()) return;
+        if (!ready) return;
         onClose();
-        void onSaved(() => api.syncSetToken(token.trim()));
+        void onSaved(viaGithub ? () => api.syncUseGithub() : () => api.syncSetToken(token.trim()));
       }}
       footer={
         <>
           <Button type="button" variant="ghost" onClick={onClose}>{all.common.cancel}</Button>
-          <Button type="submit" variant="primary" disabled={!token.trim()}>{all.common.save}</Button>
+          <Button type="submit" variant="primary" disabled={!ready}>{viaGithub ? all.teams.github.use : all.common.save}</Button>
         </>
       }
     >
-      <Field label={t.newToken}>
-        <PasswordInput value={token} onChange={setToken} autoFocus />
-      </Field>
+      <RepoLoginFields url={repoUrl} token={token} setToken={setToken} error={error} setError={setError} useToken={useToken} setUseToken={setUseToken} onGithubReady={setGithubReady} />
     </Modal>
   );
 }

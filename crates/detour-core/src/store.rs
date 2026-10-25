@@ -1077,11 +1077,32 @@ impl Store {
         self.save()
     }
 
+    /// This device's GitHub sign-in.
+    pub fn github_login(&self) -> Result<Option<crate::github::GithubLogin>> {
+        Ok(self.unlocked()?.vault.github.clone())
+    }
+
+    /// Keeps (or with `None` forgets) this device's GitHub sign-in.
+    pub fn set_github_login(&mut self, login: Option<crate::github::GithubLogin>) -> Result<()> {
+        self.vault_mut()?.github = login;
+        self.write_vault()
+    }
+
     /// Replaces the HTTPS token of the sync repository.
     pub fn sync_set_token(&mut self, token: &str) -> Result<()> {
         let v = self.vault_mut()?;
         let remote = v.sync.as_mut().and_then(|r| r.remote.as_mut()).filter(|r| r.is_https()).ok_or_else(|| not_found("repository"))?;
         remote.token = Some(token.trim().to_string()).filter(|t| !t.is_empty());
+        remote.github = false;
+        self.write_vault()
+    }
+
+    /// Reaches the sync repository with this device's GitHub sign-in from now on.
+    pub fn sync_use_github(&mut self) -> Result<()> {
+        let v = self.vault_mut()?;
+        let remote = v.sync.as_mut().and_then(|r| r.remote.as_mut()).filter(|r| r.is_https()).ok_or_else(|| not_found("repository"))?;
+        remote.token = None;
+        remote.github = true;
         self.write_vault()
     }
 }
@@ -1119,8 +1140,12 @@ impl Store {
     pub fn git_remote(&self, remote: &GitRemote, trust_fingerprint: Option<String>) -> Result<Remote> {
         if remote.is_https() {
             let url = HttpUrl::parse(&remote.url)?;
-            let token = remote.token.clone().filter(|t| !t.trim().is_empty()).map(|t| t.trim().to_string());
-            return Ok(Remote::Http(HttpRemote { url, token }));
+            let token = if remote.github {
+                self.unlocked()?.vault.github.as_ref().map(|l| l.access_token.clone()).filter(|t| !t.is_empty())
+            } else {
+                remote.token.clone().filter(|t| !t.trim().is_empty()).map(|t| t.trim().to_string())
+            };
+            return Ok(Remote::Http(HttpRemote { url, token, github: remote.github }));
         }
         let url = SshUrl::parse(&remote.url)?;
         let v = &self.unlocked()?.vault;
@@ -1171,6 +1196,17 @@ impl Store {
         let r = v.teams.iter_mut().find(|t| t.id == id).ok_or_else(|| not_found("team"))?;
         let remote = r.remote.as_mut().filter(|r| r.is_https()).ok_or_else(|| not_found("repository"))?;
         remote.token = Some(token.trim().to_string()).filter(|t| !t.is_empty());
+        remote.github = false;
+        self.save()
+    }
+
+    /// Reaches a team's repository with this device's GitHub sign-in from now on.
+    pub fn team_use_github(&mut self, id: &str) -> Result<()> {
+        let v = self.vault_mut()?;
+        let r = v.teams.iter_mut().find(|t| t.id == id).ok_or_else(|| not_found("team"))?;
+        let remote = r.remote.as_mut().filter(|r| r.is_https()).ok_or_else(|| not_found("repository"))?;
+        remote.token = None;
+        remote.github = true;
         self.save()
     }
 
@@ -1574,6 +1610,7 @@ impl Store {
                 url: t.remote.as_ref().map(|r| r.url.clone()),
                 auth: t.remote.as_ref().map(|r| r.auth.clone()),
                 token: t.remote.as_ref().and_then(|r| r.token.clone()),
+                github: t.remote.as_ref().is_some_and(|r| r.github),
             };
             match old {
                 Some(i) if v.team_links[i] != link => v.team_links[i] = link,
@@ -1599,7 +1636,7 @@ impl Store {
         Ok(v.team_links
             .iter()
             .filter(|l| !v.teams.iter().any(|t| t.id == l.team_id))
-            .filter_map(|l| Some((l.team_id.clone(), l.root.clone(), GitRemote { url: l.url.clone()?, auth: l.auth.clone().unwrap_or(Auth::Agent), token: l.token.clone() })))
+            .filter_map(|l| Some((l.team_id.clone(), l.root.clone(), GitRemote { url: l.url.clone()?, auth: l.auth.clone().unwrap_or(Auth::Agent), token: l.token.clone(), github: l.github })))
             .collect())
     }
 

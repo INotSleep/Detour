@@ -976,5 +976,12 @@ body.resizing-col, body.resizing-col * { cursor: row-resize !important; }
 
 .selectable { user-select: text; }
 
+.self-start { align-self: flex-start; }
+.github-code, .github-account { display: flex; flex-direction: column; gap: 6px; }
+.github-user-code { font-size: 17px; font-weight: 600; letter-spacing: 0.14em; text-align: center; padding: 6px 10px; }
+.github-status { display: inline-flex; align-items: center; gap: 6px; }
+.github-status.ok { color: var(--ok); }
+.github-status.warn { color: var(--warn); }
+.github-install { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .deploy-key { display: flex; flex-direction: column; gap: 6px; margin-top: -4px; }
 .deploy-key .id-box { font-size: 11.5px; padding: 8px 10px; }

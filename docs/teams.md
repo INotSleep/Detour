@@ -139,7 +139,7 @@ Why not a library: `gitoxide` can't push yet, and `git2` brings libgit2, libssh2
 - **Packs:** reads packs with deltas, writes packs of whole objects.
 - **Protocol:** smart protocol v0 to `git-upload-pack` / `git-receive-pack`, split into a request and a response so one implementation serves both transports.
 - **SSH:** an exec channel of Detour's own SSH client. The server key is pinned like any host's; the login is a personal key or ssh-agent. One connection per server and login is kept open and reused for every command (a new channel each time), closed after 5 minutes unused and when the vault locks, so a sync costs a channel, not a handshake.
-- **HTTPS:** smart HTTP (`GET info/refs`, `POST git-upload-pack` / `git-receive-pack`) with a personal access token as the password. TLS is rustls with ring, certificates are checked against the system's store (company proxies with their own CA work), `HTTPS_PROXY` is honoured. Plain `http://` is refused except to this machine. Each member's token is theirs and lives only in their personal vault; a rejected token can be replaced from the team page.
+- **HTTPS:** smart HTTP (`GET info/refs`, `POST git-upload-pack` / `git-receive-pack`) with a personal access token as the password. TLS is rustls with ring, certificates are checked against the system's store (company proxies with their own CA work), `HTTPS_PROXY` is honoured. Plain `http://` is refused except to this machine. Each member's token is theirs and lives only in their personal vault; a rejected token can be replaced from the team page. For a github.com repository Detour opens GitHub's fine-grained token form already filled in (Contents read and write, the repository's owner, a year); the person picks the repository there.
 
 A leaked Git credential gives access to the storage, not to the team's data: the storage is untrusted anyway, and every change to it is verified.
 
@@ -151,7 +151,7 @@ A Git team is a local copy (`<data>/teams/<id>/files`) in the folder layout, plu
 
 The app pulls and pushes on "Sync", every 20 seconds, and right after every edit. Network work never holds the vault lock.
 
-Not yet: signing in with GitHub (device flow through a registered GitHub App) instead of pasting a token.
+**Signing in with GitHub.** For a github.com repository Detour signs in through the Detour Sync GitHub App with the device flow: the person enters a short code on GitHub, and there is no client secret and no Detour server. The token reaches only repositories the app is installed on, with read and write access to their contents, and only those the person can reach anyway. It belongs to one device: it lives in the personal vault but never syncs, because renewing it replaces the refresh token and two devices can't share one. It expires after 8 hours and is renewed before Git operations; once GitHub refuses to renew it, Git asks to sign in again. A repository the app isn't installed on shows a link to install it there.
 
 ## What the storage can see
 
@@ -184,7 +184,7 @@ A device that is already in teams keeps its own identity and can't join another 
 - Done: format 2 with per-record access, key drops, cutoffs, integrity checks, folder transport, recovery key.
 - Done: Git transport over SSH (one kept connection) and HTTPS (token).
 - Done: personal vault sync between one person's devices, pairing codes, recovery key.
-- Signing in with GitHub (device flow).
+- Done: signing in with GitHub (device flow, the Detour Sync app).
 - Rotation on hosts after removal.
 - Done: reading only what is new, and a per-device cache for opening fast; state fingerprint.
 - SSH certificate authority.

@@ -305,6 +305,9 @@ pub struct VaultData {
     /// Teams on all of this person's devices, joined here or not.
     #[serde(default)]
     pub team_links: Vec<TeamLink>,
+    /// This device's GitHub sign-in; never syncs (see `github`).
+    #[serde(default)]
+    pub github: Option<crate::github::GithubLogin>,
 }
 
 /// A team as this person's devices share it: where it is, not where it sits on one device.
@@ -322,6 +325,9 @@ pub struct TeamLink {
     pub auth: Option<Auth>,
     #[serde(default)]
     pub token: Option<String>,
+    /// The repository is reached with each device's own GitHub sign-in.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub github: bool,
 }
 
 /// A team vault this person has joined.
