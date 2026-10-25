@@ -1,19 +1,148 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowDown, ArrowUp, Check, ChevronDown, ChevronUp, Copy, Download, Ellipsis, File, FolderOpen, FolderPlus, FolderUp, Folder, House, KeyRound, Link2, Loader2, Pencil, RotateCw, ShieldAlert, ShieldQuestion, SquareTerminal, Trash2, Upload, X,
+  AppWindow, ArrowDown, ArrowUp, Check, ChevronDown, ChevronUp, Copy, Download, Ellipsis, File, FilePen, FolderOpen, FolderPlus, Folder, House, KeyRound, Link2, Loader2, Pencil, RotateCw, Server, ShieldAlert, ShieldQuestion, SquareTerminal, Trash2, Upload, X,
 } from "lucide-react";
-import { api, errorText, isCoreError, trustMore, type FileEntry, type LocalFile, type SecretKind } from "../lib/api";
+import { api, errorText, isCoreError, trustMore, type Editor, type FileEntry, type LocalFile, type SecretKind } from "../lib/api";
 import { copyText, shortcutKey, uid, useStore } from "../lib/store";
 import { locale, tr, useT } from "../i18n";
 import type { Host } from "../lib/types";
 import type { SessionStatus } from "../lib/fakeShell";
-import { Button, Checkbox, ConfirmDialog, Field, IconButton, Menu, Modal, PasswordInput } from "./ui";
+import { Button, Checkbox, ConfirmDialog, ContextMenu, Field, IconButton, Menu, Modal, PasswordInput, type MenuItem } from "./ui";
+import { HostChooser, LocalPane, lastPart } from "./LocalFiles";
+import { EditorChooser, openIn } from "./Editors";
 
 interface Props {
+  /** Null until a host is chosen for a new SFTP tab. */
+  host: Host | null;
+  active: boolean;
+  onStatus: (s: SessionStatus) => void;
+  onClose: () => void;
+  onPickHost: (hostId: string) => void;
+}
+
+/** What this computer's side can ask of the server's side. */
+interface RemoteHandle {
+  upload: (items: LocalFile[]) => void;
+  download: (items: FileEntry[]) => void;
+}
+
+/** Rows dragged from one side; `drop` runs when they land on the other. */
+export type StartDrag = (ev: React.MouseEvent, label: string, drop: () => void) => void;
+
+type Side = "local" | "remote";
+/** The other side under the pointer, when it takes the drop. */
+type Over = { side: Side; rect: DOMRect; label: string } | null;
+interface Layer {
+  show: (d: { from: Side; label: string; x: number; y: number } | null) => void;
+  over: (o: Over) => void;
+  move: (x: number, y: number) => void;
+}
+
+/**
+ * Dragging rows between the two sides, with the pointer: the webview's own
+ * drag and drop is taken by drops from the system. Only the drag layer
+ * redraws while the pointer moves; the lists don't.
+ */
+function usePaneDrag(accepts: (to: Side) => string | null) {
+  const layer = useRef<Layer | null>(null);
+  const acceptsRef = useRef(accepts);
+  acceptsRef.current = accepts;
+
+  const start = (from: Side): StartDrag => (ev, label, drop) => {
+    if (ev.button !== 0 || (ev.target as HTMLElement).closest("button, input")) return;
+    const x0 = ev.clientX;
+    const y0 = ev.clientY;
+    let dragging = false;
+    let over: Over = null;
+    let frame = 0;
+    let last = { x: x0, y: y0 };
+    // The other side of this tab, measured once: hit tests by coordinates cost nothing per move.
+    const other = (ev.currentTarget as HTMLElement).closest(".files")?.querySelector<HTMLElement>(`.files-pane.${from === "local" ? "remote" : "local"}`);
+    const rect = other?.getBoundingClientRect();
+    const to: Side = from === "local" ? "remote" : "local";
+    const sideAt = (x: number, y: number): Over => {
+      if (!rect || x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) return null;
+      const into = acceptsRef.current(to);
+      return into === null ? null : { side: to, rect, label: into };
+    };
+    const paint = () => {
+      frame = 0;
+      layer.current?.move(last.x, last.y);
+      const now = sideAt(last.x, last.y);
+      if (now?.side !== over?.side || now?.label !== over?.label) layer.current?.over(now);
+      over = now;
+    };
+    const move = (e: MouseEvent) => {
+      e.preventDefault();
+      last = { x: e.clientX, y: e.clientY };
+      if (!dragging) {
+        if (Math.hypot(e.clientX - x0, e.clientY - y0) < 6) return;
+        dragging = true;
+        layer.current?.show({ from, label, x: e.clientX, y: e.clientY });
+      }
+      if (!frame) frame = requestAnimationFrame(paint);
+    };
+    const up = (e: MouseEvent) => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      cancelAnimationFrame(frame);
+      if (dragging) {
+        layer.current?.show(null);
+        if (sideAt(e.clientX, e.clientY)) drop();
+      }
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  };
+
+  return { start, view: <DragLayer handle={layer} /> };
+}
+
+function DragLayer({ handle }: { handle: React.MutableRefObject<Layer | null> }) {
+  const [drag, setDrag] = useState<{ from: Side; label: string; x: number; y: number } | null>(null);
+  const [over, setOver] = useState<Over>(null);
+  const ghost = useRef<HTMLDivElement>(null);
+  handle.current = {
+    show: (d) => {
+      setDrag(d);
+      setOver(null);
+    },
+    over: setOver,
+    move: (x, y) => {
+      if (ghost.current) ghost.current.style.transform = `translate(${x + 14}px, ${y + 14}px)`;
+    },
+  };
+  if (!drag) return null;
+  return (
+    <>
+      {/* Takes the pointer while dragging, so nothing below reacts to it or has to be restyled. */}
+      <div className="files-drag-capture" />
+      {over && (
+        <div className="files-drop-zone" style={{ top: over.rect.top + 6, left: over.rect.left + 6, width: over.rect.width - 12, height: over.rect.height - 12 }}>
+          {over.side === "remote" ? <Upload size={22} /> : <Download size={22} />}
+          <span>{over.label}</span>
+        </div>
+      )}
+      <div className="files-drag-ghost" ref={ghost} style={{ transform: `translate(${drag.x + 14}px, ${drag.y + 14}px)` }}>
+        {drag.from === "local" ? <Upload size={13} /> : <Download size={13} />}
+        <span>{drag.label}</span>
+      </div>
+    </>
+  );
+}
+
+interface RemoteProps {
   host: Host;
   active: boolean;
   onStatus: (s: SessionStatus) => void;
   onClose: () => void;
+  /** The folder on this computer that downloads go to. */
+  localDir: string | null;
+  onDownloaded: () => void;
+  /** The server's folder once it shows, null before. */
+  onFolder: (path: string | null) => void;
+  handle: React.MutableRefObject<RemoteHandle | null>;
+  onDragRows: StartDrag;
 }
 
 /** Where opening the browser stands. */
@@ -38,7 +167,7 @@ interface Transfer {
   error?: string;
 }
 
-type SortBy = "name" | "size" | "modified";
+export type SortBy = "name" | "size" | "modified";
 
 /** `dir` joined with `name`, in the server's syntax. */
 const join = (dir: string, name: string) => (dir.endsWith("/") ? dir + name : `${dir}/${name}`);
@@ -62,7 +191,7 @@ export function formatBytes(n: number) {
 }
 
 /** "14:32" today, "Oct 21 14:32" this year, "Oct 21, 2024" before. */
-function formatModified(ms: number | null) {
+export function formatModified(ms: number | null) {
   if (!ms) return "";
   const d = new Date(ms);
   const now = new Date();
@@ -80,7 +209,7 @@ function formatMode(mode: number | null) {
 }
 
 /** Folders first, then by the chosen column. */
-function sortEntries(list: FileEntry[], by: SortBy, desc: boolean) {
+export function sortEntries(list: FileEntry[], by: SortBy, desc: boolean) {
   const key = (e: FileEntry) => (by === "size" ? e.size : by === "modified" ? (e.modified ?? 0) : 0);
   return [...list].sort((a, b) => {
     const dirs = Number(b.kind === "dir") - Number(a.kind === "dir");
@@ -93,9 +222,46 @@ function sortEntries(list: FileEntry[], by: SortBy, desc: boolean) {
 /** A shell command that goes to `path`. */
 const cdTo = (path: string) => `cd '${path.replace(/'/g, `'\\''`)}'`;
 
-export function FilesView({ host, active, onStatus, onClose }: Props) {
+/** An SFTP tab: this computer on the left, the server on the right (or which host to open). */
+export function FilesView({ host, active, onStatus, onClose, onPickHost }: Props) {
+  const [localDir, setLocalDir] = useState<string | null>(null);
+  const [localRefresh, setLocalRefresh] = useState(0);
+  const [remoteDir, setRemoteDir] = useState<string | null>(null);
+  const remote = useRef<RemoteHandle | null>(null);
+  const target = host ? remoteDir : null;
+  const t = useT().files;
+  const drag = usePaneDrag((to) => (to === "remote" ? (target ? t.local.uploadTo(target) : null) : localDir ? t.downloadTo(localDir) : null));
+  return (
+    <div className="files">
+      {drag.view}
+      <div className="files-panes">
+        <LocalPane dir={localDir} onDir={setLocalDir} refreshKey={localRefresh} target={target} onUpload={(items) => remote.current?.upload(items)} onDragRows={drag.start("local")} />
+        {host ? (
+          <RemotePane
+            key={host.id}
+            host={host}
+            active={active}
+            onStatus={onStatus}
+            onClose={onClose}
+            localDir={localDir}
+            onDownloaded={() => setLocalRefresh((n) => n + 1)}
+            onFolder={setRemoteDir}
+            handle={remote}
+            onDragRows={drag.start("remote")}
+          />
+        ) : (
+          <div className="files-pane remote">
+            <HostChooser onPick={onPickHost} />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function RemotePane({ host, active, onStatus, onClose, localDir, onDownloaded, onFolder, handle, onDragRows }: RemoteProps) {
   const t = useT();
-  const { update, toast, applyTeamView, connect: openTerminal } = useStore();
+  const { update, toast, applyTeamView, connect: openTerminal, settings } = useStore();
   const [phase, setPhase] = useState<Phase>({ kind: "connecting" });
   const [path, setPath] = useState("");
   const [entries, setEntries] = useState<FileEntry[] | null>(null);
@@ -114,6 +280,8 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
   const [transfers, setTransfers] = useState<Transfer[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [editingPath, setEditingPath] = useState<string | null>(null);
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number; entry: FileEntry } | null>(null);
+  const [choosing, setChoosing] = useState<FileEntry | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   // Async results must see the latest folder, not the one of the render that started them.
   const pathRef = useRef(path);
@@ -277,9 +445,16 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
 
   const transfer = (up: boolean, name: string, total = 0): Transfer => ({ id: uid("t"), up, name, dir: path, done: 0, total, started: Date.now(), state: "active" });
 
-  /** One file: saved where the user says. A folder or several things: into a folder the user picks. */
+  /** Into the folder open on this computer's side; without one, one file where the user says and more into a folder they pick. */
   const download = async (items: FileEntry[]) => {
     if (!conn || items.length === 0) return;
+    if (localDir) {
+      for (const e of items) {
+        const t = transfer(false, e.name, e.kind === "dir" ? 0 : e.size);
+        void run(t, (p) => api.filesDownloadInto(conn.id, join(t.dir, e.name), localDir, t.id, p)).then((ok) => void (ok && onDownloaded()));
+      }
+      return;
+    }
     const [only] = items;
     if (items.length === 1 && only && only.kind !== "dir") {
       const local = await api.pickDownloadTarget(only.name);
@@ -307,12 +482,61 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
     }
   };
 
-  const pickUploads = async () => upload(await api.pickUploads());
-  const pickFolders = async () => upload(await api.pickUploadFolders());
-
-  // Files and folders dragged in from the system.
+  // Files and folders dragged in from the system, or sent from this computer's side.
   const uploadRef = useRef(upload);
   uploadRef.current = upload;
+  const downloadRef = useRef<(items: FileEntry[]) => void>(() => {});
+  downloadRef.current = (items) => void download(items);
+  useEffect(() => {
+    handle.current = { upload: (items) => uploadRef.current(items), download: (items) => downloadRef.current(items) };
+    return () => void (handle.current = null);
+  }, [handle]);
+
+  /* ---------- editing in another app: a copy here, sent back each time it is saved ---------- */
+
+  const edits = useRef(new Map<string, { remote: string; dir: string; name: string; modified: number | null; sending: boolean }>());
+  const [editCount, setEditCount] = useState(0);
+
+  const edit = async (e: FileEntry, editor: Editor | null) => {
+    if (!conn) return;
+    const remote = join(path, e.name);
+    try {
+      const local = await api.editCopyPath(e.name);
+      const t = transfer(false, e.name, e.size);
+      if (!(await run(t, (p) => api.filesDownload(conn.id, remote, local, t.id, p)))) return;
+      edits.current.set(local, { remote, dir: path, name: e.name, modified: await api.localModified(local), sending: false });
+      setEditCount(edits.current.size);
+      await openIn(local, editor);
+    } catch (err) {
+      toast({ text: errorText(err), tone: "error" });
+    }
+  };
+
+  // Each save in the editor goes to the server.
+  useEffect(() => {
+    if (!conn || editCount === 0) return;
+    const timer = setInterval(() => {
+      for (const [local, ed] of edits.current) {
+        if (ed.sending) continue;
+        void api.localModified(local).then((m) => {
+          if (m === null) return void edits.current.delete(local);
+          if (m === ed.modified) return;
+          ed.modified = m;
+          ed.sending = true;
+          const t: Transfer = { ...transfer(true, ed.name), dir: ed.dir };
+          void run(t, (p) => api.filesUpload(conn.id, { path: local, name: ed.name }, ed.remote, true, t.id, p)).then((ok) => {
+            ed.sending = false;
+            if (ok && pathRef.current === ed.dir) void refresh(ed.name);
+          });
+        });
+      }
+    }, 1500);
+    return () => clearInterval(timer);
+    // `run`, `transfer` and `refresh` only use setters and refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conn?.id, editCount]);
+  const shown = conn && entries ? path : null;
+  useEffect(() => onFolder(shown), [shown]);
   const ready = !!conn && entries !== null;
   useEffect(() => {
     if (!active || !ready) return;
@@ -390,6 +614,8 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
     }
   };
 
+  const closeMenu = useCallback(() => setMenuAt(null), []);
+
   const copyPath = async (e: FileEntry) => {
     const p = join(path, e.name);
     toast((await copyText(p)) ? { text: tr().files.pathCopied(p), tone: "success" } : { text: tr().common.copyFailed, tone: "error" });
@@ -435,11 +661,34 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
     }
   };
 
+  /** The menu of a row; for a row in a selection of several, what applies to all of them. */
+  const rowMenu = (e: FileEntry): MenuItem[] => {
+    const many = picked.length > 1 && sel.includes(e.name);
+    if (many) {
+      return [
+        { label: t.files.download, icon: Download, onSelect: () => void download(picked) },
+        { label: t.common.delete, icon: Trash2, danger: true, hint: "Del", onSelect: () => setRemoving(picked) },
+      ];
+    }
+    const isFile = e.kind !== "dir";
+    return [
+      ...(e.kind === "dir" ? [{ label: t.files.menu.open, icon: FolderOpen, onSelect: () => void enter(e) }] : []),
+      ...(isFile ? [{ label: settings.editor ? `${t.files.menu.edit} · ${settings.editor.name}` : t.files.menu.edit, icon: FilePen, onSelect: () => void edit(e, settings.editor) }] : []),
+      ...(isFile ? [{ label: t.files.menu.editIn, icon: AppWindow, onSelect: () => setChoosing(e) }] : []),
+      { label: localDir ? t.files.downloadTo(lastPart(localDir)) : t.files.download, icon: Download, onSelect: () => void download([e]) },
+      { label: t.files.menu.copyPath, icon: Copy, onSelect: () => void copyPath(e) },
+      ...(e.kind === "dir" ? [{ label: t.files.bar.terminalHere, icon: SquareTerminal, onSelect: () => openTerminal(host.id, cdTo(join(path, e.name))) }] : []),
+      { label: t.files.menu.permissions, icon: KeyRound, onSelect: () => setChmodding(e) },
+      { label: t.common.rename, icon: Pencil, hint: "F2", onSelect: () => setRenaming(e.name) },
+      { label: t.common.delete, icon: Trash2, danger: true, hint: "Del", onSelect: () => setRemoving([e]) },
+    ];
+  };
+
   /* ---------- view ---------- */
 
   if (!conn || sorted === null) {
     return (
-      <div className="files">
+      <div className="files-pane remote">
         <div className="files-center">
           <Gate host={host} phase={phase} listError={listError} connect={connect} retryList={() => conn && open(conn.id, conn.home)} onClose={onClose} />
         </div>
@@ -452,7 +701,7 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
 
   return (
     <div
-      className="files"
+      className="files-pane remote"
       onDragOver={(e) => !api.real && (e.preventDefault(), setDragOver(true))}
       onDragLeave={(e) => !api.real && e.currentTarget === e.target && setDragOver(false)}
       onDrop={(e) => {
@@ -463,6 +712,7 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
       }}
     >
       <div className="files-bar">
+        <span className="files-side" title={host.label}><Server size={15} /></span>
         <IconButton icon={ArrowUp} label={t.files.bar.up} disabled={path === "/"} onClick={() => void up()} />
         <IconButton icon={House} label={t.files.bar.home} disabled={path === conn.home} onClick={() => void go(conn.home)} />
         {editingPath !== null ? (
@@ -492,9 +742,10 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
         {loading && <Loader2 size={14} className="spin muted" />}
         <IconButton icon={RotateCw} label={t.files.bar.refresh} onClick={() => void refresh()} />
         <IconButton icon={SquareTerminal} label={t.files.bar.terminalHere} onClick={() => openTerminal(host.id, cdTo(path))} />
-        <Button size="sm" icon={FolderPlus} onClick={() => setCreating(true)}>{t.files.bar.newFolder}</Button>
-        {api.real && <IconButton icon={FolderUp} label={t.files.bar.uploadFolder} onClick={() => void pickFolders()} />}
-        <Button size="sm" variant="primary" icon={Upload} onClick={() => void pickUploads()}>{t.files.bar.upload}</Button>
+        <IconButton icon={FolderPlus} label={t.files.bar.newFolder} onClick={() => setCreating(true)} />
+        <Button size="sm" variant="primary" icon={Download} disabled={picked.length === 0} title={localDir ? t.files.downloadTo(localDir) : undefined} onClick={() => void download(picked)}>
+          {t.files.download}
+        </Button>
       </div>
 
       {picked.length > 1 && (
@@ -538,6 +789,15 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
               className={`files-row ${isSel ? "selected" : ""} ${cursor === e.name ? "cursor" : ""}`}
               onClick={(ev) => clickRow(ev, e.name)}
               onDoubleClick={() => void enter(e)}
+              onMouseDown={(ev) => {
+                const items = isSel ? picked : [e];
+                onDragRows(ev, items.length === 1 ? e.name : t.files.items(items.length), () => void download(items));
+              }}
+              onContextMenu={(ev) => {
+                ev.preventDefault();
+                if (!isSel) selectOnly(e.name);
+                setMenuAt({ x: ev.clientX, y: ev.clientY, entry: e });
+              }}
             >
               <Icon size={15} className={`files-icon ${e.kind}`} />
               {renaming === e.name ? (
@@ -549,18 +809,10 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
               <span className="files-date">{formatModified(e.modified)}</span>
               <span className="files-mode mono">{formatMode(e.permissions)}</span>
               <span className="row-actions">
-                <IconButton icon={Download} label={t.files.download} onClick={(ev) => (ev.stopPropagation(), void download([e]))} />
+                <IconButton icon={Download} label={localDir ? t.files.downloadTo(lastPart(localDir)) : t.files.download} onClick={(ev) => (ev.stopPropagation(), void download([e]))} />
                 <Menu
                   trigger={(toggle, isOpen) => <IconButton icon={Ellipsis} label={t.files.more} className={isOpen ? "pressed" : ""} onClick={toggle} />}
-                  items={[
-                    ...(e.kind === "dir" ? [{ label: t.files.menu.open, icon: FolderOpen, onSelect: () => void enter(e) }] : []),
-                    { label: t.files.download, icon: Download, onSelect: () => void download([e]) },
-                    { label: t.files.menu.copyPath, icon: Copy, onSelect: () => void copyPath(e) },
-                    ...(e.kind === "dir" ? [{ label: t.files.bar.terminalHere, icon: SquareTerminal, onSelect: () => openTerminal(host.id, cdTo(join(path, e.name))) }] : []),
-                    { label: t.files.menu.permissions, icon: KeyRound, onSelect: () => setChmodding(e) },
-                    { label: t.common.rename, icon: Pencil, hint: "F2", onSelect: () => setRenaming(e.name) },
-                    { label: t.common.delete, icon: Trash2, danger: true, hint: "Del", onSelect: () => setRemoving([e]) },
-                  ]}
+                  items={rowMenu(e)}
                 />
               </span>
             </div>
@@ -569,7 +821,6 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
         {sorted.length === 0 && !creating && (
           <div className="files-empty">
             <span>{t.files.empty}</span>
-            <Button size="sm" icon={Upload} onClick={() => void pickUploads()}>{t.files.uploadFiles}</Button>
           </div>
         )}
       </div>
@@ -589,6 +840,8 @@ export function FilesView({ host, active, onStatus, onClose }: Props) {
         </div>
       )}
 
+      {menuAt && <ContextMenu at={menuAt} items={rowMenu(menuAt.entry)} onClose={closeMenu} />}
+      {choosing && <EditorChooser onPick={(ed) => void edit(choosing, ed)} onClose={() => setChoosing(null)} />}
       {removing && (
         <ConfirmDialog
           title={removing.length === 1 ? t.files.confirm.removeOne(removing[0]!.name) : t.files.confirm.removeMany(removing.length)}
@@ -721,7 +974,7 @@ function Crumbs({ path, onGo, onEdit }: { path: string; onGo: (p: string) => voi
 }
 
 /** An inline name field: Enter or leaving it keeps the name, Esc gives null. */
-function NameInput({ initial, onDone }: { initial: string; onDone: (v: string | null) => void }) {
+export function NameInput({ initial, onDone }: { initial: string; onDone: (v: string | null) => void }) {
   const [v, setV] = useState(initial);
   const done = useRef(false);
   const finish = (value: string | null) => {

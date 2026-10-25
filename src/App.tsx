@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeftRight, Code, FolderOpen, KeyRound, Plus, Server, Settings as SettingsIcon, Users, X } from "lucide-react";
+import { ArrowLeftRight, Code, FolderOpen, FolderPlus, KeyRound, Plus, Server, Settings as SettingsIcon, Users, X } from "lucide-react";
 import { LangContext, lang as currentLang, resolveLang, setLang, tr, useT } from "./i18n";
 import { api, errorText, fromView, type CoreInfo, type SyncInfo, type TeamView, type VaultView } from "./lib/api";
 import { applyTeamEntries, applyTeamView, dataOf, removeVault, writable } from "./lib/teams";
@@ -23,7 +23,8 @@ import { LockScreen } from "./components/LockScreen";
 
 interface Session {
   id: string;
-  hostId: string;
+  /** Null for an SFTP tab whose host is not chosen yet. */
+  hostId: string | null;
   /** A terminal or a file browser. */
   kind: "terminal" | "files";
   title: string;
@@ -40,7 +41,7 @@ const sectionIcon: Record<Section, typeof Server> = {
   settings: SettingsIcon,
 };
 
-const defaultSettings: Settings = { theme: "dark", language: "system", fontSize: 13, scrollback: 5000, autoLockMinutes: 15, clipboard: "ssh", autoUpdate: true };
+const defaultSettings: Settings = { theme: "dark", language: "system", fontSize: 13, scrollback: 5000, autoLockMinutes: 15, clipboard: "ssh", autoUpdate: true, editor: null };
 const SETTINGS_KEY = "detour.settings";
 
 /** Settings of this device, kept in the webview's storage. */
@@ -357,6 +358,15 @@ export default function App() {
     return () => mq.removeEventListener("change", apply);
   }, [settings.theme]);
 
+  // The webview's own menu (Back, Reload, Print) means nothing here; text fields keep theirs.
+  useEffect(() => {
+    const block = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement).closest?.("input, textarea, [contenteditable=\"true\"]")) e.preventDefault();
+    };
+    window.addEventListener("contextmenu", block);
+    return () => window.removeEventListener("contextmenu", block);
+  }, []);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && shortcutKey(e) === "k") {
@@ -383,6 +393,20 @@ export default function App() {
   );
   const connect = useCallback((hostId: string, command?: string) => openTab(hostId, "terminal", command), [openTab]);
   const openFiles = useCallback((hostId: string) => openTab(hostId, "files"), [openTab]);
+  /** An SFTP tab that first asks which host to open. */
+  const newFiles = () => {
+    const id = uid("s");
+    setSessions((list) => [...list, { id, hostId: null, kind: "files", title: tr().app.sftp, status: "closed" }]);
+    setActiveId(id);
+  };
+  const pickHost = (id: string, hostId: string) => {
+    const host = ws?.hosts.find((h) => h.id === hostId);
+    if (!host) return;
+    setSessions((list) => {
+      const same = list.filter((s) => s.hostId === hostId && s.kind === "files").length;
+      return list.map((s) => (s.id === id ? { ...s, hostId, title: same ? `${host.label} (${same + 1})` : host.label, status: "connecting" } : s));
+    });
+  };
 
   const closeSession = (id: string) => {
     const idx = sessions.findIndex((s) => s.id === id);
@@ -443,8 +467,7 @@ export default function App() {
           <Sidebar homeActive={activeId === "home"} />
 
           <main className="main">
-            {sessions.length > 0 && (
-              <div className="tabbar">
+            <div className="tabbar">
                 <HomeTab section={section} personal={store.vault.kind === "personal"} active={activeId === "home"} onClick={() => setActiveId("home")} />
                 {sessions.map((s) => (
                   <div
@@ -472,8 +495,8 @@ export default function App() {
                   </div>
                 ))}
                 <IconButton icon={Plus} label={tr().app.newConnection} className="tab-new" onClick={() => setPalette(true)} />
+                <IconButton icon={FolderPlus} label={tr().app.newSftp} className="tab-new" onClick={newFiles} />
               </div>
-            )}
 
             <div className="content">
               <div className={`view ${activeId === "home" ? "" : "hidden"}`}>
@@ -485,12 +508,12 @@ export default function App() {
                 {section === "settings" && <SettingsView />}
               </div>
               {sessions.map((s) => {
-                const host = ws!.hosts.find((h) => h.id === s.hostId);
-                if (!host) return null;
+                const host = ws!.hosts.find((h) => h.id === s.hostId) ?? null;
+                if (!host && !(s.kind === "files" && s.hostId === null)) return null;
                 return (
                   <div key={s.id} className={`view ${activeId === s.id ? "" : "hidden"}`}>
-                    {s.kind === "files" ? (
-                      <FilesView host={host} active={activeId === s.id} onStatus={(st) => setStatus(s.id, st)} onClose={() => closeSession(s.id)} />
+                    {s.kind === "files" || !host ? (
+                      <FilesView host={host} active={activeId === s.id} onStatus={(st) => setStatus(s.id, st)} onClose={() => closeSession(s.id)} onPickHost={(hostId) => pickHost(s.id, hostId)} />
                     ) : (
                       <TerminalTab host={host} active={activeId === s.id} initialCommand={s.command} onStatus={(st) => setStatus(s.id, st)} onExit={() => closeSession(s.id)} />
                     )}

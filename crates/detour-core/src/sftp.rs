@@ -475,6 +475,65 @@ fn free_name(dir: &Path, name: &str) -> PathBuf {
     candidate
 }
 
+/* ---------- this computer's files, shown beside a server's ---------- */
+
+/// Where browsing this computer starts from: the drives on Windows, `/` elsewhere.
+pub fn local_roots() -> Vec<String> {
+    #[cfg(windows)]
+    {
+        (b'A'..=b'Z').map(|c| format!("{}:\\", c as char)).filter(|d| Path::new(d).exists()).collect()
+    }
+    #[cfg(not(windows))]
+    {
+        vec!["/".into()]
+    }
+}
+
+/// This person's home folder.
+pub fn local_home() -> String {
+    directories::UserDirs::new()
+        .map(|d| d.home_dir().display().to_string())
+        .or_else(|| local_roots().into_iter().next())
+        .unwrap_or_else(|| "/".into())
+}
+
+/// A folder on this computer; `""` lists the roots. Hidden and system files
+/// on Windows stay out, as Explorer does; a link counts as what it points to.
+pub fn local_list(path: &str) -> Result<Vec<FileEntry>> {
+    if path.is_empty() {
+        return Ok(local_roots().into_iter().map(|name| FileEntry { name, kind: FileKind::Dir, size: 0, modified: None, permissions: None }).collect());
+    }
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(path)?.flatten() {
+        let Ok(link) = entry.metadata() else { continue };
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            // FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM
+            if link.file_attributes() & 0x6 != 0 {
+                continue;
+            }
+        }
+        let meta = std::fs::metadata(entry.path()).unwrap_or(link);
+        let kind = if meta.is_dir() { FileKind::Dir } else if meta.is_file() { FileKind::File } else { FileKind::Link };
+        #[cfg(unix)]
+        let permissions = {
+            use std::os::unix::fs::PermissionsExt;
+            Some(meta.permissions().mode() & 0o7777)
+        };
+        #[cfg(not(unix))]
+        let permissions = None;
+        out.push(FileEntry {
+            name: entry.file_name().to_string_lossy().into_owned(),
+            size: if kind == FileKind::Dir { 0 } else { meta.len() },
+            modified: meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_millis() as i64),
+            kind,
+            permissions,
+        });
+    }
+    Ok(out)
+}
+
 /// Opens a file browser on a host of a vault, logging in as a terminal would.
 pub async fn open_in(store: &std::sync::Mutex<crate::store::Store>, files: &Files, vault: &str, host_id: &str, secret: Option<String>, trust_fingerprint: Option<String>) -> Result<(String, String)> {
     let poisoned = || Error::Internal { message: "state lock poisoned".into() };
@@ -493,6 +552,19 @@ mod tests {
         assert_eq!(join("/home/u", "a"), "/home/u/a");
         assert_eq!(join("/", "etc"), "/etc");
         assert_eq!(part_path(Path::new("C:/x/report.pdf")), PathBuf::from("C:/x/report.pdf.part"));
+    }
+
+    #[test]
+    fn a_local_folder_lists_files_and_folders() {
+        let dir = std::env::temp_dir().join(format!("detour-local-{}", crate::new_id()));
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("a.txt"), b"hello").unwrap();
+        let mut list = local_list(&dir.display().to_string()).unwrap();
+        list.sort_by(|a, b| a.name.cmp(&b.name));
+        assert_eq!(list.iter().map(|e| (e.name.as_str(), e.kind, e.size)).collect::<Vec<_>>(), [("a.txt", FileKind::File, 5), ("sub", FileKind::Dir, 0)]);
+        assert!(list[0].modified.is_some());
+        assert!(!local_list("").unwrap().is_empty(), "the roots");
+        assert!(local_list(&dir.join("missing").display().to_string()).is_err());
     }
 
     #[test]

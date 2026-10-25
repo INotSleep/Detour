@@ -248,6 +248,56 @@ export function Menu({ trigger, items, align = "end", header }: { trigger: (open
   );
 }
 
+/** A menu at the pointer, for a right click. */
+export function ContextMenu({ at, items, onClose }: { at: { x: number; y: number }; items: MenuItem[]; onClose: () => void }) {
+  const menu = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+
+  useLayoutEffect(() => {
+    if (!menu.current) return;
+    const m = menu.current.getBoundingClientRect();
+    const top = at.y + m.height > window.innerHeight - 8 ? Math.max(8, at.y - m.height) : at.y;
+    const left = Math.max(8, Math.min(at.x, window.innerWidth - m.width - 8));
+    setPos({ top, left });
+  }, [at]);
+
+  useEffect(() => {
+    const away = (e: MouseEvent) => !menu.current?.contains(e.target as Node) && onClose();
+    const key = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("mousedown", away, true);
+    window.addEventListener("keydown", key);
+    window.addEventListener("wheel", onClose);
+    window.addEventListener("blur", onClose);
+    return () => {
+      window.removeEventListener("mousedown", away, true);
+      window.removeEventListener("keydown", key);
+      window.removeEventListener("wheel", onClose);
+      window.removeEventListener("blur", onClose);
+    };
+  }, [onClose]);
+
+  return createPortal(
+    <div ref={menu} className="menu" role="menu" style={pos ? { top: pos.top, left: pos.left } : { visibility: "hidden", top: 0, left: 0 }} onContextMenu={(e) => e.preventDefault()}>
+      {items.map((it) => (
+        <button
+          key={it.label}
+          role="menuitem"
+          className={it.danger ? "danger" : ""}
+          onClick={() => {
+            onClose();
+            it.onSelect();
+          }}
+        >
+          {it.icon && <it.icon size={14} />}
+          <span>{it.label}</span>
+          {it.hint && <span className="menu-hint">{it.hint}</span>}
+        </button>
+      ))}
+    </div>,
+    document.body,
+  );
+}
+
 /* ---------- toasts ---------- */
 
 interface ToastState extends ToastInput {

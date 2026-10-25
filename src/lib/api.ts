@@ -13,6 +13,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { fakeKeyMaterial, parsePrivateKey } from "./keys";
 import { mockSecrets } from "./mockData";
 import { mockFiles } from "./mockFiles";
+import { mockLocal } from "./mockLocal";
 import type { ActivityItem, Coll, Conflict, Host, Level, OwnLogin, Problem, Role, Snippet, SshKey, Tunnel } from "./types";
 import { demoSync } from "./mockSync";
 
@@ -295,6 +296,12 @@ export interface Pairing {
 
 /** Where to sync: a folder, or a repository. */
 export type SyncPlace = { path: string } | GitLogin;
+
+/** A program that edits files (the core's Editor). */
+export interface Editor {
+  name: string;
+  path: string;
+}
 
 /** A local file picked to upload. */
 export interface LocalFile {
@@ -691,13 +698,14 @@ export const api = {
   /** Downloads a file or a whole folder into a local folder, under a name not taken there. Returns where it went. */
   async filesDownloadInto(id: string, remote: string, localDir: string, transfer: string, onProgress: OnProgress): Promise<string> {
     if (real) return invoke("files_download_into", { id, remote, localDir, transfer, onProgress: progressChannel(onProgress) });
-    await demoTransfer(transfer, mockFiles.size(demoUser(id), remote), onProgress);
-    return `${localDir}\\${baseName(remote)}`;
+    const size = mockFiles.size(demoUser(id), remote);
+    await demoTransfer(transfer, size, onProgress);
+    return mockLocal.add(localDir, baseName(remote), size);
   },
   /** Uploads a file or a whole folder; with `replace` what is there is replaced once the upload is complete. */
   async filesUpload(id: string, local: LocalFile, remote: string, replace: boolean, transfer: string, onProgress: OnProgress): Promise<void> {
     if (real) return invoke("files_upload", { id, local: local.path, remote, replace, transfer, onProgress: progressChannel(onProgress) });
-    const size = demoPicked.get(local.path) ?? 0;
+    const size = demoPicked.get(local.path) ?? mockLocal.size(local.path);
     await demoTransfer(transfer, size, onProgress);
     mockFiles.upload(demoUser(id), remote, size);
   },
@@ -712,6 +720,54 @@ export const api = {
   },
   async filesClose(id: string): Promise<void> {
     if (real) await invoke("files_close", { id });
+  },
+
+  /* this computer's files, beside a server's */
+
+  async localHome(): Promise<string> {
+    return real ? invoke("local_home") : mockLocal.home;
+  },
+  /** A folder on this computer; "" lists the drives. */
+  async localList(path: string): Promise<FileEntry[]> {
+    if (real) return invoke("local_list", { path });
+    await demoDelay(80);
+    return mockLocal.list(path);
+  },
+  async localMkdir(path: string): Promise<void> {
+    if (real) return invoke("local_mkdir", { path });
+    mockLocal.mkdir(path);
+  },
+  /** Opens a file on this computer with the app the system uses for it. */
+  async openLocal(path: string): Promise<void> {
+    if (real) return invoke("open_local", { path });
+  },
+  /** Editors installed on this computer. */
+  async editors(): Promise<Editor[]> {
+    if (real) return invoke("editors");
+    return [
+      { name: "VS Code", path: String.raw`C:\Users\demo\AppData\Local\Programs\Microsoft VS Code\Code.exe` },
+      { name: "Notepad++", path: String.raw`C:\Program Files\Notepad++\notepad++.exe` },
+      { name: "Notepad", path: String.raw`C:\Windows\System32\notepad.exe` },
+    ];
+  },
+  /** Opens a file on this computer in a given program. */
+  async openWith(path: string, program: string): Promise<void> {
+    if (real) return invoke("open_with", { path, program });
+  },
+  /** Asks for a program to edit files with; null if cancelled. */
+  async pickProgram(): Promise<Editor | null> {
+    if (!real) return null;
+    const r = await open({ multiple: false, directory: false, filters: navigator.userAgent.includes("Windows") ? [{ name: "Programs", extensions: ["exe", "cmd", "bat"] }] : undefined });
+    if (typeof r !== "string") return null;
+    return { name: baseName(r).replace(/\.(exe|cmd|bat|app)$/i, ""), path: r };
+  },
+  /** Where the copy of a server's file being edited goes. */
+  async editCopyPath(name: string): Promise<string> {
+    return real ? invoke("edit_copy_path", { name }) : `C:\\Temp\\detour-edit\\${name}`;
+  },
+  /** When a file on this computer last changed; null once it is gone. */
+  async localModified(path: string): Promise<number | null> {
+    return real ? invoke("local_modified", { path }) : path ? 1 : null;
   },
 
   /** Asks which files to upload; empty if cancelled. */

@@ -212,4 +212,6 @@ export interface Settings {
    * `termius`: Ctrl+Shift+C and Ctrl+Shift+V, Ctrl+C and Ctrl+V go to the server, right click opens a menu.
    */
   clipboard: "ssh" | "termius";
+  /** What "Edit" opens a file in; null: the app the system uses for it. */
+  editor: { name: string; path: string } | null;
 }

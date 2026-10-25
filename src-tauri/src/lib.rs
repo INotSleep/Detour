@@ -119,6 +119,126 @@ async fn files_open(app: State<'_, App>, vault_id: String, host_id: String, secr
     Ok(FilesOpened { id, home })
 }
 
+/* ---------- opening files in other apps ---------- */
+
+/// Opens a file on this computer with the app the system uses for it.
+#[tauri::command]
+fn open_local(path: String) -> Result<()> {
+    tauri_plugin_opener::open_path(&path, None::<&str>).map_err(|e| Error::Io { message: e.to_string() })
+}
+
+/// A program that can edit files, as this computer has it.
+#[derive(Serialize)]
+struct Editor {
+    name: String,
+    /// The program, or on macOS the app bundle.
+    path: String,
+}
+
+/// Editors installed here, the common ones in their usual places.
+#[tauri::command]
+fn editors() -> Vec<Editor> {
+    let mut found: Vec<(&str, std::path::PathBuf)> = Vec::new();
+    #[cfg(windows)]
+    {
+        let env = |k: &str| std::env::var_os(k).map(std::path::PathBuf::from);
+        let (local, pf, pf86, win) = (env("LOCALAPPDATA"), env("ProgramFiles"), env("ProgramFiles(x86)"), env("SystemRoot"));
+        let under = |base: &Option<std::path::PathBuf>, rel: &str| base.as_ref().map(|b| b.join(rel));
+        let candidates = [
+            ("VS Code", under(&local, r"Programs\Microsoft VS Code\Code.exe")),
+            ("VS Code", under(&pf, r"Microsoft VS Code\Code.exe")),
+            ("Cursor", under(&local, r"Programs\cursor\Cursor.exe")),
+            ("Notepad++", under(&pf, r"Notepad++\notepad++.exe")),
+            ("Notepad++", under(&pf86, r"Notepad++\notepad++.exe")),
+            ("Sublime Text", under(&pf, r"Sublime Text\sublime_text.exe")),
+            ("Notepad", under(&win, r"System32\notepad.exe")),
+        ];
+        for (name, path) in candidates {
+            if let Some(p) = path.filter(|p| p.is_file()) {
+                found.push((name, p));
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        for (name, app) in [
+            ("VS Code", "/Applications/Visual Studio Code.app"),
+            ("Cursor", "/Applications/Cursor.app"),
+            ("Sublime Text", "/Applications/Sublime Text.app"),
+            ("BBEdit", "/Applications/BBEdit.app"),
+            ("TextEdit", "/System/Applications/TextEdit.app"),
+        ] {
+            if std::path::Path::new(app).exists() {
+                found.push((name, app.into()));
+            }
+        }
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let dirs: Vec<std::path::PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+        for (name, bin) in [("VS Code", "code"), ("Cursor", "cursor"), ("Sublime Text", "subl"), ("Kate", "kate"), ("Text Editor", "gnome-text-editor"), ("gedit", "gedit"), ("Mousepad", "mousepad")] {
+            if let Some(p) = dirs.iter().map(|d| d.join(bin)).find(|p| p.is_file()) {
+                found.push((name, p));
+            }
+        }
+    }
+    let mut out: Vec<Editor> = Vec::new();
+    for (name, path) in found {
+        if !out.iter().any(|e| e.name == name) {
+            out.push(Editor { name: name.into(), path: path.display().to_string() });
+        }
+    }
+    out
+}
+
+/// Opens a file on this computer in a given program.
+#[tauri::command]
+fn open_with(path: String, program: String) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("open");
+        c.arg("-a").arg(&program);
+        c
+    };
+    #[cfg(not(target_os = "macos"))]
+    let mut cmd = std::process::Command::new(&program);
+    cmd.arg(&path).spawn().map(|_| ()).map_err(|e| Error::Io { message: format!("{program}: {e}") })
+}
+
+/// A fresh place in the temp folder for the copy of a server's file being edited.
+#[tauri::command]
+fn edit_copy_path(name: String) -> Result<String> {
+    let safe: String = name.chars().map(|c| if c.is_control() || r#"/\:*?"<>|"#.contains(c) { '_' } else { c }).collect();
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let dir = std::env::temp_dir().join("detour-edit").join(format!("{stamp:x}"));
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir.join(safe).display().to_string())
+}
+
+/// When a file on this computer last changed (Unix ms); None once it is gone.
+#[tauri::command]
+fn local_modified(path: String) -> Option<i64> {
+    let t = std::fs::metadata(path).and_then(|m| m.modified()).ok()?;
+    t.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_millis() as i64)
+}
+
+/// This person's home folder, where the side for this computer starts.
+#[tauri::command]
+fn local_home() -> String {
+    sftp::local_home()
+}
+
+/// A folder on this computer; "" lists the drives.
+#[tauri::command]
+async fn local_list(path: String) -> Result<Vec<FileEntry>> {
+    tauri::async_runtime::spawn_blocking(move || sftp::local_list(&path)).await.map_err(|e| Error::Internal { message: e.to_string() })?
+}
+
+#[tauri::command]
+fn local_mkdir(path: String) -> Result<()> {
+    Ok(std::fs::create_dir(path)?)
+}
+
 #[tauri::command]
 async fn files_list(app: State<'_, App>, id: String, path: String) -> Result<Vec<FileEntry>> {
     app.files.list(&id, &path).await
@@ -739,6 +859,14 @@ pub fn builder<R: tauri::Runtime>(builder: tauri::Builder<R>, data_dir: std::pat
             tunnel_start,
             files_open,
             files_list,
+            local_home,
+            local_list,
+            local_mkdir,
+            open_local,
+            editors,
+            open_with,
+            edit_copy_path,
+            local_modified,
             files_resolve,
             files_mkdir,
             files_rename,

@@ -7,6 +7,7 @@ import { atLeast, writable } from "../lib/teams";
 import type { Snippet } from "../lib/types";
 import { Button, Empty, Field, IconButton, Menu, Modal, PageHeader, PasswordInput, Segmented, Switch } from "./ui";
 import { SyncSettings } from "./SyncSettings";
+import { useEditors } from "./Editors";
 import { isNoReleases } from "../lib/updates";
 
 /* ---------- snippets ---------- */
@@ -164,6 +165,14 @@ export function SettingsView() {
         </div>
       </section>
 
+      <section className="settings-group">
+        <h3 className="section-title">{t.files}</h3>
+        <div className="setting">
+          <span>{t.editWith}</span>
+          <EditorSetting />
+        </div>
+      </section>
+
       <SyncSettings />
 
       {api.real && (
@@ -282,5 +291,19 @@ function MasterPasswordDialog({ onClose }: { onClose: () => void }) {
         <PasswordInput value={repeat} onChange={edit(setRepeat)} invalid={!!err("repeat")} />
       </Field>
     </Modal>
+  );
+}
+
+/** What "Edit" opens files in: the system's app for each file, or one editor. */
+function EditorSetting() {
+  const t = useT().settings;
+  const { settings, setSettings } = useStore();
+  const installed = useEditors();
+  const list = settings.editor && !installed.some((e) => e.path === settings.editor!.path) ? [settings.editor, ...installed] : installed;
+  return (
+    <select className="input input-sm" value={settings.editor?.path ?? ""} onChange={(e) => setSettings({ editor: list.find((x) => x.path === e.target.value) ?? null })}>
+      <option value="">{t.defaultApp}</option>
+      {list.map((e) => <option key={e.path} value={e.path}>{e.name}</option>)}
+    </select>
   );
 }

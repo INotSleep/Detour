@@ -843,6 +843,49 @@ select.input { cursor: pointer; padding-right: 28px; appearance: none; backgroun
 
 .files { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--bg); }
 .files-center { flex: 1; display: grid; place-items: center; padding: 24px; }
+/* two sides: this computer and the server */
+.files-panes { flex: 1; min-height: 0; display: flex; }
+.files-pane { position: relative; flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; container-type: inline-size; }
+.files-pane.local { border-right: 1px solid var(--line); }
+.files-side { flex: none; width: 22px; display: grid; place-items: center; color: var(--muted); }
+.files-pane:focus-within .files-side { color: var(--accent); }
+.files-row.local { grid-template-columns: 22px minmax(0, 1fr) 84px 120px 32px; }
+@container (max-width: 680px) {
+  .files-row:not(.local) { grid-template-columns: 22px minmax(0, 1fr) 84px 120px 64px; }
+  .files-row:not(.local) > :nth-child(5) { display: none; }
+}
+@container (max-width: 460px) {
+  .files-row:not(.local) { grid-template-columns: 22px minmax(0, 1fr) 84px 64px; }
+  .files-row:not(.local) > :nth-child(4) { display: none; }
+  .files-row.local { grid-template-columns: 22px minmax(0, 1fr) 84px 32px; }
+  .files-row.local > :nth-child(4) { display: none; }
+}
+/* rows dragged from one side to the other */
+.files-drag-capture { position: fixed; inset: 0; z-index: 39; cursor: copy; }
+.files-drop-zone {
+  position: fixed; z-index: 40; border-radius: var(--r-lg); pointer-events: none;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  border: 2px dashed color-mix(in srgb, var(--accent) 60%, transparent);
+  background: color-mix(in srgb, var(--bg) 82%, var(--accent));
+  color: var(--accent); font-weight: 600;
+}
+.files-drop-zone > span { max-width: 80%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.files-drag-ghost {
+  top: 0; left: 0; will-change: transform;
+  position: fixed; z-index: 41; pointer-events: none; display: inline-flex; align-items: center; gap: 7px;
+  max-width: 260px; height: 28px; padding: 0 10px; border-radius: 7px;
+  background: var(--raised); border: 1px solid var(--line-strong); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3); font-size: 12.5px;
+}
+.files-drag-ghost > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* which program to edit a file in */
+.editor-list { display: flex; flex-direction: column; gap: 2px; }
+.editor-item { display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 8px; text-align: left; color: var(--text-2); transition: background 0.12s; }
+.editor-item:hover { background: var(--hover); color: var(--text); }
+.editor-item.on { background: var(--accent-soft); color: var(--text); }
+.editor-item.other { color: var(--muted); }
+.host-chooser { width: min(480px, 100%); background: var(--raised); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; box-shadow: var(--shadow); }
+.host-chooser-title { padding: 16px 16px 4px; font-weight: 600; }
+.host-chooser .palette-list { max-height: min(380px, 50vh); }
 .files-wait { display: flex; align-items: center; gap: 10px; color: var(--muted); font-family: var(--mono); font-size: 12.5px; }
 
 .files-bar { display: flex; align-items: center; gap: 6px; height: 48px; padding: 0 12px; border-bottom: 1px solid var(--line); flex: none; }
@@ -861,7 +904,8 @@ select.input { cursor: pointer; padding-right: 28px; appearance: none; backgroun
 .crumb-sep { color: var(--muted); }
 .files-path-input { flex: 1; min-width: 0; height: 30px; font-size: 12.5px; }
 
-.files-list { flex: 1; min-height: 0; overflow: auto; padding: 4px 8px 12px; outline: none; }
+/* No padding above the sticky header: rows would show through the gap. */
+.files-list { flex: 1; min-height: 0; overflow: auto; padding: 0 8px 12px; outline: none; }
 .files-row {
   display: grid; grid-template-columns: 22px minmax(0, 1fr) 96px 132px 84px 64px; align-items: center; gap: 10px;
   height: 32px; padding: 0 8px; border-radius: 6px; cursor: default; user-select: none;
