@@ -162,6 +162,10 @@ export function SettingsView() {
           <span>{t.clipboard}</span>
           <Segmented value={settings.clipboard} onChange={(clipboard) => setSettings({ clipboard })} options={[{ value: "ssh", label: t.clipboardSsh }, { value: "termius", label: t.clipboardTermius }]} />
         </div>
+        <div className="setting">
+          <span>{t.highlight}</span>
+          <Switch label={t.highlight} checked={settings.highlight} onChange={(highlight) => setSettings({ highlight })} />
+        </div>
       </section>
 
       <section className="settings-group">

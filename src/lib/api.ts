@@ -505,8 +505,13 @@ export const api = {
   ): Promise<OpenedSession> {
     const onEvent = new Channel<ArrayBuffer | { closed: true; exitStatus: number | null }>();
     onEvent.onmessage = (m) => {
-      if (m instanceof ArrayBuffer) cb.onData(new Uint8Array(m));
-      else if (m && typeof m === "object" && "closed" in m) cb.onClosed(m.exitStatus);
+      // A handler that throws would stop the channel for good: Tauri waits for that message forever.
+      try {
+        if (m instanceof ArrayBuffer) cb.onData(new Uint8Array(m));
+        else if (m && typeof m === "object" && "closed" in m) cb.onClosed(m.exitStatus);
+      } catch (e) {
+        console.error("session event failed", e);
+      }
     };
     return invoke("session_open", { args, onEvent });
   },

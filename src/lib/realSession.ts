@@ -6,6 +6,7 @@ import type { Terminal } from "@xterm/xterm";
 import { api, errorText, isCoreError, trustMore, type SecretKind } from "./api";
 import type { SessionStatus } from "./fakeShell";
 import type { Host } from "./types";
+import { highlightedOutput } from "./highlight";
 import { tr } from "../i18n";
 
 const C = { reset: "\x1b[0m", dim: "\x1b[2m", red: "\x1b[31m" };
@@ -22,6 +23,8 @@ interface Options {
   /** A secret the user typed in worked; the UI may offer to save it. */
   onSecret: (kind: SecretKind, value: string) => void;
   askHostKey: (q: HostKeyQuestion) => Promise<HostKeyAnswer>;
+  /** Highlight the output (read on every write, so it follows the setting). */
+  highlight: () => boolean;
 }
 
 const MAX_SECRET_ATTEMPTS = 3;
@@ -38,6 +41,7 @@ export function runRealSession(term: Terminal, host: Host, opts: Options): () =>
   let secretBuf = "";
   let attemptsLeft = MAX_SECRET_ATTEMPTS;
   let commandSent = false;
+  const output = highlightedOutput(term, opts.highlight);
 
   const fail = (message: string) => {
     term.write(`${C.red}${message}${C.reset}\r\n${C.dim}${tr().terminal.session.retry}${C.reset}\r\n`);
@@ -60,10 +64,11 @@ export function runRealSession(term: Terminal, host: Host, opts: Options): () =>
       const opened = await api.sessionOpen(
         { vaultId: host.vaultId, hostId: host.id, secret, trustFingerprint: trust, cols: term.cols, rows: term.rows },
         {
-          onData: (bytes) => term.write(bytes),
+          onData: (bytes) => output.write(bytes),
           onClosed: (exitStatus) => {
             sessionId = null;
             if (disposed) return;
+            output.flush();
             if (exitStatus === 0) {
               opts.onStatus("closed");
               opts.onExit();
@@ -191,6 +196,7 @@ export function runRealSession(term: Terminal, host: Host, opts: Options): () =>
 
   return () => {
     disposed = true;
+    output.flush();
     data.dispose();
     resize.dispose();
     if (sessionId) void api.sessionClose(sessionId);

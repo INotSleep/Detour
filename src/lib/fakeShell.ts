@@ -4,6 +4,7 @@
 import { tr } from "../i18n";
 import type { Terminal } from "@xterm/xterm";
 import type { Host } from "./types";
+import { highlightedOutput } from "./highlight";
 
 export type SessionStatus = "connecting" | "connected" | "failed" | "closed";
 
@@ -42,26 +43,30 @@ interface Options {
   /** Called with a secret the user typed in, after it worked. */
   onSecret?: (value: string) => void;
   onExit: () => void;
+  highlight: () => boolean;
 }
 
-export function runFakeSession(term: Terminal, host: Host, { initialCommand, secret, onStatus, onSecret, onExit }: Options): () => void {
+export function runFakeSession(term: Terminal, host: Host, { initialCommand, secret, onStatus, onSecret, onExit, highlight }: Options): () => void {
   let disposed = false;
   let mode: "busy" | "ready" | "failed" | "secret" = "busy";
   let line = "";
   const history: string[] = [];
   let historyIndex = 0;
 
-  const prompt = () => term.write(`\r\n${C.green}${host.user}@${host.label}${C.reset}:${C.blue}~${C.reset}$ `);
-  const println = (s = "") => term.write(`\r\n${s}`);
+  const output = highlightedOutput(term, highlight);
+  const write = (s: string) => output.write(s);
+  // Plain, as bash prints it for root on a fresh server.
+  const prompt = () => write(`\r\n${host.user}@${host.label}:~${host.user === "root" ? "#" : "$"} `);
+  const println = (s = "") => write(`\r\n${s}`);
 
   const replaceLine = (next: string) => {
-    term.write("\b \b".repeat(line.length));
+    write("\b \b".repeat(line.length));
     line = next;
-    term.write(line);
+    write(line);
   };
 
   const commands: Record<string, (args: string[]) => void> = {
-    help: () => println("help ls whoami hostname uname uptime date df echo clear exit"),
+    help: () => println("help ls whoami hostname uname uptime date df free ip systemctl docker tail echo clear exit"),
     ls: () => println(`${C.blue}deploy${C.reset}  ${C.blue}logs${C.reset}  README.md  docker-compose.yml`),
     whoami: () => println(host.user),
     hostname: () => println(host.label),
@@ -70,8 +75,46 @@ export function runFakeSession(term: Terminal, host: Host, { initialCommand, sec
     date: () => println(new Date().toString()),
     df: () => {
       println("Filesystem      Size  Used Avail Use% Mounted on");
-      println("/dev/nvme0n1p2  468G  121G  324G  28% /");
-      println("/dev/nvme0n1p1  1.1G  6.2M  1.1G   1% /boot/efi");
+      println("/dev/vda1        77G   56G   21G  73% /");
+      println("tmpfs           1.9G     0  1.9G   0% /dev/shm");
+      println("/dev/vda15      105M  6.1M   99M   6% /boot/efi");
+      println("/dev/sdb1       916G  842G   28G  97% /mnt/backup");
+    },
+    free: () => {
+      println("               total        used        free      shared  buff/cache   available");
+      println("Mem:           3.8Gi       1.2Gi       412Mi        12Mi       2.3Gi       2.4Gi");
+      println("Swap:          2.0Gi          0B       2.0Gi");
+    },
+    ip: () => {
+      println("1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000");
+      println("    inet 127.0.0.1/8 scope host lo");
+      println("2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP group default qlen 1000");
+      println("    link/ether 52:54:00:12:34:56 brd ff:ff:ff:ff:ff:ff");
+      println("    inet 10.0.0.5/24 metric 100 brd 10.0.0.255 scope global dynamic eth0");
+      println("    inet6 fe80::5054:ff:fe12:3456/64 scope link");
+    },
+    systemctl: () => {
+      println("nginx.service - A high performance web server and a reverse proxy server");
+      println("     Loaded: loaded (/usr/lib/systemd/system/nginx.service; enabled; preset: enabled)");
+      println("     Active: active (running) since Mon 2026-10-26 13:51:33 UTC; 2h 5min ago");
+      println("   Main PID: 1234 (nginx)");
+      println("     Memory: 4.2M (peak: 6.0M)");
+      println();
+      println("Oct 26 13:51:33 web-01 systemd[1]: Starting nginx.service...");
+      println('Oct 26 13:51:33 web-01 nginx[1231]: nginx: [warn] conflicting server name "_" on 0.0.0.0:80, ignored');
+      println("Oct 26 13:51:33 web-01 systemd[1]: Started nginx.service.");
+    },
+    docker: () => {
+      println("CONTAINER ID   IMAGE         STATUS                    PORTS                  NAMES");
+      println("3f2a1b9c8d7e   nginx:1.27    Up 3 days (healthy)       0.0.0.0:80->80/tcp     web");
+      println("9c8d7e3f2a1b   redis:8       Up 3 days                 127.0.0.1:6379->6379   cache");
+      println("a1b2c3d4e5f6   postgres:17   Exited (1) 2 hours ago                           db");
+    },
+    tail: () => {
+      println('45.10.12.7 - - [26/Oct/2026:13:51:33 +0000] "GET /api/stats HTTP/1.1" 200 612 "-" "curl/8.5.0"');
+      println('45.10.12.7 - - [26/Oct/2026:13:51:34 +0000] "GET /wp-login.php HTTP/1.1" 404 162 "-" "Mozilla/5.0"');
+      println('10.0.0.9 - - [26/Oct/2026:13:51:35 +0000] "POST /upload HTTP/1.1" 502 157 "-" "-"');
+      println("2026/10/26 13:51:35 [error] 1234#1234: *88 connect() failed (111: Connection refused) while connecting to upstream");
     },
     echo: (args) => println(args.join(" ")),
     clear: () => term.clear(),
@@ -96,7 +139,7 @@ export function runFakeSession(term: Terminal, host: Host, { initialCommand, sec
   const connect = async () => {
     mode = "busy";
     onStatus("connecting");
-    term.write(`${C.dim}${host.user}@${host.address}:${host.port}${C.reset}`);
+    write(`${C.dim}${host.user}@${host.address}:${host.port}${C.reset}`);
     await sleep(host.online !== false ? 700 : 1600);
     if (disposed) return;
     if (host.online === false) {
@@ -156,7 +199,7 @@ export function runFakeSession(term: Terminal, host: Host, { initialCommand, sec
     if (initialCommand) {
       await sleep(250);
       if (disposed) return;
-      term.write(initialCommand);
+      write(initialCommand);
       run(initialCommand);
       prompt();
     }
@@ -168,7 +211,7 @@ export function runFakeSession(term: Terminal, host: Host, { initialCommand, sec
         if (ch === "\r") void submitSecret();
         else if (ch === "\x7f") secretBuf = secretBuf.slice(0, -1);
         else if (ch === "\x03") {
-          term.write("^C");
+          write("^C");
           println(`${C.dim}${tr().demo.enterRetry}${C.reset}`);
           mode = "failed";
           onStatus("failed");
@@ -179,7 +222,7 @@ export function runFakeSession(term: Terminal, host: Host, { initialCommand, sec
     }
     if (mode === "failed") {
       if (data === "\r") {
-        term.write("\r\n\r\n");
+        write("\r\n\r\n");
         void connect();
       }
       return;
@@ -201,17 +244,17 @@ export function runFakeSession(term: Terminal, host: Host, { initialCommand, sec
       } else if (ch === "\x7f") {
         if (line.length) {
           line = line.slice(0, -1);
-          term.write("\b \b");
+          write("\b \b");
         }
       } else if (ch === "\x03") {
         line = "";
-        term.write("^C");
+        write("^C");
         prompt();
       } else if (ch === "\x0c") {
         term.clear();
       } else if (ch >= " ") {
         line += ch;
-        term.write(ch);
+        write(ch);
       }
     }
   });
@@ -220,6 +263,7 @@ export function runFakeSession(term: Terminal, host: Host, { initialCommand, sec
 
   return () => {
     disposed = true;
+    output.flush();
     sub.dispose();
   };
 }

@@ -42,7 +42,7 @@ const sectionIcon: Record<Section, typeof Server> = {
   settings: SettingsIcon,
 };
 
-const defaultSettings: Settings = { theme: "detour-dark", language: "system", fontSize: 13, scrollback: 5000, autoLockMinutes: 15, clipboard: "ssh", autoUpdate: true, editor: null, sidebarCollapsed: false, terminalTheme: SAME_AS_APP, customThemes: [] };
+const defaultSettings: Settings = { theme: "detour-dark", language: "system", fontSize: 13, scrollback: 5000, autoLockMinutes: 15, clipboard: "ssh", highlight: true, autoUpdate: true, editor: null, sidebarCollapsed: false, terminalTheme: SAME_AS_APP, customThemes: [] };
 const SETTINGS_KEY = "detour.settings";
 
 /** Settings of this device, kept in the webview's storage. */

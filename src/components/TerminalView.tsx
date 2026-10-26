@@ -48,8 +48,8 @@ export function TerminalView({ host, active, initialCommand, onStatus, onExit, o
   const [question, setQuestion] = useState<Question | null>(null);
   const [searching, setSearching] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
-  const cb = useRef({ onStatus, onExit, onSplit, splitDirs, clipboard: settings.clipboard });
-  cb.current = { onStatus, onExit, onSplit, splitDirs, clipboard: settings.clipboard };
+  const cb = useRef({ onStatus, onExit, onSplit, splitDirs, clipboard: settings.clipboard, highlight: settings.highlight });
+  cb.current = { onStatus, onExit, onSplit, splitDirs, clipboard: settings.clipboard, highlight: settings.highlight };
 
   const copySelection = async () => {
     const term = termRef.current;
@@ -159,6 +159,7 @@ export function TerminalView({ host, active, initialCommand, onStatus, onExit, o
         },
         onExit: () => cb.current.onExit(),
         onSecret: offerSave,
+        highlight: () => cb.current.highlight,
         askHostKey: (q) => new Promise<HostKeyAnswer>((resolve) => setQuestion({ ...q, answer: (a) => { setQuestion(null); term.focus(); resolve(a); } })),
       });
     } else {
@@ -174,6 +175,7 @@ export function TerminalView({ host, active, initialCommand, onStatus, onExit, o
         onStatus: (s) => cb.current.onStatus(s),
         onExit: () => cb.current.onExit(),
         onSecret: (value) => secret && offerSave(secret.kind, value),
+        highlight: () => cb.current.highlight,
       });
     }
 
