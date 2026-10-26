@@ -8,6 +8,7 @@ import type { Snippet } from "../lib/types";
 import { Button, Empty, Field, IconButton, Menu, Modal, PageHeader, PasswordInput, Segmented, Switch } from "./ui";
 import { SyncSettings } from "./SyncSettings";
 import { useEditors } from "./Editors";
+import { ThemeSetting } from "./Themes";
 import { isNoReleases } from "../lib/updates";
 
 /* ---------- snippets ---------- */
@@ -135,10 +136,7 @@ export function SettingsView() {
 
       <section className="settings-group">
         <h3 className="section-title">{t.appearance}</h3>
-        <div className="setting">
-          <span>{t.theme}</span>
-          <Segmented value={settings.theme} onChange={(theme) => setSettings({ theme })} options={[{ value: "system", label: t.themes.system }, { value: "dark", label: t.themes.dark }, { value: "light", label: t.themes.light }]} />
-        </div>
+        <ThemeSetting kind="app" />
         <div className="setting">
           <span>{t.language}</span>
           <Segmented value={settings.language} onChange={(language) => setSettings({ language })} options={[{ value: "system", label: t.languages.system }, { value: "en", label: t.languages.en }, { value: "ru", label: t.languages.ru }]} />
@@ -147,6 +145,7 @@ export function SettingsView() {
 
       <section className="settings-group">
         <h3 className="section-title">{t.terminal}</h3>
+        <ThemeSetting kind="terminal" />
         <div className="setting">
           <span>{t.fontSize}</span>
           <select className="input input-sm" value={settings.fontSize} onChange={(e) => setSettings({ fontSize: Number(e.target.value) })}>

@@ -3,6 +3,7 @@ import { createContext, useContext } from "react";
 import type { Settings, Vault, Workspace } from "./types";
 import type { CoreInfo, SyncInfo, TeamView } from "./api";
 import type { UpdateInfo } from "./updates";
+import type { Theme } from "./themes";
 
 /** Where looking for and installing a new version stands. */
 export type UpdateState =
@@ -30,6 +31,8 @@ export interface Store {
   navigate: (s: Section) => void;
   settings: Settings;
   setSettings: (patch: Partial<Settings>) => void;
+  /** The themes in use, "system" and "same as the app" resolved. */
+  themes: { app: Theme; terminal: Theme };
   coreInfo: CoreInfo | null;
   toast: (t: ToastInput) => void;
   connect: (hostId: string, command?: string) => void;

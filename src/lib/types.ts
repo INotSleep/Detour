@@ -199,7 +199,8 @@ export interface Workspace {
 }
 
 export interface Settings {
-  theme: "dark" | "light" | "system";
+  /** The app's theme: a theme id, or "system" for Detour Dark or Light as the system is. */
+  theme: string;
   language: LangSetting;
   fontSize: number;
   scrollback: number;
@@ -216,4 +217,8 @@ export interface Settings {
   editor: { name: string; path: string } | null;
   /** The sidebar shows only icons. */
   sidebarCollapsed: boolean;
+  /** The terminals' theme: a theme id, or "app" for the app's. */
+  terminalTheme: string;
+  /** Themes made or imported on this device. */
+  customThemes: import("./themes").Theme[];
 }

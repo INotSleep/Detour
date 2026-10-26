@@ -7,6 +7,7 @@ import { mockWorkspace } from "./lib/mockData";
 import { StoreContext, shortcutKey, uid, type Section, type Store, type UpdateState } from "./lib/store";
 import { checkForUpdate, installUpdate as installFound, updateErrorText } from "./lib/updates";
 import type { Settings, Workspace } from "./lib/types";
+import { SAME_AS_APP, SYSTEM, appColors, builtinThemes, findTheme, isLight, terminalColors, type Theme } from "./lib/themes";
 import type { SessionStatus } from "./lib/fakeShell";
 import { Sidebar } from "./components/Sidebar";
 import { HostsView } from "./components/HostsView";
@@ -41,7 +42,7 @@ const sectionIcon: Record<Section, typeof Server> = {
   settings: SettingsIcon,
 };
 
-const defaultSettings: Settings = { theme: "dark", language: "system", fontSize: 13, scrollback: 5000, autoLockMinutes: 15, clipboard: "ssh", autoUpdate: true, editor: null, sidebarCollapsed: false };
+const defaultSettings: Settings = { theme: "detour-dark", language: "system", fontSize: 13, scrollback: 5000, autoLockMinutes: 15, clipboard: "ssh", autoUpdate: true, editor: null, sidebarCollapsed: false, terminalTheme: SAME_AS_APP, customThemes: [] };
 const SETTINGS_KEY = "detour.settings";
 
 /** Settings of this device, kept in the webview's storage. */
@@ -51,6 +52,9 @@ function loadSettings(): Settings {
     // An earlier version chose only what a right click does.
     if (!saved.clipboard && saved.rightClick === "menu") saved.clipboard = "termius";
     delete saved.rightClick;
+    // Earlier versions had a dark and a light look, and terminals one palette.
+    if (saved.theme === "dark" || saved.theme === "light") saved.theme = `detour-${saved.theme}`;
+    if (saved.terminalTheme === "detour") saved.terminalTheme = SAME_AS_APP;
     return { ...defaultSettings, ...saved };
   } catch {
     return defaultSettings;
@@ -91,6 +95,7 @@ export default function App() {
   const [palette, setPalette] = useState(false);
   const [conflictVaultId, setConflictVaultId] = useState<string | null>(null);
   const [settings, setSettingsState] = useState<Settings>(loadSettings);
+  const appliedVars = useRef<string[]>([]);
   useEffect(() => {
     try {
       localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
@@ -347,16 +352,33 @@ export default function App() {
     setWs((cur) => cur && { ...cur, vaults: cur.vaults.map((v) => (v.kind === "personal" ? { ...v, name: tr().app.personal } : v)) });
   }, [lang]);
 
+  // The themes in use: "system" follows the system's dark or light, terminals follow the app unless told otherwise.
+  const [systemDark, setSystemDark] = useState(() => matchMedia("(prefers-color-scheme: dark)").matches);
   useEffect(() => {
-    const apply = () => {
-      const dark = settings.theme === "dark" || (settings.theme === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
-      document.documentElement.dataset.theme = dark ? "dark" : "light";
-    };
-    apply();
     const mq = matchMedia("(prefers-color-scheme: dark)");
-    mq.addEventListener("change", apply);
-    return () => mq.removeEventListener("change", apply);
-  }, [settings.theme]);
+    const on = () => setSystemDark(mq.matches);
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
+  const themes = useMemo(() => {
+    const fallback = builtinThemes[0]!;
+    const appId = settings.theme === SYSTEM ? (systemDark ? "detour-dark" : "detour-light") : settings.theme;
+    const app: Theme = findTheme(appId, settings.customThemes) ?? fallback;
+    const terminal: Theme = settings.terminalTheme === SAME_AS_APP ? app : findTheme(settings.terminalTheme, settings.customThemes) ?? app;
+    return { app, terminal };
+  }, [settings.theme, settings.terminalTheme, settings.customThemes, systemDark]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    root.dataset.theme = isLight(themes.app) ? "light" : "dark";
+    const vars = appColors(themes.app);
+    for (const k of appliedVars.current) if (!vars || !(k in vars)) root.style.removeProperty(k);
+    appliedVars.current = vars ? Object.keys(vars) : [];
+    if (vars) for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v);
+    root.style.colorScheme = isLight(themes.app) ? "light" : "dark";
+    // Around the text of every terminal: the terminal theme's background.
+    root.style.setProperty("--term", terminalColors(themes.terminal).background);
+  }, [themes]);
 
   // The webview's own menu (Back, Reload, Print) means nothing here; text fields keep theirs.
   useEffect(() => {
@@ -434,6 +456,7 @@ export default function App() {
       },
       settings,
       setSettings: (patch) => setSettingsState((s) => ({ ...s, ...patch })),
+      themes,
       coreInfo,
       toast: toaster.push,
       connect,
@@ -449,7 +472,7 @@ export default function App() {
       checkUpdate: () => checkUpdate(false),
       installUpdate,
     };
-  }, [ws, vaultId, section, settings, coreInfo, connect, openFiles, toaster.push, lock, applyView, sync, refreshPersonal, updateState, checkUpdate, installUpdate]);
+  }, [ws, vaultId, section, settings, themes, coreInfo, connect, openFiles, toaster.push, lock, applyView, sync, refreshPersonal, updateState, checkUpdate, installUpdate]);
 
   if (phase === "loading") return null;
   if (!store)

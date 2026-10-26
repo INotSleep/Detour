@@ -5,6 +5,7 @@ import { SearchAddon } from "@xterm/addon-search";
 import "@xterm/xterm/css/xterm.css";
 import { ChevronDown, ChevronUp, ClipboardPaste, Columns2, Copy, Rows2, Search, ShieldAlert, ShieldQuestion, X } from "lucide-react";
 import type { Host } from "../lib/types";
+import { terminalColors } from "../lib/themes";
 import { runFakeSession, type SessionSecret, type SessionStatus } from "../lib/fakeShell";
 import { runRealSession, type HostKeyAnswer, type HostKeyQuestion } from "../lib/realSession";
 import { api, errorText, type SecretKind } from "../lib/api";
@@ -39,7 +40,7 @@ const SEARCH_COLORS = {
 };
 
 export function TerminalView({ host, active, initialCommand, onStatus, onExit, onSplit, splitDirs = ["row", "col"], onFocus }: Props) {
-  const { settings, ws, update, toast, applyTeamView } = useStore();
+  const { settings, themes, ws, update, toast, applyTeamView } = useStore();
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -74,21 +75,7 @@ export function TerminalView({ host, active, initialCommand, onStatus, onExit, o
       scrollback: settings.scrollback,
       // Search highlights use decorations.
       allowProposedApi: true,
-      theme: {
-        background: "#0b0c0e",
-        foreground: "#d9dbe1",
-        cursor: "#8d9cff",
-        cursorAccent: "#0b0c0e",
-        selectionBackground: "rgba(122, 140, 255, 0.32)",
-        black: "#1b1d22",
-        brightBlack: "#5d616c",
-        red: "#ef6461",
-        green: "#4cc38a",
-        brightGreen: "#6fd8a4",
-        yellow: "#e5a54b",
-        blue: "#7a8cff",
-        brightBlue: "#9eabff",
-      },
+      theme: terminalColors(themes.terminal),
     });
     const fit = new FitAddon();
     const search = new SearchAddon();
@@ -207,14 +194,21 @@ export function TerminalView({ host, active, initialCommand, onStatus, onExit, o
     if (!term) return;
     term.options.fontSize = settings.fontSize;
     term.options.scrollback = settings.scrollback;
-    fitRef.current?.fit();
-  }, [settings.fontSize, settings.scrollback]);
+    term.options.theme = terminalColors(themes.terminal);
+    // A hidden terminal has no size: fitting it would shrink it (and tell the server so).
+    // It fits again when its tab comes forward.
+    if (hostRef.current?.clientWidth) fitRef.current?.fit();
+    term.refresh(0, term.rows - 1);
+  }, [settings.fontSize, settings.scrollback, themes.terminal]);
 
   useEffect(() => {
     if (!active) return;
     requestAnimationFrame(() => {
       fitRef.current?.fit();
-      termRef.current?.focus();
+      // A hidden terminal doesn't draw: what changed meanwhile (a new theme) shows now.
+      const term = termRef.current;
+      term?.refresh(0, term.rows - 1);
+      term?.focus();
     });
   }, [active]);
 
