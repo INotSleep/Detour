@@ -1,6 +1,8 @@
-# Tests on every push and pull request that touches code. Installers for macOS, Windows and Linux
+# Tests on every push and pull request that touches code. Installers for macOS and Linux
 # on a tag `v*` (into a draft release) or when run by hand: macOS minutes are
-# expensive on private repositories.
+# expensive on private repositories. Windows installers are signed with a code signing
+# certificate that lives in SimplySign, so they are built and added to the release on the
+# maintainer's computer: scripts/release-windows.ps1.
 name: CI
 
 on:
@@ -72,7 +74,6 @@ jobs:
       matrix:
         include:
           - os: ubuntu-22.04
-          - os: windows-latest
           # One app for Apple Silicon and Intel Macs.
           - os: macos-latest
             args: --target universal-apple-darwin

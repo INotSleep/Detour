@@ -89,7 +89,7 @@ Release builds sign their update files with the updater key: set `TAURI_SIGNING_
 npm run tauri build -- --config "{\"bundle\":{\"createUpdaterArtifacts\":false}}"
 ```
 
-CI builds installers for every `v*` tag into a draft release.
+CI builds the macOS and Linux installers for every `v*` tag into a draft release. The Windows ones are signed with a Certum code signing certificate in SimplySign, so they are built locally and added to that draft by `scripts/release-windows.ps1`.
 
 </details>
 
