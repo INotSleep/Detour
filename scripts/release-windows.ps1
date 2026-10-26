@@ -4,13 +4,15 @@
 #
 # Needs: SimplySign Desktop signed in, the GitHub CLI signed in, the updater key at
 # ~/.tauri/detour-updater.key (or TAURI_SIGNING_PRIVATE_KEY). Its password comes from
-# TAURI_SIGNING_PRIVATE_KEY_PASSWORD or is asked for.
+# TAURI_SIGNING_PRIVATE_KEY_PASSWORD, or the build asks for it.
 #
 #   powershell -ExecutionPolicy Bypass -File scripts\release-windows.ps1
 
 param(
   # Build and sign, but don't touch the release.
-  [switch]$NoUpload
+  [switch]$NoUpload,
+  # Upload what an earlier run built.
+  [switch]$SkipBuild
 )
 
 $ErrorActionPreference = "Stop"
@@ -43,19 +45,18 @@ if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
   if (-not (Test-Path $key)) { throw "No updater key at $key." }
   $env:TAURI_SIGNING_PRIVATE_KEY = Get-Content $key -Raw
 }
-if ($null -eq $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD) {
-  $secure = Read-Host "Updater key password (Enter if it has none)" -AsSecureString
-  $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))
-}
 
 # ---------- build and sign ----------
 
-Step "Building $tag"
-$config = Join-Path $env:TEMP "detour-sign.json"
-$sign = @{ bundle = @{ windows = @{ certificateThumbprint = $cert.Thumbprint; digestAlgorithm = "sha256"; timestampUrl = "http://time.certum.pl"; tsp = $true } } }
-[IO.File]::WriteAllText($config, ($sign | ConvertTo-Json -Depth 5), (New-Object Text.UTF8Encoding $false))
-npm run tauri build -- --bundles nsis,msi --config $config
-if ($LASTEXITCODE -ne 0) { throw "The build failed." }
+# Tauri signs the app before packing it, then each installer.
+if (-not $SkipBuild) {
+  Step "Building $tag"
+  $config = Join-Path $env:TEMP "detour-sign.json"
+  $sign = @{ bundle = @{ windows = @{ certificateThumbprint = $cert.Thumbprint; digestAlgorithm = "sha256"; timestampUrl = "http://time.certum.pl"; tsp = $true } } }
+  [IO.File]::WriteAllText($config, ($sign | ConvertTo-Json -Depth 5), (New-Object Text.UTF8Encoding $false))
+  npm run tauri build -- --bundles nsis,msi --config $config
+  if ($LASTEXITCODE -ne 0) { throw "The build failed." }
+}
 
 $bundle = Join-Path $root "target\release\bundle"
 $files = @{
@@ -64,10 +65,10 @@ $files = @{
 }
 
 Step "Checking signatures"
-foreach ($file in @((Join-Path $root "target\release\detour.exe"), $files.nsis, $files.msi)) {
+foreach ($file in @($files.nsis, $files.msi)) {
   & $signtool.FullName verify /pa /q $file
   if ($LASTEXITCODE -ne 0) { throw "Not signed: $file" }
-  if (-not (Test-Path "$file.sig") -and $file -ne (Join-Path $root "target\release\detour.exe")) { throw "No update signature: $file.sig" }
+  if (-not (Test-Path "$file.sig")) { throw "No update signature: $file.sig" }
   Write-Host "signed  $(Split-Path $file -Leaf)"
 }
 
