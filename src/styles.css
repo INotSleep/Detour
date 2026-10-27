@@ -982,6 +982,8 @@ select.input { cursor: pointer; padding-right: 28px; appearance: none; backgroun
 .files-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .files-size, .files-date { color: var(--muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .files-size { text-align: right; }
+/* Being deleted: shown until it is gone, but out of reach. */
+.files-row.busy { opacity: 0.4; pointer-events: none; }
 .files-row .row-actions { gap: 0; }
 .files-row .icon-btn { width: 26px; height: 26px; }
 .files-row:hover .row-actions, .files-row.selected .row-actions { opacity: 1; }

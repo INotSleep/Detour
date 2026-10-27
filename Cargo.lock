@@ -1270,6 +1270,7 @@ dependencies = [
  "directories",
  "ed25519-dalek",
  "flate2",
+ "futures",
  "rand 0.10.3",
  "russh",
  "russh-sftp",

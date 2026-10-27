@@ -164,10 +164,14 @@ async fn browse_upload_download_rename_remove() {
     files.rename(&id, &join(&dir, "big.bin"), &join(&dir, "renamed.bin")).await.unwrap();
     assert!(root.join("docs/renamed.bin").exists());
 
-    // Removing a folder takes everything in it.
+    // Removing a folder takes everything in it, and says how far it got.
     std::fs::create_dir_all(root.join("docs/deep/er")).unwrap();
     std::fs::write(root.join("docs/deep/er/f.txt"), b"y").unwrap();
-    files.remove(&id, &dir).await.unwrap();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let s = seen.clone();
+    files.remove(&id, &dir, "t3", move |d, t| s.lock().unwrap().push((d, t))).await.unwrap();
+    // docs, deep, er; f.txt, other.txt, renamed.bin.
+    assert_eq!(seen.lock().unwrap().last().copied(), Some((6, 6)));
     assert!(!root.join("docs").exists());
     assert!(files.list(&id, &home).await.unwrap().is_empty());
 

@@ -178,9 +178,14 @@ impl Files {
         o.sftp.rename(from, to).await.map_err(|e| err(e, from))
     }
 
-    /// Removes a file, or a folder with everything in it.
-    pub async fn remove(&self, id: &str, path: &str) -> Result<()> {
-        remove_tree(&self.get(id)?.sftp, path).await
+    /// Removes a file, or a folder with everything in it, reporting how many of
+    /// its files and folders are gone. A cancelled removal stops where it is.
+    pub async fn remove(&self, id: &str, path: &str, transfer: &str, report: impl Fn(u64, u64)) -> Result<()> {
+        let o = self.get(id)?;
+        let cancelled = self.begin(transfer);
+        let result = remove_tree(&o.sftp, path, Some(&cancelled), report).await;
+        self.end(transfer);
+        result
     }
 
     /// Sets Unix permission bits (`0o755`).
@@ -281,7 +286,7 @@ impl Files {
                 let mut progress = Progress::new(tree.size(), report);
                 // Left over from an upload that was cut off.
                 if o.sftp.try_exists(&part).await.unwrap_or(false) {
-                    remove_tree(&o.sftp, &part).await?;
+                    remove_tree(&o.sftp, &part, None, |_, _| {}).await?;
                 }
                 o.sftp.create_dir(&part).await.map_err(|e| err(e, remote))?;
                 wrote = true;
@@ -302,46 +307,82 @@ impl Files {
             }
             // SFTP's rename does not replace anything.
             if o.sftp.try_exists(remote).await.unwrap_or(false) {
-                remove_tree(&o.sftp, remote).await?;
+                remove_tree(&o.sftp, remote, None, |_, _| {}).await?;
             }
             o.sftp.rename(&part, remote).await.map_err(|e| err(e, remote))
         }
         .await;
         self.end(transfer);
         if result.is_err() && wrote {
-            let _ = remove_tree(&o.sftp, &part).await;
+            let _ = remove_tree(&o.sftp, &part, None, |_, _| {}).await;
         }
         result
     }
 }
 
-/// Removes a file, or a folder with everything in it, depth first and without following links.
-async fn remove_tree(sftp: &SftpSession, path: &str) -> Result<()> {
+/// Requests a removal keeps in flight. SFTP answers them as they come, so a
+/// folder of thousands of files costs a round trip per batch, not per file.
+const IN_FLIGHT: usize = 64;
+
+/// Removes a file, or a folder with everything in it, without following links.
+/// The folder is listed first, a level at a time, so `report(done, total)` knows
+/// the total; then its files go, then its folders from the deepest up.
+async fn remove_tree(sftp: &SftpSession, path: &str, cancelled: Option<&watch::Receiver<bool>>, report: impl Fn(u64, u64)) -> Result<()> {
+    use futures::{StreamExt, TryStreamExt, stream};
+
     let meta = sftp.symlink_metadata(path).await.map_err(|e| err(e, path))?;
     if !meta.is_dir() || meta.is_symlink() {
-        return sftp.remove_file(path).await.map_err(|e| err(e, path));
+        report(0, 1);
+        sftp.remove_file(path).await.map_err(|e| err(e, path))?;
+        report(1, 1);
+        return Ok(());
     }
-    let mut stack = vec![(path.to_string(), false)];
-    while let Some((dir, emptied)) = stack.pop() {
-        if emptied {
-            sftp.remove_dir(&dir).await.map_err(|e| err(e, &dir))?;
-            continue;
-        }
-        stack.push((dir.clone(), true));
-        for e in sftp.read_dir(&dir).await.map_err(|e| err(e, &dir))? {
-            let name = e.file_name();
-            if name == "." || name == ".." {
-                continue;
+    let stop = || if cancelled.is_some_and(|c| *c.borrow()) { Err(Error::Cancelled) } else { Ok(()) };
+
+    let mut levels = vec![vec![path.to_string()]];
+    let mut files = Vec::new();
+    loop {
+        let listed: Vec<_> = stream::iter(levels.last().unwrap().clone())
+            .map(|dir| async move {
+                stop()?;
+                let entries = sftp.read_dir(&dir).await.map_err(|e| err(e, &dir))?;
+                Ok::<_, Error>((dir, entries))
+            })
+            .buffer_unordered(IN_FLIGHT)
+            .try_collect()
+            .await?;
+        let mut next = Vec::new();
+        for (dir, entries) in listed {
+            for e in entries {
+                let name = e.file_name();
+                if name == "." || name == ".." {
+                    continue;
+                }
+                let m = e.metadata();
+                if m.is_dir() && !m.is_symlink() { next.push(join(&dir, &name)) } else { files.push(join(&dir, &name)) }
             }
-            let child = join(&dir, &name);
-            let m = e.metadata();
-            if m.is_dir() && !m.is_symlink() {
-                stack.push((child, false));
-            } else {
-                sftp.remove_file(&child).await.map_err(|e| err(e, &child))?;
-            }
         }
+        if next.is_empty() {
+            break;
+        }
+        levels.push(next);
     }
+
+    let progress = Mutex::new(Progress::new((files.len() + levels.iter().map(Vec::len).sum::<usize>()) as u64, report));
+    let gone = |p: String, dir: bool| {
+        let progress = &progress;
+        async move {
+            stop()?;
+            if dir { sftp.remove_dir(&p).await } else { sftp.remove_file(&p).await }.map_err(|e| err(e, &p))?;
+            progress.lock().unwrap().add(1);
+            Ok::<_, Error>(())
+        }
+    };
+    stream::iter(files).map(Ok).try_for_each_concurrent(IN_FLIGHT, |f| gone(f, false)).await?;
+    for level in levels.into_iter().rev() {
+        stream::iter(level).map(Ok).try_for_each_concurrent(IN_FLIGHT, |d| gone(d, true)).await?;
+    }
+    progress.lock().unwrap().finish();
     Ok(())
 }
 

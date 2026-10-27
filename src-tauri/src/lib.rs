@@ -259,9 +259,10 @@ async fn files_rename(app: State<'_, App>, id: String, from: String, to: String)
     app.files.rename(&id, &from, &to).await
 }
 
+/// Removes a file or a folder; how many of its entries are gone arrives on `on_progress`.
 #[tauri::command]
-async fn files_remove(app: State<'_, App>, id: String, path: String) -> Result<()> {
-    app.files.remove(&id, &path).await
+async fn files_remove(app: State<'_, App>, id: String, path: String, transfer: String, on_progress: Channel<Progress>) -> Result<()> {
+    app.files.remove(&id, &path, &transfer, move |done, total| { let _ = on_progress.send(Progress { done, total }); }).await
 }
 
 /// Downloads a file; progress arrives on `on_progress`. `transfer` names it for `files_cancel`.

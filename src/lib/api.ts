@@ -690,9 +690,10 @@ export const api = {
     mockFiles.rename(demoUser(id), from, to);
   },
   /** Removes a file, or a folder with everything in it. */
-  async filesRemove(id: string, path: string): Promise<void> {
-    if (real) return invoke("files_remove", { id, path });
-    await demoDelay(200);
+  /** Removes a file or a folder with everything in it; `onProgress` counts its files and folders. */
+  async filesRemove(id: string, path: string, transfer: string, onProgress: OnProgress): Promise<void> {
+    if (real) return invoke("files_remove", { id, path, transfer, onProgress: progressChannel(onProgress) });
+    await demoTransfer(transfer, 40, onProgress);
     mockFiles.remove(demoUser(id), path);
   },
   /** Downloads a file to the place the user picked. */

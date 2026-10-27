@@ -156,7 +156,8 @@ type Phase =
 
 interface Transfer {
   id: string;
-  up: boolean;
+  /** A removal counts files and folders rather than bytes. */
+  kind: "up" | "down" | "remove";
   name: string;
   /** The remote folder it goes to or comes from. */
   dir: string;
@@ -344,6 +345,8 @@ function RemotePane({ host, active, onStatus, onClose, localDir, onDownloaded, o
   const [renaming, setRenaming] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [removing, setRemoving] = useState<FileEntry[] | null>(null);
+  // Full paths being deleted right now.
+  const [deleting, setDeleting] = useState<string[]>([]);
   const [replacing, setReplacing] = useState<{ items: LocalFile[]; existing: string[] } | null>(null);
   const [chmodding, setChmodding] = useState<FileEntry | null>(null);
   const [transfers, setTransfers] = useState<Transfer[]>([]);
@@ -512,14 +515,14 @@ function RemotePane({ host, active, onStatus, onClose, localDir, onDownloaded, o
     }
   };
 
-  const transfer = (up: boolean, name: string, total = 0): Transfer => ({ id: uid("t"), up, name, dir: path, done: 0, total, started: Date.now(), state: "active" });
+  const transfer = (kind: Transfer["kind"], name: string, total = 0): Transfer => ({ id: uid("t"), kind, name, dir: path, done: 0, total, started: Date.now(), state: "active" });
 
   /** Into the folder open on this computer's side; without one, one file where the user says and more into a folder they pick. */
   const download = async (items: FileEntry[]) => {
     if (!conn || items.length === 0) return;
     if (localDir) {
       for (const e of items) {
-        const t = transfer(false, e.name, e.kind === "dir" ? 0 : e.size);
+        const t = transfer("down",e.name, e.kind === "dir" ? 0 : e.size);
         void run(t, (p) => api.filesDownloadInto(conn.id, join(t.dir, e.name), localDir, t.id, p)).then((ok) => void (ok && onDownloaded()));
       }
       return;
@@ -528,14 +531,14 @@ function RemotePane({ host, active, onStatus, onClose, localDir, onDownloaded, o
     if (items.length === 1 && only && only.kind !== "dir") {
       const local = await api.pickDownloadTarget(only.name);
       if (!local) return;
-      const t = transfer(false, only.name, only.size);
+      const t = transfer("down",only.name, only.size);
       await run(t, (p) => api.filesDownload(conn.id, join(t.dir, only.name), local, t.id, p));
       return;
     }
     const into = await api.pickDownloadFolder();
     if (!into) return;
     for (const e of items) {
-      const t = transfer(false, e.name, e.kind === "dir" ? 0 : e.size);
+      const t = transfer("down",e.name, e.kind === "dir" ? 0 : e.size);
       void run(t, (p) => api.filesDownloadInto(conn.id, join(t.dir, e.name), into, t.id, p));
     }
   };
@@ -546,7 +549,7 @@ function RemotePane({ host, active, onStatus, onClose, localDir, onDownloaded, o
     if (existing.length && !force) return setReplacing({ items, existing });
     const dir = path;
     for (const f of items) {
-      const t = transfer(true, f.name);
+      const t = transfer("up",f.name);
       void run(t, (p) => api.filesUpload(conn.id, f, join(dir, f.name), existing.includes(f.name), t.id, p)).then((ok) => void (ok && pathRef.current === dir && refresh(f.name)));
     }
   };
@@ -571,7 +574,7 @@ function RemotePane({ host, active, onStatus, onClose, localDir, onDownloaded, o
     const remote = join(path, e.name);
     try {
       const local = await api.editCopyPath(e.name);
-      const t = transfer(false, e.name, e.size);
+      const t = transfer("down",e.name, e.size);
       if (!(await run(t, (p) => api.filesDownload(conn.id, remote, local, t.id, p)))) return;
       edits.current.set(local, { remote, dir: path, name: e.name, modified: await api.localModified(local), sending: false });
       setEditCount(edits.current.size);
@@ -592,7 +595,7 @@ function RemotePane({ host, active, onStatus, onClose, localDir, onDownloaded, o
           if (m === ed.modified) return;
           ed.modified = m;
           ed.sending = true;
-          const t: Transfer = { ...transfer(true, ed.name), dir: ed.dir };
+          const t: Transfer = { ...transfer("up",ed.name), dir: ed.dir };
           void run(t, (p) => api.filesUpload(conn.id, { path: local, name: ed.name }, ed.remote, true, t.id, p)).then((ok) => {
             ed.sending = false;
             if (ok && pathRef.current === ed.dir) void refresh(ed.name);
@@ -655,21 +658,26 @@ function RemotePane({ host, active, onStatus, onClose, localDir, onDownloaded, o
     }
   };
 
+  /** Each item goes as a transfer with its progress; the rows stay greyed out until it is gone. */
   const remove = async (items: FileEntry[]) => {
     if (!conn || !sorted) return;
-    const idx = sorted.findIndex((x) => x.name === items[0]?.name);
-    let gone = 0;
-    for (const e of items) {
-      try {
-        await api.filesRemove(conn.id, join(path, e.name));
-        gone++;
-      } catch (err) {
-        toast({ text: `${e.name}: ${errorText(err)}`, tone: "error" });
-      }
-    }
-    if (gone) toast({ text: items.length === 1 ? tr().files.removedOne(items[0]!.name) : tr().files.removedMany(gone), tone: "success" });
-    const left = sorted.filter((x) => !items.some((i) => i.name === x.name));
-    void refresh(left[Math.min(Math.max(idx, 0), left.length - 1)]?.name ?? null);
+    const fresh = items.filter((e) => !deleting.includes(join(path, e.name)));
+    if (!fresh.length) return;
+    const idx = sorted.findIndex((x) => x.name === fresh[0]!.name);
+    const left = sorted.filter((x) => !fresh.some((i) => i.name === x.name));
+    const paths = fresh.map((e) => join(path, e.name));
+    const next = left[Math.min(Math.max(idx, 0), left.length - 1)]?.name ?? null;
+    setDeleting((d) => [...d, ...paths]);
+    selectOnly(next);
+    await Promise.all(
+      fresh.map((e) => {
+        const t = transfer("remove", e.name);
+        return run(t, (p) => api.filesRemove(conn.id, join(t.dir, e.name), t.id, p));
+      }),
+    );
+    setDeleting((d) => d.filter((p) => !paths.includes(p)));
+    // Still in that folder: keep the row the cursor moved to.
+    void refresh(pathRef.current === path ? next : undefined);
   };
 
   const chmod = async (e: FileEntry, mode: number) => {
@@ -849,13 +857,15 @@ function RemotePane({ host, active, onStatus, onClose, localDir, onDownloaded, o
         {sorted.map((e) => {
           const Icon = e.kind === "dir" ? Folder : e.kind === "link" ? Link2 : File;
           const isSel = sel.includes(e.name);
+          const busy = deleting.includes(join(path, e.name));
           return (
             <div
               key={e.name}
               data-name={e.name}
               role="row"
               aria-selected={isSel}
-              className={`files-row ${isSel ? "selected" : ""} ${cursor === e.name ? "cursor" : ""}`}
+              aria-busy={busy || undefined}
+              className={`files-row ${isSel ? "selected" : ""} ${cursor === e.name ? "cursor" : ""} ${busy ? "busy" : ""}`}
               onClick={(ev) => clickRow(ev, e.name)}
               onDoubleClick={() => void enter(e)}
               onMouseDown={(ev) => {
@@ -1078,18 +1088,21 @@ function TransferRow({ t, onCancel, onDismiss }: { t: Transfer; onCancel: () => 
   const x = useT().files;
   const pct = t.total ? Math.round((t.done / t.total) * 100) : 0;
   const secs = (Date.now() - t.started) / 1000;
-  const speed = secs >= 1 && t.done ? ` · ${formatBytes(t.done / secs)}${x.perSecond}` : "";
+  const removal = t.kind === "remove";
+  const speed = !removal && secs >= 1 && t.done ? ` · ${formatBytes(t.done / secs)}${x.perSecond}` : "";
+  const count = (n: number) => n.toLocaleString(locale());
+  const Icon = t.state === "done" ? Check : removal ? Trash2 : t.kind === "up" ? ArrowUp : ArrowDown;
   return (
     <div className={`transfer ${t.state}`}>
-      {t.state === "done" ? <Check size={14} className="ok-text" /> : t.up ? <ArrowUp size={14} /> : <ArrowDown size={14} />}
+      <Icon size={14} className={t.state === "done" ? "ok-text" : undefined} />
       <span className="transfer-name">{t.name}</span>
       {t.state === "active" && (
         <>
           <span className="transfer-bar"><span style={{ width: `${pct}%` }} /></span>
-          <span className="transfer-amount">{t.total ? `${x.transfer.amount(formatBytes(t.done), formatBytes(t.total))}${speed}` : ""}</span>
+          <span className="transfer-amount">{t.total ? `${removal ? x.transfer.amount(count(t.done), count(t.total)) : x.transfer.amount(formatBytes(t.done), formatBytes(t.total))}${speed}` : ""}</span>
         </>
       )}
-      {t.state === "done" && <span className="transfer-amount ok-text">{t.up ? x.transfer.uploaded : x.transfer.downloaded}</span>}
+      {t.state === "done" && <span className="transfer-amount ok-text">{removal ? x.transfer.removed : t.kind === "up" ? x.transfer.uploaded : x.transfer.downloaded}</span>}
       {t.state === "error" && <span className="transfer-amount err-text">{t.error}</span>}
       <IconButton icon={X} label={t.state === "active" ? x.transfer.cancel : x.transfer.dismiss} tipSide="left" onClick={t.state === "active" ? onCancel : onDismiss} />
     </div>

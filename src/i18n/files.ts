@@ -28,8 +28,6 @@ export const en = {
   empty: "This folder is empty",
   uploadFiles: "Upload files",
   dropTo: (where: string) => `Upload to ${where}`,
-  removedOne: (name: string) => `Deleted "${name}"`,
-  removedMany: (n: number) => `Deleted: ${n}`,
   modeSet: (name: string, mode: string) => `Permissions for "${name}": ${mode}`,
   pathCopied: (path: string) => `Copied: ${path}`,
   confirm: {
@@ -54,6 +52,7 @@ export const en = {
     amount: (done: string, total: string) => `${done} of ${total}`,
     uploaded: "Uploaded",
     downloaded: "Downloaded",
+    removed: "Deleted",
     cancel: "Cancel",
     dismiss: "Dismiss",
   },
@@ -91,8 +90,6 @@ export const ru: typeof en = {
   empty: "Папка пуста",
   uploadFiles: "Загрузить файлы",
   dropTo: (where: string) => `Загрузить в ${where}`,
-  removedOne: (name: string) => `«${name}» удалён`,
-  removedMany: (n: number) => `Удалено: ${n}`,
   modeSet: (name: string, mode: string) => `Права «${name}»: ${mode}`,
   pathCopied: (path: string) => `Скопировано: ${path}`,
   confirm: {
@@ -117,6 +114,7 @@ export const ru: typeof en = {
     amount: (done: string, total: string) => `${done} из ${total}`,
     uploaded: "Загружен",
     downloaded: "Скачан",
+    removed: "Удалён",
     cancel: "Отменить",
     dismiss: "Убрать",
   },
