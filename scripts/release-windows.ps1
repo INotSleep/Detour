@@ -4,9 +4,10 @@
 #
 # Needs: SimplySign Desktop signed in, the GitHub CLI signed in, the updater key at
 # ~/.tauri/detour-updater.key (or TAURI_SIGNING_PRIVATE_KEY). Its password comes from
-# TAURI_SIGNING_PRIVATE_KEY_PASSWORD, or the build asks for it.
+# TAURI_SIGNING_PRIVATE_KEY_PASSWORD, or the build asks for it. PowerShell can't set
+# an empty variable, so for a key without a password start it from Git Bash:
 #
-#   powershell -ExecutionPolicy Bypass -File scripts\release-windows.ps1
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD= powershell -ExecutionPolicy Bypass -File scripts/release-windows.ps1
 
 param(
   # Build and sign, but don't touch the release.
