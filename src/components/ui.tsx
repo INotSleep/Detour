@@ -188,7 +188,8 @@ export interface MenuItem {
   onSelect: () => void;
 }
 
-export function Menu({ trigger, items, align = "end", header }: { trigger: (open: () => void, isOpen: boolean) => ReactNode; items: MenuItem[]; align?: "start" | "end"; header?: string }) {
+/** `items` may be a function: then they are made when the menu opens, not on every render (rows of a long list). */
+export function Menu({ trigger, items: itemsOrMake, align = "end", header }: { trigger: (open: () => void, isOpen: boolean) => ReactNode; items: MenuItem[] | (() => MenuItem[]); align?: "start" | "end"; header?: string }) {
   const [open, setOpen] = useState(false);
   const anchor = useRef<HTMLSpanElement>(null);
   const menu = useRef<HTMLDivElement>(null);
@@ -218,6 +219,8 @@ export function Menu({ trigger, items, align = "end", header }: { trigger: (open
       window.removeEventListener("keydown", key);
     };
   }, [open]);
+
+  const items = open ? (typeof itemsOrMake === "function" ? itemsOrMake() : itemsOrMake) : [];
 
   return (
     <span ref={anchor} className="menu-anchor" onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>

@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, isValidElement, memo, startTransition, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AppWindow, ArrowDown, ArrowUp, Check, ChevronDown, ChevronUp, Copy, Download, Ellipsis, File, FilePen, FolderOpen, FolderPlus, Folder, House, KeyRound, Link2, Loader2, Pencil, RotateCw, Server, ShieldAlert, ShieldQuestion, SquareTerminal, Trash2, Upload, X,
 } from "lucide-react";
@@ -178,6 +178,124 @@ function parentOf(path: string) {
   return i <= 0 ? "/" : path.slice(0, i);
 }
 
+const ROW_HEIGHT = 32;
+/**
+ * The rows in the page move in blocks of this many, with at least a block beyond the
+ * visible ones: scrolling renders anything only every so many rows, and never shows gaps.
+ */
+const BLOCK = 20;
+
+/** Where the rows of a file list are, and how much of its top the sticky header covers. */
+function listGeometry(list: HTMLDivElement | null) {
+  const rows = list?.querySelector<HTMLElement>(".files-rows");
+  if (!list || !rows) return null;
+  return { list, top: rows.offsetTop, head: list.querySelector<HTMLElement>(".files-head")?.offsetHeight ?? 0 };
+}
+
+/** Scrolls a file list just enough for row `index` to show below its sticky header. */
+export function revealRow(list: HTMLDivElement | null, index: number) {
+  const g = listGeometry(list);
+  if (!g || index < 0) return;
+  const top = g.top + index * ROW_HEIGHT;
+  if (top - g.head < g.list.scrollTop) g.list.scrollTop = top - g.head;
+  else if (top + ROW_HEIGHT > g.list.scrollTop + g.list.clientHeight) g.list.scrollTop = top + ROW_HEIGHT - g.list.clientHeight;
+}
+
+/**
+ * The rows of a file list, only those in view and a block around them: a folder of
+ * thousands costs no more to lay out, scroll or resize than a short one. The box has
+ * the height of all of them, and each row stands at its own place in it, so moving a
+ * block adds and drops rows at the edges without shifting (and repainting) the rest.
+ * It renders on its own as the list scrolls, without the pane around it; `row` must
+ * change only when what the rows show does.
+ */
+export const WindowedRows = memo(function WindowedRows<T extends object>({ list, items, row }: { list: React.RefObject<HTMLDivElement | null>; items: T[]; row: (item: T) => ReactNode }) {
+  const count = items.length;
+  const [range, setRange] = useState({ start: 0, end: BLOCK * 4 });
+  // A row that stays in view keeps its element, so React passes over it: moving a
+  // block makes only the rows that come into view.
+  const made = useRef({ row, rows: new WeakMap<T, ReactNode>() });
+  if (made.current.row !== row) made.current = { row, rows: new WeakMap() };
+  const rowOf = (item: T) => {
+    let el = made.current.rows.get(item);
+    if (el === undefined) made.current.rows.set(item, (el = row(item)));
+    return el;
+  };
+  useEffect(() => {
+    const el = list.current;
+    if (!el) return;
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      const g = listGeometry(el);
+      if (!g) return;
+      const from = el.scrollTop - g.top;
+      const first = Math.floor(from / ROW_HEIGHT);
+      const last = Math.ceil((from + el.clientHeight) / ROW_HEIGHT);
+      const start = Math.max(0, Math.floor((first - BLOCK) / BLOCK) * BLOCK);
+      const end = Math.min(count, Math.ceil((last + BLOCK) / BLOCK) * BLOCK);
+      // Between frames, in pieces: a block of rows ahead is already there, so a scroll
+      // never waits for the next one to be made.
+      startTransition(() => setRange((r) => (r.start === start && r.end === end ? r : { start, end })));
+    };
+    const soon = () => void (frame ||= requestAnimationFrame(update));
+    update();
+    el.addEventListener("scroll", soon, { passive: true });
+    const ro = new ResizeObserver(soon);
+    ro.observe(el);
+    return () => {
+      cancelAnimationFrame(frame);
+      el.removeEventListener("scroll", soon);
+      ro.disconnect();
+    };
+  }, [list, count]);
+  const start = Math.min(range.start, count);
+  const end = Math.min(Math.max(range.end, start), count);
+  return (
+    <div className="files-rows" style={{ height: count * ROW_HEIGHT }}>
+      {items.slice(start, end).map((item, i) => {
+        const el = rowOf(item);
+        return (
+          <div key={(isValidElement(el) && el.key) || start + i} className="files-slot" style={{ top: (start + i) * ROW_HEIGHT }}>
+            {el}
+          </div>
+        );
+      })}
+    </div>
+  );
+}) as <T extends object>(props: { list: React.RefObject<HTMLDivElement | null>; items: T[]; row: (item: T) => ReactNode }) => ReactNode;
+
+/**
+ * A row's buttons, made the first time the pointer comes over the row (or once it is
+ * selected): they show only then anyway, and leaving them out makes a row a third as
+ * big, which is what scrolling through a long folder has to lay out and paint.
+ */
+export function RowActions({ show, children }: { show: boolean; children: ReactNode }) {
+  const box = useRef<HTMLSpanElement>(null);
+  const [hovered, setHovered] = useState(false);
+  useEffect(() => {
+    const row = box.current?.closest(".files-row");
+    if (!row || hovered) return;
+    const enter = () => setHovered(true);
+    row.addEventListener("pointerenter", enter);
+    return () => row.removeEventListener("pointerenter", enter);
+  }, [hovered]);
+  return (
+    <span ref={box} className="row-actions">
+      {(show || hovered) && children}
+    </span>
+  );
+}
+
+// Formatters are slow to make and lists have hundreds of rows: one of each per language.
+const formats = new Map<string, Intl.NumberFormat | Intl.DateTimeFormat | Intl.Collator>();
+function format<T extends Intl.NumberFormat | Intl.DateTimeFormat | Intl.Collator>(kind: string, make: (lang: string) => T): T {
+  const key = `${locale()} ${kind}`;
+  let f = formats.get(key);
+  if (!f) formats.set(key, (f = make(locale())));
+  return f as T;
+}
+
 /** "812 B", "8.4 MB", "177 MB", "1.2 GB". */
 export function formatBytes(n: number) {
   const units = tr().files.units;
@@ -188,7 +306,8 @@ export function formatBytes(n: number) {
     i++;
   }
   const digits = i === 0 || v >= 100 ? 0 : 1;
-  return `${v.toLocaleString(locale(), { maximumFractionDigits: digits, minimumFractionDigits: digits })} ${units[i]}`;
+  const number = format(`bytes${digits}`, (l) => new Intl.NumberFormat(l, { maximumFractionDigits: digits, minimumFractionDigits: digits }));
+  return `${number.format(v)} ${units[i]}`;
 }
 
 /** "14:32" today, "Oct 21 14:32" this year, "Oct 21, 2024" before. */
@@ -196,11 +315,15 @@ export function formatModified(ms: number | null) {
   if (!ms) return "";
   const d = new Date(ms);
   const now = new Date();
-  const time = d.toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit" });
+  const time = format("time", (l) => new Intl.DateTimeFormat(l, { hour: "2-digit", minute: "2-digit" })).format(d);
   if (d.toDateString() === now.toDateString()) return time;
+  const thisYear = d.getFullYear() === now.getFullYear();
+  const dates = thisYear
+    ? format("date", (l) => new Intl.DateTimeFormat(l, { day: "numeric", month: "short" }))
+    : format("dateYear", (l) => new Intl.DateTimeFormat(l, { day: "numeric", month: "short", year: "numeric" }));
   // Russian adds a dot after the month and a suffix after the year: both go.
-  const date = d.toLocaleDateString(locale(), { day: "numeric", month: "short", ...(d.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }) }).replace(".", "").replace(" \u0433", "");
-  return d.getFullYear() === now.getFullYear() ? `${date} ${time}` : date;
+  const date = dates.format(d).replace(".", "").replace(/ \u0433\.?$/, "");
+  return thisYear ? `${date} ${time}` : date;
 }
 
 /** `0o754` -> "rwxr-xr--". */
@@ -212,10 +335,12 @@ function formatMode(mode: number | null) {
 /** Folders first, then by the chosen column. */
 export function sortEntries(list: FileEntry[], by: SortBy, desc: boolean) {
   const key = (e: FileEntry) => (by === "size" ? e.size : by === "modified" ? (e.modified ?? 0) : 0);
+  const loose = format("sortBase", (l) => new Intl.Collator(l, { numeric: true, sensitivity: "base" }));
+  const exact = format("sort", (l) => new Intl.Collator(l, { numeric: true }));
   return [...list].sort((a, b) => {
     const dirs = Number(b.kind === "dir") - Number(a.kind === "dir");
     if (dirs) return dirs;
-    const k = by === "name" ? a.name.localeCompare(b.name, locale(), { numeric: true, sensitivity: "base" }) : key(a) - key(b) || a.name.localeCompare(b.name, locale(), { numeric: true });
+    const k = by === "name" ? loose.compare(a.name, b.name) : key(a) - key(b) || exact.compare(a.name, b.name);
     return desc ? -k : k;
   });
 }
@@ -714,7 +839,7 @@ function RemotePane({ host, active, onStatus, onClose, localDir, onDownloaded, o
       if (!e) return;
       if (ev.shiftKey) selectRange(e.name);
       else selectOnly(e.name);
-      listRef.current?.querySelector(`[data-name="${CSS.escape(e.name)}"]`)?.scrollIntoView({ block: "nearest" });
+      revealRow(listRef.current, sorted.indexOf(e));
     };
     const ctrl = ev.ctrlKey || ev.metaKey;
     if (ev.key === "ArrowDown") move(i + 1);
@@ -760,6 +885,58 @@ function RemotePane({ host, active, onStatus, onClose, localDir, onDownloaded, o
       { label: t.common.delete, icon: Trash2, danger: true, hint: "Del", onSelect: () => setRemoving([e]) },
     ];
   };
+
+  // The rows are made again only when what they show changes, not on every render of
+  // the pane (folding the sidebar, a transfer's progress): a folder can hold thousands.
+  // Their handlers reach the pane's latest state through `live` when they run.
+  const live = useRef({ clickRow, enter, onDragRows, download, selectOnly, setMenuAt, rename, rowMenu, picked });
+  live.current = { clickRow, enter, onDragRows, download, selectOnly, setMenuAt, rename, rowMenu, picked };
+  const renderRow = useCallback(
+    (e: FileEntry) => {
+      const Icon = e.kind === "dir" ? Folder : e.kind === "link" ? Link2 : File;
+      const isSel = sel.includes(e.name);
+      const busy = deleting.includes(join(path, e.name));
+      return (
+        <div
+          key={e.name}
+          data-name={e.name}
+          role="row"
+          aria-selected={isSel}
+          aria-busy={busy || undefined}
+          className={`files-row ${isSel ? "selected" : ""} ${cursor === e.name ? "cursor" : ""} ${busy ? "busy" : ""}`}
+          onClick={(ev) => live.current.clickRow(ev, e.name)}
+          onDoubleClick={() => void live.current.enter(e)}
+          onMouseDown={(ev) => {
+            const items = isSel ? live.current.picked : [e];
+            live.current.onDragRows(ev, items.length === 1 ? e.name : t.files.items(items.length), () => void live.current.download(items));
+          }}
+          onContextMenu={(ev) => {
+            ev.preventDefault();
+            if (!isSel) live.current.selectOnly(e.name);
+            live.current.setMenuAt({ x: ev.clientX, y: ev.clientY, entry: e });
+          }}
+        >
+          <Icon size={15} className={`files-icon ${e.kind}`} />
+          {renaming === e.name ? (
+            <NameInput initial={e.name} onDone={(v) => void live.current.rename(e.name, v ?? e.name)} />
+          ) : (
+            <span className="files-name">{e.name}</span>
+          )}
+          <span className="files-size">{e.kind === "dir" ? "" : formatBytes(e.size)}</span>
+          <span className="files-date">{formatModified(e.modified)}</span>
+          <span className="files-mode mono">{formatMode(e.permissions)}</span>
+          <RowActions show={isSel}>
+            <IconButton icon={Download} label={localDir ? t.files.downloadTo(lastPart(localDir)) : t.files.download} onClick={(ev) => (ev.stopPropagation(), void live.current.download([e]))} />
+            <Menu
+              trigger={(toggle, isOpen) => <IconButton icon={Ellipsis} label={t.files.more} className={isOpen ? "pressed" : ""} onClick={toggle} />}
+              items={() => live.current.rowMenu(e)}
+            />
+          </RowActions>
+        </div>
+      );
+    },
+    [sel, cursor, deleting, path, renaming, localDir, t],
+  );
 
   /* ---------- view ---------- */
 
@@ -854,49 +1031,7 @@ function RemotePane({ host, active, onStatus, onClose, localDir, onDownloaded, o
             <span />
           </div>
         )}
-        {sorted.map((e) => {
-          const Icon = e.kind === "dir" ? Folder : e.kind === "link" ? Link2 : File;
-          const isSel = sel.includes(e.name);
-          const busy = deleting.includes(join(path, e.name));
-          return (
-            <div
-              key={e.name}
-              data-name={e.name}
-              role="row"
-              aria-selected={isSel}
-              aria-busy={busy || undefined}
-              className={`files-row ${isSel ? "selected" : ""} ${cursor === e.name ? "cursor" : ""} ${busy ? "busy" : ""}`}
-              onClick={(ev) => clickRow(ev, e.name)}
-              onDoubleClick={() => void enter(e)}
-              onMouseDown={(ev) => {
-                const items = isSel ? picked : [e];
-                onDragRows(ev, items.length === 1 ? e.name : t.files.items(items.length), () => void download(items));
-              }}
-              onContextMenu={(ev) => {
-                ev.preventDefault();
-                if (!isSel) selectOnly(e.name);
-                setMenuAt({ x: ev.clientX, y: ev.clientY, entry: e });
-              }}
-            >
-              <Icon size={15} className={`files-icon ${e.kind}`} />
-              {renaming === e.name ? (
-                <NameInput initial={e.name} onDone={(v) => void rename(e.name, v ?? e.name)} />
-              ) : (
-                <span className="files-name">{e.name}</span>
-              )}
-              <span className="files-size">{e.kind === "dir" ? "" : formatBytes(e.size)}</span>
-              <span className="files-date">{formatModified(e.modified)}</span>
-              <span className="files-mode mono">{formatMode(e.permissions)}</span>
-              <span className="row-actions">
-                <IconButton icon={Download} label={localDir ? t.files.downloadTo(lastPart(localDir)) : t.files.download} onClick={(ev) => (ev.stopPropagation(), void download([e]))} />
-                <Menu
-                  trigger={(toggle, isOpen) => <IconButton icon={Ellipsis} label={t.files.more} className={isOpen ? "pressed" : ""} onClick={toggle} />}
-                  items={rowMenu(e)}
-                />
-              </span>
-            </div>
-          );
-        })}
+        <WindowedRows list={listRef} items={sorted} row={renderRow} />
         {sorted.length === 0 && !creating && (
           <div className="files-empty">
             <span>{t.files.empty}</span>

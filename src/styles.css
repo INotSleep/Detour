@@ -103,7 +103,8 @@ kbd { font-family: inherit; }
 .view { position: absolute; inset: 0; overflow: auto; }
 .view.hidden { display: none; }
 
-.page { padding: 28px 36px 48px; max-width: 1080px; }
+/* Readable width, centred in what is left beside the sidebar on a wide window. */
+.page { padding: 28px 36px 48px; max-width: 1080px; margin-inline: auto; }
 .page.narrow { max-width: 680px; }
 .page.wide { max-width: none; }
 
@@ -131,7 +132,7 @@ kbd { font-family: inherit; }
 .vault-current {
   width: 100%;
   display: flex; align-items: center; gap: 10px;
-  padding: 7px 8px;
+  padding: 7px 8px 7px 7px;
   border-radius: var(--r);
   text-align: left;
   transition: background 0.12s;
@@ -169,11 +170,15 @@ kbd { font-family: inherit; }
 @keyframes pop { from { opacity: 0; transform: translateY(-3px) scale(0.98); } }
 .vault-menu { top: calc(100% + 4px); left: 0; right: -40px; }
 
-/* the sidebar with only icons */
+/* The sidebar with only icons. The icons keep their place either way (their left
+   padding centres them in the narrow column), and the text never wraps: the
+   column's edge passes over it and it fades, so nothing jumps while it folds. */
+.vault-current, .quick, .nav-item, .sidebar-alert { overflow: hidden; white-space: nowrap; }
+.vault-current > .vault-avatar, .quick > svg, .nav-item > svg, .sidebar-alert > svg { flex: none; }
+.vault-names, .vault-current > .muted, .nav-item > span, .quick > span, .quick > .kbd, .sidebar-alert > span { transition: opacity 0.12s var(--ease); }
 .sidebar.mini .vault-names, .sidebar.mini .vault-current > .muted,
 .sidebar.mini .nav-item > span, .sidebar.mini .quick > span, .sidebar.mini .quick > .kbd,
-.sidebar.mini .sidebar-alert > span { display: none; }
-.sidebar.mini .vault-current, .sidebar.mini .nav-item, .sidebar.mini .quick, .sidebar.mini .sidebar-alert { justify-content: center; padding-left: 0; padding-right: 0; }
+.sidebar.mini .sidebar-alert > span { opacity: 0; }
 .sidebar.mini .vault-menu { right: auto; width: 240px; }
 .sidebar [data-tip] { position: relative; }
 
@@ -190,7 +195,7 @@ kbd { font-family: inherit; }
 
 .quick {
   display: flex; align-items: center; gap: 8px;
-  height: 32px; padding: 0 8px 0 10px;
+  height: 32px; padding: 0 8px 0 13px;
   margin: 2px 0 8px;
   border-radius: var(--r);
   background: var(--hover);
@@ -212,7 +217,7 @@ kbd { font-family: inherit; }
 .nav { display: flex; flex-direction: column; gap: 1px; }
 .nav-item {
   display: flex; align-items: center; gap: 10px;
-  height: 32px; padding: 0 10px;
+  height: 32px; padding: 0 10px 0 12px;
   border-radius: var(--r);
   color: var(--text-2);
   transition: background 0.12s, color 0.12s;
@@ -520,7 +525,7 @@ select.input { cursor: pointer; padding-right: 28px; appearance: none; backgroun
 /* conflicts */
 .sidebar-alert {
   display: flex; align-items: center; gap: 8px;
-  min-height: 34px; padding: 6px 8px 6px 10px;
+  min-height: 34px; padding: 6px 8px 6px 11px;
   border-radius: var(--r);
   background: var(--warn-soft);
   border: 1px solid color-mix(in srgb, var(--warn) 28%, transparent);
@@ -968,7 +973,12 @@ select.input { cursor: pointer; padding-right: 28px; appearance: none; backgroun
 .files-path-input { flex: 1; min-width: 0; height: 30px; font-size: 12.5px; }
 
 /* No padding above the sticky header: rows would show through the gap. */
-.files-list { flex: 1; min-height: 0; overflow: auto; padding: 0 8px 12px; outline: none; }
+/* Only the rows in view are in the page, each at its place in a box as tall as all of them:
+   positioned, so the box's offset inside can be measured, and without scroll anchoring,
+   which would shift the scroll as rows come and go. */
+.files-list { flex: 1; min-height: 0; overflow: auto; padding: 0 8px 12px; outline: none; position: relative; overflow-anchor: none; }
+.files-rows { position: relative; }
+.files-slot { position: absolute; left: 0; right: 0; height: 32px; contain: layout style; }
 .files-row {
   display: grid; grid-template-columns: 22px minmax(0, 1fr) 96px 132px 84px 64px; align-items: center; gap: 10px;
   height: 32px; padding: 0 8px; border-radius: 6px; cursor: default; user-select: none;

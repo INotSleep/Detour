@@ -6,7 +6,7 @@ import { copyText, shortcutKey, useStore } from "../lib/store";
 import { tr, useT } from "../i18n";
 import { Button, ContextMenu, IconButton, type MenuItem } from "./ui";
 import { HostIcon } from "./common";
-import { NameInput, formatBytes, formatModified, sortEntries, type SortBy, type StartDrag } from "./FilesView";
+import { NameInput, RowActions, formatBytes, formatModified, sortEntries, WindowedRows, revealRow, type SortBy, type StartDrag } from "./FilesView";
 
 /* ---------- paths on this computer: C:\Users\me on Windows, /home/me elsewhere ---------- */
 
@@ -173,7 +173,7 @@ export function LocalPane({ dir, onDir, refreshKey, target, onUpload, onDragRows
       if (!e) return;
       if (ev.shiftKey) selectRange(e.name);
       else selectOnly(e.name);
-      listRef.current?.querySelector(`[data-name="${CSS.escape(e.name)}"]`)?.scrollIntoView({ block: "nearest" });
+      revealRow(listRef.current, sorted.indexOf(e));
     };
     const ctrl = ev.ctrlKey || ev.metaKey;
     if (ev.key === "ArrowDown") move(i + 1);
@@ -205,6 +205,47 @@ export function LocalPane({ dir, onDir, refreshKey, target, onUpload, onDragRows
     }
     selectOnly(name);
   };
+
+  // As on the server's side: rows are made again only when what they show changes;
+  // their handlers reach the latest state through `live`.
+  const live = useRef({ clickRow, enter, onDragRows, upload, selectOnly, setMenuAt, picked });
+  live.current = { clickRow, enter, onDragRows, upload, selectOnly, setMenuAt, picked };
+  const renderRow = useCallback(
+    (e: FileEntry) => {
+      const Icon = e.kind === "dir" ? Folder : e.kind === "link" ? Link2 : File;
+      const isSel = sel.includes(e.name);
+      return (
+        <div
+          key={e.name}
+          data-name={e.name}
+          role="row"
+          aria-selected={isSel}
+          className={`files-row local ${isSel ? "selected" : ""} ${cursor === e.name ? "cursor" : ""}`}
+          onClick={(ev) => live.current.clickRow(ev, e.name)}
+          onDoubleClick={() => live.current.enter(e)}
+          onMouseDown={(ev) => {
+            if (!here) return;
+            const items = isSel ? live.current.picked : [e];
+            live.current.onDragRows(ev, items.length === 1 ? e.name : t.files.items(items.length), () => live.current.upload(items));
+          }}
+          onContextMenu={(ev) => {
+            ev.preventDefault();
+            if (!isSel) live.current.selectOnly(e.name);
+            live.current.setMenuAt({ x: ev.clientX, y: ev.clientY, entry: e });
+          }}
+        >
+          <Icon size={15} className={`files-icon ${e.kind}`} />
+          <span className="files-name">{e.name}</span>
+          <span className="files-size">{e.kind === "dir" ? "" : formatBytes(e.size)}</span>
+          <span className="files-date">{formatModified(e.modified)}</span>
+          <RowActions show={isSel}>
+            {target && here && <IconButton icon={Upload} label={t.files.local.uploadTo(target)} tipSide="left" onClick={(ev) => (ev.stopPropagation(), live.current.upload([e]))} />}
+          </RowActions>
+        </div>
+      );
+    },
+    [sel, cursor, here, target, t],
+  );
 
   const canUpload = !!target && !!here && picked.length > 0;
   return (
@@ -265,39 +306,7 @@ export function LocalPane({ dir, onDir, refreshKey, target, onUpload, onDragRows
               <span />
             </div>
           )}
-          {sorted?.map((e) => {
-            const Icon = e.kind === "dir" ? Folder : e.kind === "link" ? Link2 : File;
-            const isSel = sel.includes(e.name);
-            return (
-              <div
-                key={e.name}
-                data-name={e.name}
-                role="row"
-                aria-selected={isSel}
-                className={`files-row local ${isSel ? "selected" : ""} ${cursor === e.name ? "cursor" : ""}`}
-                onClick={(ev) => clickRow(ev, e.name)}
-                onDoubleClick={() => enter(e)}
-                onMouseDown={(ev) => {
-                  if (!here) return;
-                  const items = isSel ? picked : [e];
-                  onDragRows(ev, items.length === 1 ? e.name : t.files.items(items.length), () => upload(items));
-                }}
-                onContextMenu={(ev) => {
-                  ev.preventDefault();
-                  if (!isSel) selectOnly(e.name);
-                  setMenuAt({ x: ev.clientX, y: ev.clientY, entry: e });
-                }}
-              >
-                <Icon size={15} className={`files-icon ${e.kind}`} />
-                <span className="files-name">{e.name}</span>
-                <span className="files-size">{e.kind === "dir" ? "" : formatBytes(e.size)}</span>
-                <span className="files-date">{formatModified(e.modified)}</span>
-                <span className="row-actions">
-                  {target && here && <IconButton icon={Upload} label={t.files.local.uploadTo(target)} tipSide="left" onClick={(ev) => (ev.stopPropagation(), upload([e]))} />}
-                </span>
-              </div>
-            );
-          })}
+          {sorted && <WindowedRows list={listRef} items={sorted} row={renderRow} />}
           {sorted?.length === 0 && !creating && <div className="files-empty"><span>{t.files.empty}</span></div>}
         </div>
       )}
