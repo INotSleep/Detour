@@ -179,10 +179,17 @@ export function TerminalView({ host, active, initialCommand, onStatus, onExit, o
       });
     }
 
-    const ro = new ResizeObserver(() => hostRef.current?.offsetParent && fit.fit());
+    // Fitting rewraps the whole scrollback and tells the server, which redraws: once the
+    // size settles, not on every frame of the sidebar folding or of a window drag.
+    let settle: ReturnType<typeof setTimeout> | undefined;
+    const ro = new ResizeObserver(() => {
+      clearTimeout(settle);
+      settle = setTimeout(() => hostRef.current?.offsetParent && fit.fit(), 90);
+    });
     ro.observe(hostRef.current!);
 
     return () => {
+      clearTimeout(settle);
       stop();
       ro.disconnect();
       term.dispose();
