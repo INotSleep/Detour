@@ -87,3 +87,18 @@ async fn the_window_allows_a_terminal() {
     assert_eq!(kind(asking.await.unwrap()), "ok");
     assert_eq!(kind(cli.call("vault_get", json!({})).await), "ok");
 }
+
+#[tokio::test]
+async fn anyone_may_stop_a_core_that_holds_nothing() {
+    let socket = start("quit", None).await;
+    let stranger = hello(&socket, "cli").await;
+    assert_eq!(kind(stranger.call("quit", json!({})).await), "ok");
+
+    // An unlocked vault is the person's: a stranger can't stop it (this test's terminal is the
+    // person's once it made the vault, so the stranger is an agent's connection).
+    let socket = start("quit-unlocked", None).await;
+    let me = hello(&socket, "cli").await;
+    me.call("vault_create", json!({ "masterPassword": "master" })).await.unwrap();
+    let stranger = hello(&socket, "mcp").await;
+    assert_eq!(kind(stranger.call("quit", json!({})).await), "notTrusted");
+}

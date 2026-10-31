@@ -77,6 +77,12 @@ pub(crate) async fn call(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value) ->
         core.touch();
         return crate::agents::call(core, ctx, method, p).await;
     }
+    // A core that holds nothing (no unlocked vault, no sessions, no tunnels) anyone may stop.
+    let idle = || !core.store.lock().is_ok_and(|s| s.is_unlocked()) && core.sessions.is_empty() && core.tunnels.statuses().is_empty();
+    if method == "quit" && idle() {
+        core.quit.notify_one();
+        return Ok(Value::Null);
+    }
     if !OPEN.contains(&method) && !core.is_trusted(ctx.id) {
         return Err(json!({ "kind": "notTrusted", "window": core.has_window() }));
     }

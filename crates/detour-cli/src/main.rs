@@ -261,8 +261,11 @@ async fn run(command: Command, dir: &std::path::Path, team: Option<String>, json
             return Ok(0);
         }
         Command::Quit => {
-            let c = conn::ready(dir).await?;
-            let _ = c.call("quit", serde_json::json!({})).await;
+            // An idle core stops for anyone; one that holds something, for the person.
+            let c = conn::connect(dir).await?;
+            if c.call("quit", serde_json::json!({})).await.is_err() {
+                let _ = conn::ready(dir).await?.call("quit", serde_json::json!({})).await;
+            }
             eprintln!("{}", i18n::t().stopped);
             return Ok(0);
         }
