@@ -1383,26 +1383,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "detour"
-version = "0.2.3"
-dependencies = [
- "detour-core",
- "detour-daemon",
- "detour-ipc",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-clipboard-manager",
- "tauri-plugin-dialog",
- "tauri-plugin-opener",
- "tauri-plugin-process",
- "tauri-plugin-single-instance",
- "tauri-plugin-updater",
- "tokio",
-]
-
-[[package]]
 name = "detour-cli"
 version = "0.2.3"
 dependencies = [
@@ -1459,6 +1439,26 @@ dependencies = [
  "serde",
  "serde_json",
  "sysinfo",
+ "tokio",
+]
+
+[[package]]
+name = "detour-desktop"
+version = "0.2.3"
+dependencies = [
+ "detour-core",
+ "detour-daemon",
+ "detour-ipc",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-clipboard-manager",
+ "tauri-plugin-dialog",
+ "tauri-plugin-opener",
+ "tauri-plugin-process",
+ "tauri-plugin-single-instance",
+ "tauri-plugin-updater",
  "tokio",
 ]
 

@@ -1,5 +1,6 @@
 [package]
-name = "detour"
+# Not `detour`: that is the command line, which the installers carry as a sidecar.
+name = "detour-desktop"
 description = "Detour desktop app (Tauri shell around detour-core)"
 version.workspace = true
 edition.workspace = true

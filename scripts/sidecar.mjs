@@ -3,9 +3,9 @@
 // app (/usr/bin/detour, Detour.app/Contents/MacOS/detour, the install folder on Windows).
 //
 // Run by `tauri build` (beforeBuildCommand of tauri.bundle.conf.json). The target is the
-// one Tauri builds for (TAURI_ENV_TARGET_TRIPLE); a universal macOS build gets both
-// architectures joined with lipo. DETOUR_SIDECAR_READY=1 skips it: the release script
-// builds and signs the sidecar itself first.
+// one Tauri builds for (TAURI_ENV_TARGET_TRIPLE). A universal macOS build needs one for
+// each architecture (Tauri builds the app once for each) and both joined with lipo.
+// DETOUR_SIDECAR_READY=1 skips it: the release script builds and signs the sidecar first.
 import { execFileSync } from "node:child_process";
 import { copyFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -28,7 +28,9 @@ const build = (target) => {
 };
 
 if (triple === "universal-apple-darwin") {
-  const parts = ["aarch64-apple-darwin", "x86_64-apple-darwin"].map(build);
+  const arches = ["aarch64-apple-darwin", "x86_64-apple-darwin"];
+  const parts = arches.map(build);
+  arches.forEach((a, i) => copyFileSync(parts[i], join(dirname(out), `detour-${a}`)));
   execFileSync("lipo", ["-create", "-output", out, ...parts], { stdio: "inherit" });
 } else {
   copyFileSync(build(triple), out);
