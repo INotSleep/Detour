@@ -220,31 +220,24 @@ pub async fn ls(ctx: &Ctx, query: Option<&str>) -> Res<()> {
 /// How a host logs in and is reached, as given on the command line.
 #[derive(clap::Args, Default)]
 pub struct HostOpts {
-    /// Address (name or IP)
     #[arg(long, short)]
     pub address: Option<String>,
     #[arg(long, short)]
     pub port: Option<u16>,
     #[arg(long, short)]
     pub user: Option<String>,
-    /// Log in with this key (name or id)
     #[arg(long, short, conflicts_with_all = ["password", "agent"])]
     pub key: Option<String>,
-    /// Log in with a password (asked now; empty: ask when connecting)
     #[arg(long, conflicts_with = "agent")]
     pub password: bool,
-    /// Log in with ssh-agent
     #[arg(long)]
     pub agent: bool,
     #[arg(long, short)]
     pub group: Option<String>,
-    /// Go through this host (ssh -J)
     #[arg(long, value_name = "HOST")]
     pub via: Option<String>,
-    /// Forward ssh-agent (ssh -A): root on the server can use your keys while you're connected
     #[arg(long)]
     pub forward_agent: Option<bool>,
-    /// Tags, comma separated
     #[arg(long)]
     pub tags: Option<String>,
 }

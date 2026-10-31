@@ -4,6 +4,7 @@
 
 mod cmds;
 mod conn;
+mod help;
 mod i18n;
 mod term;
 
@@ -16,15 +17,13 @@ use cmds::{Ctx, FileOp, HostOpts};
 use conn::{Fail, Res};
 
 #[derive(Parser)]
-#[command(name = "detour", version, about = "Detour SSH client", disable_help_subcommand = true)]
+// What each command and option means is in i18n (`help` there), in both languages.
+#[command(name = "detour", version, disable_help_subcommand = true)]
 struct Cli {
-    /// Where the vault lives (default: the app's data folder, or $DETOUR_DATA_DIR)
     #[arg(long, global = true, value_name = "DIR")]
     data_dir: Option<PathBuf>,
-    /// A team instead of the personal vault (its name or id)
     #[arg(long, short = 'T', global = true, value_name = "TEAM")]
     team: Option<String>,
-    /// Print JSON instead of tables
     #[arg(long, global = true)]
     json: bool,
     #[command(subcommand)]
@@ -33,56 +32,39 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// The core: running, locked or not
     Status,
-    /// Unlock the vault (and trust this terminal)
     Unlock,
-    /// Lock the vault
     Lock,
-    /// Stop the core (sessions and tunnels end)
     Quit,
-    /// List hosts
     Ls { query: Option<String> },
-    /// Add, edit, remove, import and export hosts
     #[command(subcommand)]
     Hosts(Hosts),
-    /// Open a terminal session on a host
     Ssh { host: String },
-    /// Run a command on a host; the exit code is the command's
     Exec {
         host: String,
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
         command: Vec<String>,
     },
-    /// Copy a file or folder: `detour cp file host:path` or `detour cp host:path file`
     Cp { from: String, to: String },
-    /// Files on a host
     #[command(subcommand)]
     Files(Files),
-    /// Saved tunnels
     #[command(subcommand)]
     Tunnels(Tunnels),
-    /// Keys
     #[command(subcommand)]
     Keys(Keys),
-    /// Snippets
     #[command(subcommand)]
     Snippets(Snippets),
-    /// The personal vault's sync with your other devices
     Sync {
-        /// Sync now instead of showing the state
         #[arg(long)]
         now: bool,
     },
-    /// Teams
     #[command(subcommand)]
     Teams(Teams),
-    /// Your Detour ID, to be added to a team
     Id,
-    /// Run the core in this process (the app and the CLI start it by themselves)
+    // The core in this process (the app and the CLI start it by themselves); `--app`
+    // is the window's program, which the core trusts.
     #[command(hide = true)]
     Daemon {
-        /// The window's program, which the core trusts
         #[arg(long)]
         app: Option<PathBuf>,
     },
@@ -90,39 +72,29 @@ enum Command {
 
 #[derive(Subcommand)]
 enum Hosts {
-    /// List hosts
     Ls { query: Option<String> },
-    /// Add a host
     Add {
         name: String,
         #[command(flatten)]
         opts: HostOpts,
     },
-    /// Change a host
     Edit {
         host: String,
-        /// A new name
         #[arg(long)]
         name: Option<String>,
         #[command(flatten)]
         opts: HostOpts,
     },
-    /// Remove a host
     Rm { host: String },
-    /// Import hosts from ~/.ssh/config (all new ones, or those named)
     Import {
         aliases: Vec<String>,
-        /// Also pin server keys from ~/.ssh/known_hosts
         #[arg(long)]
         known_hosts: bool,
     },
-    /// Hosts as ~/.ssh/config entries
     Export {
         hosts: Vec<String>,
-        /// Write to this file instead of printing
         #[arg(long, short)]
         output: Option<PathBuf>,
-        /// Also save their keys as files in this folder
         #[arg(long, value_name = "DIR")]
         keys: Option<PathBuf>,
     },
@@ -130,45 +102,35 @@ enum Hosts {
 
 #[derive(Subcommand)]
 enum Files {
-    /// List a folder: host:path
     Ls { target: String },
     Mkdir { target: String },
-    /// Remove a file or a folder with everything in it
     Rm { target: String },
-    /// Rename or move: host:path new-path
     Mv { target: String, to: String },
-    /// Change permissions: host:path 755
     Chmod { target: String, mode: String },
 }
 
 #[derive(Subcommand)]
 enum Tunnels {
     Ls,
-    /// Start a saved tunnel
     Up { name: String },
-    /// Stop a tunnel
     Down { name: String },
 }
 
 #[derive(Subcommand)]
 enum Keys {
     Ls,
-    /// Create a key; prints its public part
     Gen {
         name: String,
         #[arg(long, default_value = "ed25519", value_parser = ["ed25519", "rsa", "ecdsa"])]
         r#type: String,
-        /// Protect it with a passphrase (asked)
         #[arg(long)]
         passphrase: bool,
     },
-    /// Import a private key file
     Import {
         file: PathBuf,
         #[arg(long)]
         name: Option<String>,
     },
-    /// Print a private key, or save it to a file or folder
     Export {
         key: String,
         #[arg(long, short)]
@@ -180,25 +142,20 @@ enum Keys {
 #[derive(Subcommand)]
 enum Snippets {
     Ls,
-    /// Save a command: detour snippets add disk -- df -h
     Add {
         name: String,
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
         command: Vec<String>,
     },
     Rm { name: String },
-    /// Run a snippet on a host
     Run { name: String, host: String },
 }
 
 #[derive(Subcommand)]
 enum Teams {
     Ls,
-    /// Read a team again now (with --team)
     Sync,
-    /// Members of a team (with --team)
     Members,
-    /// Add someone by their Detour ID (with --team)
     Add {
         detour_id: String,
         name: String,
@@ -207,22 +164,18 @@ enum Teams {
         #[arg(long, default_value = "view", value_parser = ["none", "view", "secret", "edit"])]
         access: String,
     },
-    /// Remove a member (with --team)
     Remove { member: String },
-    /// Change a member's role (with --team)
     Role {
         member: String,
         #[arg(value_parser = ["member", "admin", "owner"])]
         role: String,
     },
-    /// What a member may do with a host, key, snippet or tunnel (with --team)
     Access {
         record: String,
         member: String,
         #[arg(value_parser = ["none", "view", "secret", "edit"])]
         level: String,
     },
-    /// Leave a team on this device (with --team)
     Leave,
 }
 
@@ -239,7 +192,7 @@ fn app_beside() -> Option<PathBuf> {
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let cli = help::parse();
     let dir = data_dir(cli.data_dir);
     if let Command::Daemon { app } = cli.command {
         return match detour_daemon::run(&dir, app.or_else(app_beside)).await {

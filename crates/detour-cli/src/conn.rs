@@ -29,7 +29,11 @@ pub fn secret(prompt: &str) -> Res<String> {
     if !std::io::stdin().is_terminal() {
         return fail(t().needs_terminal);
     }
-    rpassword::prompt_password(prompt).map_err(|e| Fail(e.to_string()))
+    // The prompt goes through Rust's own console output: rpassword writes it as raw bytes,
+    // which a Windows console in its OEM code page shows as mojibake.
+    eprint!("{prompt}");
+    let _ = std::io::stderr().flush();
+    rpassword::read_password().map_err(|e| Fail(e.to_string()))
 }
 
 /// A yes/no question on the terminal; anything but "y" is no.
