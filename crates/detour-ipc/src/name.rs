@@ -66,7 +66,9 @@ pub async fn listen(id: &str) -> io::Result<Server> {
         let sddl = widestring::U16CString::from_str("D:P(A;;GA;;;OW)").map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
         opts.security_descriptor(SecurityDescriptor::deserialize(&sddl)?)
     };
-    #[cfg(unix)]
+    // Where the system lets a socket have its own mode; elsewhere (macOS) the 0700 folder
+    // around it is what keeps other users out.
+    #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd"))]
     let opts = {
         use interprocess::os::unix::local_socket::ListenerOptionsExt;
         opts.mode(0o600)

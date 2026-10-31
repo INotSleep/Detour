@@ -105,10 +105,24 @@ fn invalid(what: &str) -> std::io::Error {
 }
 
 /// The process on the other end of a connection, where the system says.
+#[cfg(not(target_os = "macos"))]
 pub fn peer_pid(stream: &Stream) -> Option<u32> {
     use interprocess::local_socket::traits::StreamCommon;
     #[allow(clippy::unnecessary_cast)]
     stream.peer_creds().ok()?.pid().map(|p| p as u32)
+}
+
+/// macOS keeps the peer's pid apart from its credentials (LOCAL_PEERPID), which interprocess doesn't read.
+#[cfg(target_os = "macos")]
+pub fn peer_pid(stream: &Stream) -> Option<u32> {
+    use std::os::fd::AsRawFd;
+    let Stream::UdSocket(s) = stream;
+    let fd = s.inner().as_raw_fd();
+    let mut pid: libc::pid_t = 0;
+    let mut len = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
+    // SAFETY: a connected socket of this process, and a pid_t-sized buffer with its size.
+    let r = unsafe { libc::getsockopt(fd, libc::SOL_LOCAL, libc::LOCAL_PEERPID, (&raw mut pid).cast(), &mut len) };
+    (r == 0 && pid > 0).then_some(pid as u32)
 }
 
 /// An error made on this side of the socket, shaped like the core's.
