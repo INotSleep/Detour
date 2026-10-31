@@ -28,6 +28,8 @@ encrypted end to end and signed on every change.
 - **Import.** `~/.ssh/config` with `Include`, patterns and `ProxyJump`, keys and `known_hosts`.
 - **All your devices.** Your vault syncs between them. A new device joins with a one-time code.
 - **Teams.** Access per host, key and snippet, per person.
+- **Command line.** `detour` does everything the app does, in a terminal and on servers without a desktop. [More](https://inotsleep.com/projects/detour/wiki/command-line/cli)
+- **AI agents.** Claude Code, Codex, Cursor and others work on your servers over MCP, only where and for as long as you allow, without ever seeing a password or key. [More](https://inotsleep.com/projects/detour/wiki/command-line/agents)
 
 <p>
   <img src="docs/images/hosts.png" alt="Hosts" width="49%">
@@ -48,6 +50,7 @@ Detour treats the storage, the network and every other member's computer as host
 | a server's host key changes | the connection stops before any password or key is sent. |
 | a Detour ID is swapped on its way to an admin | the fingerprints you compare don't match. |
 | someone publishes a fake update | the app refuses it: updates must carry the project's signature. |
+| an AI agent goes further than asked | it reaches only the hosts and rights you allowed, for the time you chose, never sees a password or key, and can't accept a new server key. |
 
 **Built on** [age](https://age-encryption.org) (X25519, scrypt), ChaCha20-Poly1305, Ed25519 signatures and per-device hash chains, [russh](https://github.com/Eugeny/russh) and [rustls](https://github.com/rustls/rustls). No accounts, no telemetry.
 
@@ -61,7 +64,7 @@ The full design, including what cryptography can't protect against: [docs/teams.
 
 ## Install
 
-Installers for macOS, Windows and Linux are on the [Releases](https://github.com/INotSleep/Detour/releases/latest) page. Detour updates itself from there.
+Installers for macOS, Windows and Linux are on the [Releases](https://github.com/INotSleep/Detour/releases/latest) page. Detour updates itself from there. They put the `detour` command line on your `PATH` too; for servers without a desktop, the release has it alone (`detour-cli-<version>-<system>`).
 
 The interface is in English and Russian.
 
@@ -77,6 +80,7 @@ Requirements: Node 20+, Rust (stable), and the [Tauri prerequisites](https://tau
 npm install
 npm run tauri dev        # the desktop app
 npm run dev              # the UI alone in a browser, with demo data
+cargo run -p detour-cli -- --help   # the command line
 cargo test --workspace
 ```
 
@@ -86,10 +90,12 @@ cargo test --workspace
 Release builds sign their update files with the updater key: set `TAURI_SIGNING_PRIVATE_KEY` (and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` if it has one), or build without update files:
 
 ```bash
-npm run tauri build -- --config "{\"bundle\":{\"createUpdaterArtifacts\":false}}"
+npm run tauri build -- --config src-tauri/tauri.bundle.conf.json --config "{\"bundle\":{\"createUpdaterArtifacts\":false}}"
 ```
 
-CI builds the macOS and Linux installers for every `v*` tag into a draft release. The Windows ones are signed with a Certum code signing certificate in SimplySign, so they are built locally and added to that draft by `scripts/release-windows.ps1`.
+`tauri.bundle.conf.json` builds the command line (`scripts/sidecar.mjs`) and puts it into the installers, with the `PATH` set up on Windows (`src-tauri/windows/`).
+
+CI builds the macOS and Linux installers and the command line archives for every `v*` tag into a draft release. The Windows ones are signed with a Certum code signing certificate in SimplySign, so they are built locally and added to that draft by `scripts/release-windows.ps1`.
 
 </details>
 
@@ -97,7 +103,10 @@ CI builds the macOS and Linux installers for every `v*` tag into a draft release
 
 ```
 crates/detour-core/   SSH, SFTP, vaults, team sync, crypto. No UI dependencies.
-src-tauri/            Tauri 2 shell: thin commands over detour-core
+crates/detour-ipc/    the protocol between the core and its clients
+crates/detour-daemon/ the core as a process: sessions, tunnels, sync, AI agents
+crates/detour-cli/    the `detour` command line and MCP server
+src-tauri/            Tauri 2 shell: the window, the tray, a proxy to the core
 src/                  React + TypeScript UI, xterm.js terminal
   lib/api.ts          the only boundary between the UI and the core
 ```
