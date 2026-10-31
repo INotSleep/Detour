@@ -301,6 +301,7 @@ const EN: T = T {
         ("agents ls", "Agents with access, and what they may do"),
         ("agents revoke", "Take an agent's access away: its sessions close"),
         ("agents revoke <agent>", "A token's id, or the agent's name (all its tokens)"),
+        ("mcp", "Detour for AI agents: an MCP server on stdio (claude mcp add detour -- detour mcp)"),
     ],
 };
 
@@ -503,6 +504,7 @@ const RU: T = T {
         ("agents ls", "Агенты с доступом и что им можно"),
         ("agents revoke", "Отозвать доступ агента: его сессии закроются"),
         ("agents revoke <agent>", "id токена или имя агента (все его токены)"),
+        ("mcp", "Detour для ИИ-агентов: MCP-сервер на stdio (claude mcp add detour -- detour mcp)"),
     ],
 };
 

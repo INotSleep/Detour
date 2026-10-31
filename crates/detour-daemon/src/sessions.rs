@@ -79,6 +79,8 @@ pub struct Session {
     close_with: Option<u64>,
     state: Mutex<State>,
     runs: Mutex<VecDeque<Run>>,
+    /// Its terminal's columns and rows, as last set.
+    size: Mutex<(u32, u32)>,
 }
 
 impl Session {
@@ -86,6 +88,7 @@ impl Session {
         self.handle.input(bytes);
     }
     pub fn resize(&self, cols: u32, rows: u32) {
+        *self.size.lock().unwrap() = (cols, rows);
         self.handle.resize(cols, rows);
     }
     pub fn close(&self) {
@@ -140,6 +143,10 @@ impl Session {
         self.runs.lock().unwrap().iter().cloned().collect()
     }
 
+    pub fn size(&self) -> (u32, u32) {
+        *self.size.lock().unwrap()
+    }
+
     /// The last `max` bytes of output.
     pub fn recent(&self, max: usize) -> Vec<u8> {
         let st = self.state.lock().unwrap();
@@ -154,8 +161,8 @@ pub struct Sessions(Arc<Mutex<HashMap<String, Arc<Session>>>>);
 impl Sessions {
     /// Keeps a session that just connected and starts passing its output on.
     /// `on_closed` runs once it ends.
-    pub fn add(&self, info: SessionInfo, handle: SessionHandle, mut events: UnboundedReceiver<SessionEvent>, close_with: Option<u64>, on_closed: impl FnOnce() + Send + 'static) -> Arc<Session> {
-        let session = Arc::new(Session { info, handle, close_with, state: Mutex::new(State { scrollback: VecDeque::new(), watchers: Vec::new() }), runs: Mutex::default() });
+    pub fn add(&self, info: SessionInfo, size: (u32, u32), handle: SessionHandle, mut events: UnboundedReceiver<SessionEvent>, close_with: Option<u64>, on_closed: impl FnOnce() + Send + 'static) -> Arc<Session> {
+        let session = Arc::new(Session { info, handle, close_with, state: Mutex::new(State { scrollback: VecDeque::new(), watchers: Vec::new() }), runs: Mutex::default(), size: Mutex::new(size) });
         self.0.lock().unwrap().insert(session.info.id.clone(), session.clone());
         let (all, s) = (self.0.clone(), session.clone());
         tokio::spawn(async move {

@@ -377,12 +377,13 @@ pub(crate) async fn call(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value) ->
                 let request = no_forwarding(s.connect_request_in(&h.vault_id, &h.host_id, None, None).map_err(err)?);
                 (h, request)
             };
-            let connected = ssh::connect(request, a.cols.unwrap_or(120), a.rows.unwrap_or(40)).await.map_err(err)?;
+            let size = (a.cols.unwrap_or(120), a.rows.unwrap_or(40));
+            let connected = ssh::connect(request, size.0, size.1).await.map_err(err)?;
             core.store.lock().map_err(poisoned)?.record_connection_in(&h.vault_id, &h.host_id, connected.new_keys).map_err(err)?;
             let id = format!("a{:x}{:x}", now_ms(), ctx.id);
             let info = SessionInfo { id: id.clone(), vault_id: h.vault_id, host_id: h.host_id, owner: Owner::Agent { token_id: t.id.clone(), agent: t.agent.clone() }, started_at: now_ms(), transient: false };
             let c = core.clone();
-            core.sessions.add(info, connected.handle, connected.events, None, move || c.emit("sessions.changed", json!({ "by": 0 })));
+            core.sessions.add(info, size, connected.handle, connected.events, None, move || c.emit("sessions.changed", json!({ "by": 0 })));
             core.emit("sessions.changed", json!({ "by": ctx.id }));
             Ok(json!({ "sessionId": id, "host": h.label }))
         }
@@ -412,7 +413,8 @@ pub(crate) async fn call(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value) ->
             let t = token(core, &a.token)?;
             let session = own_session(core, &t, &a.session_id)?;
             let tail = session.recent(a.bytes.unwrap_or(64 * 1024).min(1024 * 1024));
-            Ok(json!({ "output": String::from_utf8_lossy(&tail) }))
+            let (cols, rows) = session.size();
+            Ok(json!({ "output": String::from_utf8_lossy(&tail), "cols": cols, "rows": rows }))
         }
         // A command on the session's host, on a channel of its own: its output comes back
         // whole. The person sees it in the session's tab, beside the terminal.

@@ -7,6 +7,7 @@ mod cmds;
 mod conn;
 mod help;
 mod i18n;
+mod mcp;
 mod term;
 
 use std::path::PathBuf;
@@ -65,6 +66,7 @@ enum Command {
     Approve,
     #[command(subcommand)]
     Agents(Agents),
+    Mcp,
     // The core in this process (the app and the CLI start it by themselves); `--app`
     // is the window's program, which the core trusts.
     #[command(hide = true)]
@@ -213,6 +215,15 @@ async fn main() -> ExitCode {
             }
         };
     }
+    if let Command::Mcp = cli.command {
+        return match mcp::serve(&dir).await {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("detour mcp: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     match run(cli.command, &dir, cli.team, cli.json).await {
         Ok(code) => ExitCode::from(code.clamp(0, 255) as u8),
         Err(Fail(msg)) => {
@@ -299,7 +310,7 @@ async fn run(command: Command, dir: &std::path::Path, team: Option<String>, json
         Command::Approve => agents::approve(&ctx).await?,
         Command::Agents(Agents::Ls) => agents::list(&ctx).await?,
         Command::Agents(Agents::Revoke { agent }) => agents::revoke(&ctx, &agent).await?,
-        Command::Status | Command::Quit | Command::Daemon { .. } => unreachable!(),
+        Command::Status | Command::Quit | Command::Daemon { .. } | Command::Mcp => unreachable!(),
     }
     Ok(0)
 }

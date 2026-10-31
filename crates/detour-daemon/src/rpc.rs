@@ -502,7 +502,7 @@ pub(crate) async fn dispatch(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value
             let transient = a.close_with_client.unwrap_or(false);
             let info = SessionInfo { id: id.clone(), vault_id: o.vault_id, host_id: o.host_id, owner: Owner::User, started_at: now_ms(), transient };
             let c = core.clone();
-            let session = core.sessions.add(info, connected.handle, connected.events, transient.then_some(ctx.id), move || c.emit("sessions.changed", json!({ "by": 0 })));
+            let session = core.sessions.add(info, (o.cols, o.rows), connected.handle, connected.events, transient.then_some(ctx.id), move || c.emit("sessions.changed", json!({ "by": 0 })));
             if let Some(stream) = a.stream {
                 core.sessions.attach(&session, ctx.id, stream, ctx.out.clone());
             }
