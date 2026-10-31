@@ -23,6 +23,7 @@ Host web
 Host db
   HostName db.internal
   ProxyJump web
+  ForwardAgent yes
 
 Host far
     HostName=10.9.9.9
@@ -101,6 +102,7 @@ fn imports_hosts_keys_routes_and_known_hosts() {
     let hop = host("ops@hop1.example:2200");
     assert_eq!((hop.address.as_str(), hop.port, hop.user.as_str()), ("hop1.example", 2200, "ops"));
     assert!(matches!(host("web").auth, Auth::Key { .. }));
+    assert!(host("db").forward_agent && !host("web").forward_agent);
     // An encrypted key comes in as it is; its passphrase is asked when it is used.
     let locked = v.keys.iter().find(|k| k.name == "id_locked").unwrap();
     assert!(locked.has_passphrase && !locked.passphrase_saved);

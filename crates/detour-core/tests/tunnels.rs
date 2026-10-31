@@ -95,7 +95,7 @@ async fn sshd(refuse_remote: bool) -> Fixture {
     });
     let pk = key.public_key();
     let known = KnownHost { endpoint: format!("127.0.0.1:{port}"), key: pk.to_openssh().unwrap(), fingerprint: pk.fingerprint(Default::default()).to_string(), added_at: 0 };
-    let host = Host { id: "h".into(), group: String::new(), label: "t".into(), address: "127.0.0.1".into(), port, user: "u".into(), auth: Auth::Password, tags: vec![], last_connected: None, password: Some("pw".into()), proxy: None, proxy_password: None };
+    let host = Host { id: "h".into(), group: String::new(), label: "t".into(), address: "127.0.0.1".into(), port, user: "u".into(), auth: Auth::Password, tags: vec![], last_connected: None, password: Some("pw".into()), proxy: None, proxy_password: None, forward_agent: false };
     Fixture { req: ConnectRequest { host, key: None, secret: None, known: Some(known), trust_fingerprint: None, route: Default::default() }, handle }
 }
 

@@ -60,6 +60,27 @@ fn write_text_file(path: String, contents: String) -> std::result::Result<(), St
     std::fs::write(&path, contents).map_err(|e| e.to_string())
 }
 
+/// A key to save as a file for an exported ssh config.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct KeyFile {
+    vault_id: String,
+    key_id: String,
+    name: String,
+}
+
+/// Saves keys as OpenSSH private key files in `dir`; returns where each one is.
+#[tauri::command]
+fn key_files_save(app: State<App>, dir: String, keys: Vec<KeyFile>) -> Result<Vec<String>> {
+    let s = app.store.lock().map_err(poisoned)?;
+    keys.iter()
+        .map(|k| {
+            let text = s.export_key_in(&k.vault_id, &k.key_id, None)?;
+            Ok(detour_core::keys::save_file(std::path::Path::new(&dir), &k.name, &text)?.display().to_string())
+        })
+        .collect()
+}
+
 /* ---------- vault ---------- */
 
 #[derive(Serialize)]
@@ -817,6 +838,7 @@ pub fn builder<R: tauri::Runtime>(builder: tauri::Builder<R>, data_dir: std::pat
         .invoke_handler(tauri::generate_handler![
             core_info,
             write_text_file,
+            key_files_save,
             vault_status,
             vault_create,
             vault_unlock,

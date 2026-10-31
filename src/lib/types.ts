@@ -95,6 +95,8 @@ export interface Host {
   hasProxyPassword?: boolean;
   /** Transient: a proxy password just typed in, sent with the next save. */
   newProxyPassword?: string;
+  /** The server may use your keys while you're connected (`ssh -A`). */
+  forwardAgent?: boolean;
   /** mock: demo hosts only */
   os?: Os;
   /** mock: demo hosts only; real reachability is known only when connecting */

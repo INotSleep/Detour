@@ -12,13 +12,13 @@ use std::time::{Duration, Instant};
 
 use russh::client;
 use russh::keys::ssh_key::HashAlg;
-use russh::keys::{PrivateKeyWithHashAlg, PublicKey, PublicKeyOrCertificate};
+use russh::keys::{PrivateKey, PrivateKeyWithHashAlg, PublicKey, PublicKeyOrCertificate};
 use russh::{ChannelMsg, Disconnect};
 use tokio::sync::mpsc;
 
 use crate::model::{Auth, Host, KeyEntry, KnownHost, now_ms};
 use crate::store::endpoint;
-use crate::{Error, Result, SecretKind, keys};
+use crate::{Error, Result, SecretKind, agent, keys};
 
 #[derive(Clone)]
 pub struct ConnectRequest {
@@ -103,6 +103,8 @@ struct Client {
     trust_fingerprint: Option<String>,
     seen: Arc<Mutex<Option<PublicKey>>>,
     forwards: Forwards,
+    /// Set when the host forwards ssh-agent; the login key is added once known.
+    agent: Option<Arc<Mutex<agent::Forwarded>>>,
 }
 
 /// Where connections to a port the server listens on for us (`ssh -R`) go.
@@ -159,6 +161,14 @@ impl client::Handler for Client {
         });
         Ok(())
     }
+
+    async fn server_channel_open_agent_forward(&mut self, channel: russh::Channel<client::Msg>, reply: client::ChannelOpenHandle, _session: &mut client::Session) -> std::result::Result<(), Self::Error> {
+        // Not asked for: dropping `reply` refuses the channel.
+        let Some(keys) = self.agent.as_ref().map(|a| a.lock().unwrap().clone()) else { return Ok(()) };
+        reply.accept().await;
+        tokio::spawn(agent::serve(channel.into_stream(), keys));
+        Ok(())
+    }
 }
 
 fn connect_error(e: impl std::fmt::Display) -> Error {
@@ -188,7 +198,8 @@ async fn open(req: &ConnectRequest) -> Result<(client::Handle<Client>, NewKeys, 
     };
     let seen = Arc::new(Mutex::new(None));
     let forwards = Forwards::default();
-    let handler = Client { pinned: pinned.clone(), trust_fingerprint: req.trust_fingerprint.clone(), seen: seen.clone(), forwards: forwards.clone() };
+    let forwarded = host.forward_agent.then(|| Arc::new(Mutex::new(agent::Forwarded::default())));
+    let handler = Client { pinned: pinned.clone(), trust_fingerprint: req.trust_fingerprint.clone(), seen: seen.clone(), forwards: forwards.clone(), agent: forwarded.clone() };
     let config = Arc::new(client::Config {
         keepalive_interval: Some(Duration::from_secs(30)),
         keepalive_max: 3,
@@ -249,9 +260,17 @@ async fn open(req: &ConnectRequest) -> Result<(client::Handle<Client>, NewKeys, 
         new_keys.push(KnownHost { endpoint: endpoint(host), key: key.to_openssh().map_err(connect_error)?, fingerprint: fingerprint(&key), added_at: now_ms() });
     }
 
-    if let Err(e) = authenticate(&mut session, req).await {
-        let _ = session.disconnect(Disconnect::ByApplication, "", "en").await;
-        return Err(e);
+    match authenticate(&mut session, req).await {
+        Ok(key) => {
+            if let (Some(fwd), Some(key)) = (&forwarded, key) {
+                let name = req.key.as_ref().map(|k| k.name.clone()).unwrap_or_default();
+                fwd.lock().unwrap().own = Some((key, name));
+            }
+        }
+        Err(e) => {
+            let _ = session.disconnect(Disconnect::ByApplication, "", "en").await;
+            return Err(e);
+        }
     }
     Ok((session, new_keys, forwards, keep))
 }
@@ -395,6 +414,9 @@ pub async fn connect(req: ConnectRequest, cols: u32, rows: u32) -> Result<Connec
     let (session, new_keys, _, via) = open(&req).await?;
     let channel = session.channel_open_session().await.map_err(connect_error)?;
     channel.request_pty(false, "xterm-256color", cols, rows, 0, 0, &[]).await.map_err(connect_error)?;
+    if req.host.forward_agent {
+        channel.agent_forward(false).await.map_err(connect_error)?;
+    }
     channel.request_shell(false).await.map_err(connect_error)?;
 
     let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel();
@@ -427,7 +449,8 @@ pub async fn connect(req: ConnectRequest, cols: u32, rows: u32) -> Result<Connec
     Ok(Connected { handle: SessionHandle { tx: cmd_tx }, events: ev_rx, new_keys, pinned_fingerprint })
 }
 
-async fn authenticate(session: &mut client::Handle<Client>, req: &ConnectRequest) -> Result<()> {
+/// Logs in; returns the private key it used, if any (for a forwarded agent).
+async fn authenticate(session: &mut client::Handle<Client>, req: &ConnectRequest) -> Result<Option<Arc<PrivateKey>>> {
     let host = &req.host;
     match &host.auth {
         Auth::Password => {
@@ -449,27 +472,21 @@ async fn authenticate(session: &mut client::Handle<Client>, req: &ConnectRequest
                 Err(Error::WrongPassphrase) => return Err(Error::AuthFailed { secret: Some(SecretKind::Passphrase) }),
                 Err(e) => return Err(e),
             };
+            let key = Arc::new(key);
             let hash = session.best_supported_rsa_hash().await.map_err(connect_error)?.flatten();
-            let res = session.authenticate_publickey(&host.user, PrivateKeyWithHashAlg::new(Arc::new(key), hash)).await.map_err(connect_error)?;
+            let res = session.authenticate_publickey(&host.user, PrivateKeyWithHashAlg::new(key.clone(), hash)).await.map_err(connect_error)?;
             if !res.success() {
                 return Err(Error::AuthFailed { secret: None });
             }
+            return Ok(Some(key));
         }
         Auth::Agent => authenticate_with_agent(session, &host.user).await?,
     }
-    Ok(())
+    Ok(None)
 }
 
 async fn authenticate_with_agent(session: &mut client::Handle<Client>, user: &str) -> Result<()> {
-    #[cfg(windows)]
-    let agent = match russh::keys::agent::client::AgentClient::connect_named_pipe(r"\\.\pipe\openssh-ssh-agent").await {
-        Ok(a) => a.dynamic(),
-        Err(_) => russh::keys::agent::client::AgentClient::connect_pageant().await.map_err(|_| no_agent())?.dynamic(),
-    };
-    #[cfg(not(windows))]
-    let agent = russh::keys::agent::client::AgentClient::connect_env().await.map_err(|_| no_agent())?.dynamic();
-
-    let mut agent = agent;
+    let mut agent = agent::system().await?;
     let identities = agent.request_identities().await.map_err(connect_error)?;
     let hash = session.best_supported_rsa_hash().await.map_err(connect_error)?.flatten();
     for id in identities {
@@ -483,8 +500,4 @@ async fn authenticate_with_agent(session: &mut client::Handle<Client>, user: &st
         }
     }
     Err(Error::AuthFailed { secret: None })
-}
-
-fn no_agent() -> Error {
-    Error::AgentUnavailable
 }

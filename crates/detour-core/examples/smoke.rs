@@ -1,9 +1,9 @@
 //! Manual smoke test of a real SSH login through detour-core.
 //!
-//! cargo run -p detour-core --example smoke -- <user@host[:port]> <private key file> [command]
+//! cargo run -p detour-core --example smoke -- [-A] <user@host[:port]> <private key file> [command]
 //!
 //! Trusts the server key on first use (prints its fingerprint), opens a PTY
-//! shell, runs the command (default `uname -a`) and exits.
+//! shell, runs the command (default `uname -a`) and exits. `-A` forwards ssh-agent.
 
 use std::time::Duration;
 
@@ -13,9 +13,13 @@ use detour_core::{Error, keys};
 
 #[tokio::main]
 async fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let forward_agent = args.first().is_some_and(|a| a == "-A");
+    if forward_agent {
+        args.remove(0);
+    }
     let [target, key_path, rest @ ..] = args.as_slice() else {
-        eprintln!("usage: smoke <user@host[:port]> <private key file> [command]");
+        eprintln!("usage: smoke [-A] <user@host[:port]> <private key file> [command]");
         std::process::exit(2);
     };
     let command = if rest.is_empty() { "uname -a".to_string() } else { rest.join(" ") };
@@ -26,7 +30,7 @@ async fn main() {
     };
 
     let entry = keys::import("smoke", &std::fs::read_to_string(key_path).expect("key file"), None, false).expect("key");
-    let host = Host { id: "smoke".into(), group: String::new(), label: address.clone(), address, port, user: user.into(), auth: Auth::Key { key_id: entry.id.clone() }, tags: vec![], last_connected: None, password: None, proxy: None, proxy_password: None };
+    let host = Host { id: "smoke".into(), group: String::new(), label: address.clone(), address, port, user: user.into(), auth: Auth::Key { key_id: entry.id.clone() }, tags: vec![], last_connected: None, password: None, proxy: None, proxy_password: None, forward_agent };
     let mk = |trust: Option<String>| ConnectRequest { host: host.clone(), key: Some(entry.clone()), secret: None, known: None, trust_fingerprint: trust, route: Default::default() };
 
     let fp = match ssh::connect(mk(None), 120, 30).await {

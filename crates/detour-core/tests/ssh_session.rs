@@ -16,6 +16,8 @@ use tokio::net::TcpListener;
 struct Seen {
     pty: Option<(u32, u32)>,
     resized: Option<(u32, u32)>,
+    /// Comments of the keys a forwarded agent listed.
+    agent_keys: Option<Vec<String>>,
 }
 
 #[derive(Clone)]
@@ -68,6 +70,39 @@ impl server::Handler for TestServer {
     async fn shell_request(&mut self, channel: ChannelId, session: &mut Session) -> Result<(), Self::Error> {
         session.data(channel, b"ready$ ".to_vec())?;
         Ok(())
+    }
+
+    async fn agent_request(&mut self, channel: ChannelId, session: &mut Session) -> Result<bool, Self::Error> {
+        session.channel_success(channel)?;
+        // Ask the client's agent for its keys, as `ssh-add -l` on the server would.
+        let handle = session.handle();
+        let seen = self.seen.clone();
+        tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let mut agent = handle.channel_open_agent().await.unwrap().into_stream();
+            agent.write_all(&[0, 0, 0, 1, 11]).await.unwrap();
+            let mut len = [0u8; 4];
+            agent.read_exact(&mut len).await.unwrap();
+            let mut reply = vec![0u8; u32::from_be_bytes(len) as usize];
+            agent.read_exact(&mut reply).await.unwrap();
+            let mut r = &reply[1..];
+            let u32_at = |r: &mut &[u8]| {
+                let n = u32::from_be_bytes(r[..4].try_into().unwrap());
+                *r = &r[4..];
+                n as usize
+            };
+            let count = u32_at(&mut r);
+            let mut comments = Vec::new();
+            for _ in 0..count {
+                let blob = u32_at(&mut r);
+                r = &r[blob..];
+                let n = u32_at(&mut r);
+                comments.push(String::from_utf8(r[..n].to_vec()).unwrap());
+                r = &r[n..];
+            }
+            seen.lock().unwrap().agent_keys = Some(comments);
+        });
+        Ok(true)
     }
 
     async fn window_change_request(&mut self, _: ChannelId, cols: u32, rows: u32, _: u32, _: u32, _: &mut Session) -> Result<(), Self::Error> {
@@ -124,6 +159,7 @@ fn host(port: u16, auth: Auth) -> Host {
         password: None,
         proxy: None,
         proxy_password: None,
+        forward_agent: false,
     }
 }
 
@@ -262,4 +298,36 @@ async fn unreachable_host_reports_connect_error() {
     let port = listener.local_addr().unwrap().port();
     drop(listener);
     assert!(matches!(ssh::connect(req(host(port, Auth::Agent), None), 80, 24).await, Err(Error::Connect { .. } | Error::Unreachable { .. })));
+}
+
+#[tokio::test]
+async fn forwarded_agent_offers_the_login_key() {
+    let entry = keys::generate("deploy", KeyAlgorithm::Ed25519, None, false).unwrap();
+    let allowed = PublicKey::from_openssh(&entry.public_key).unwrap();
+    let f = start_server(Some(allowed)).await;
+    let mut h = host(f.port, Auth::Key { key_id: entry.id.clone() });
+    h.forward_agent = true;
+    let r = ConnectRequest { host: h, key: Some(entry), secret: None, known: Some(pinned(&f)), trust_fingerprint: None, route: Default::default() };
+    let mut c = ssh::connect(r, 80, 24).await.unwrap();
+    read_until(&mut c.events, "ready$ ").await;
+    for _ in 0..100 {
+        if f.seen.lock().unwrap().agent_keys.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let listed = f.seen.lock().unwrap().agent_keys.clone().expect("the server reached the agent");
+    assert!(listed.iter().any(|c| c == "deploy"), "{listed:?}");
+}
+
+#[tokio::test]
+async fn agent_is_not_forwarded_unless_asked() {
+    let entry = keys::generate("deploy", KeyAlgorithm::Ed25519, None, false).unwrap();
+    let allowed = PublicKey::from_openssh(&entry.public_key).unwrap();
+    let f = start_server(Some(allowed)).await;
+    let r = ConnectRequest { host: host(f.port, Auth::Key { key_id: entry.id.clone() }), key: Some(entry), secret: None, known: Some(pinned(&f)), trust_fingerprint: None, route: Default::default() };
+    let mut c = ssh::connect(r, 80, 24).await.unwrap();
+    read_until(&mut c.events, "ready$ ").await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(f.seen.lock().unwrap().agent_keys.is_none());
 }

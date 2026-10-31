@@ -42,7 +42,7 @@ fn bare_repo() -> (PathBuf, Remote) {
 }
 
 fn host(id: &str, label: &str) -> HostView {
-    HostView { id: id.into(), group: "g".into(), label: label.into(), address: "10.0.0.1".into(), port: 22, user: "root".into(), auth: Auth::Agent, tags: vec![], last_connected: None, has_password: false, new_password: None, own: None, proxy: None, has_proxy_password: false, new_proxy_password: None }
+    HostView { id: id.into(), group: "g".into(), label: label.into(), address: "10.0.0.1".into(), port: 22, user: "root".into(), auth: Auth::Agent, tags: vec![], last_connected: None, has_password: false, new_password: None, own: None, proxy: None, has_proxy_password: false, new_proxy_password: None, forward_agent: false }
 }
 
 fn put(v: &mut TeamVault, hosts: Vec<HostView>) {
@@ -327,7 +327,7 @@ mod over_ssh {
         let (repo, _) = super::bare_repo();
         let pk = host_key.public_key();
         let known = KnownHost { endpoint: format!("127.0.0.1:{port}"), key: pk.to_openssh().unwrap(), fingerprint: pk.fingerprint(Default::default()).to_string(), added_at: 0 };
-        let host = Host { id: "git".into(), group: String::new(), label: "git".into(), address: "127.0.0.1".into(), port, user: "git".into(), auth: Auth::Password, tags: vec![], last_connected: None, password: Some("pw".into()), proxy: None, proxy_password: None };
+        let host = Host { id: "git".into(), group: String::new(), label: "git".into(), address: "127.0.0.1".into(), port, user: "git".into(), auth: Auth::Password, tags: vec![], last_connected: None, password: Some("pw".into()), proxy: None, proxy_password: None, forward_agent: false };
         let remote = super::Remote::Ssh { request: ConnectRequest { host, key: None, secret: None, known: Some(known), trust_fingerprint: None, route: Default::default() }, path: repo.display().to_string() };
 
         let alice = super::person();

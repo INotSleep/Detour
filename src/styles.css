@@ -1085,6 +1085,8 @@ body.resizing-col, body.resizing-col * { cursor: row-resize !important; }
 .import-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .import-alias { font-weight: 600; font-size: 13px; }
 .import-addr { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.export-list { max-height: 220px; }
+.export-preview { margin: 0; max-height: 200px; overflow: auto; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--input); color: var(--text-2); font-size: 12px; line-height: 1.5; white-space: pre; user-select: text; }
 
 /* teams joined on other devices */
 .pending-title { margin: 28px 0 10px; }

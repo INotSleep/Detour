@@ -66,6 +66,9 @@ pub struct Host {
     /// Password for a SOCKS5 or HTTP proxy with a user.
     #[serde(default)]
     pub proxy_password: Option<String>,
+    /// Lets the server use this person's keys while connected (`ssh -A`).
+    #[serde(default)]
+    pub forward_agent: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -97,6 +100,8 @@ pub struct HostView {
     /// Incoming only: a proxy password typed in the UI to save with this edit.
     #[serde(default, skip_serializing)]
     pub new_proxy_password: Option<String>,
+    #[serde(default)]
+    pub forward_agent: bool,
 }
 
 /// A member's own login for a team host, kept in their personal vault.
@@ -156,6 +161,7 @@ impl From<&Host> for HostView {
             proxy: h.proxy.clone(),
             has_proxy_password: h.proxy_password.is_some(),
             new_proxy_password: None,
+            forward_agent: h.forward_agent,
         }
     }
 }
@@ -293,6 +299,10 @@ pub struct VaultData {
     /// Own logins for team hosts (`<team id>/<host id>`).
     #[serde(default)]
     pub team_own: std::collections::BTreeMap<String, OwnLogin>,
+    /// Team hosts this person forwards ssh-agent to (`<team id>/<host id>`). Never shared:
+    /// whoever edits a team host must not be able to reach its members' keys.
+    #[serde(default)]
+    pub team_forward_agent: std::collections::BTreeSet<String>,
     /// Per team, the head of every device this person has read: storage can't roll them back.
     #[serde(default)]
     pub team_heads: std::collections::BTreeMap<String, std::collections::BTreeMap<String, crate::team::log::Head>>,
@@ -379,6 +389,7 @@ mod tests {
             password: Some("secret".into()),
             proxy: None,
             proxy_password: None,
+            forward_agent: false,
         };
         let json = serde_json::to_string(&HostView::from(&host)).unwrap();
         assert!(!json.contains("secret"));

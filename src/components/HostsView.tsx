@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
-import { ChevronRight, CopyPlus, Download, Ellipsis, FolderOpen, Plus, Search, Server, SquareTerminal, Terminal, Trash2, TriangleAlert, X } from "lucide-react";
+import { ChevronRight, CopyPlus, Download, Ellipsis, FolderOpen, Plus, Search, Server, SquareTerminal, Terminal, Trash2, TriangleAlert, Upload, X } from "lucide-react";
 import { api, errorText } from "../lib/api";
-import { copyText, formatAgo, sshCommand, uid, useStore } from "../lib/store";
+import { copyText, formatAgo, uid, useStore } from "../lib/store";
+import { sshCommand } from "../lib/sshConfig";
 import type { Host } from "../lib/types";
 import { HostIcon, authLabel, groupLabel, isNoGroup } from "./common";
 import { atLeast, writable } from "../lib/teams";
 import { OwnLoginSection, SavedPassword } from "./HostLogin";
-import { Button, Empty, IconButton, Menu, Modal, PageHeader } from "./ui";
+import { Button, Checkbox, Empty, IconButton, Menu, Modal, PageHeader } from "./ui";
 import { HostFields, applyDraft, draftFromHost, draftInvalid, emptyDraft, useHostDraft } from "./HostForm";
 import { ImportDialog } from "./ImportDialog";
+import { ExportDialog } from "./ExportDialog";
 import { useT } from "../i18n";
 
 export function HostsView() {
@@ -21,6 +23,8 @@ export function HostsView() {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [creating, setCreating] = useState(false);
   const [importing, setImporting] = useState(false);
+  /** Hosts to start the export with; null when not exporting. */
+  const [exporting, setExporting] = useState<string[] | null>(null);
 
   const hosts = ws.hosts.filter((h) => h.vaultId === vault.id);
   const groupNames = [...new Set(hosts.map((h) => h.group).filter((g) => !isNoGroup(g)))];
@@ -62,7 +66,7 @@ export function HostsView() {
   };
 
   const copyCmd = async (h: Host) => {
-    const ok = await copyText(sshCommand(h));
+    const ok = await copyText(sshCommand(h, ws.hosts));
     toast(ok ? { text: t.hosts.sshCommandCopied, tone: "success" } : { text: t.common.copyFailed, tone: "error" });
   };
 
@@ -85,8 +89,14 @@ export function HostsView() {
                 {query && <IconButton icon={X} label={t.hosts.clearSearch} size={13} onClick={() => setQuery("")} />}
               </label>
             )}
-            {vault.kind === "personal" && (
-              <Menu trigger={(open, isOpen) => <IconButton icon={Ellipsis} label={t.hosts.more} className={isOpen ? "pressed" : ""} onClick={open} />} items={[{ label: t.hosts.importSsh, icon: Download, onSelect: () => setImporting(true) }]} />
+            {(vault.kind === "personal" || hosts.length > 0) && (
+              <Menu
+                trigger={(open, isOpen) => <IconButton icon={Ellipsis} label={t.hosts.more} className={isOpen ? "pressed" : ""} onClick={open} />}
+                items={[
+                  ...(vault.kind === "personal" ? [{ label: t.hosts.importSsh, icon: Download, onSelect: () => setImporting(true) }] : []),
+                  ...(hosts.length > 0 ? [{ label: t.hosts.exportSsh, icon: Upload, onSelect: () => setExporting(hosts.map((h) => h.id)) }] : []),
+                ]}
+              />
             )}
             {canCreate && <Button variant="primary" icon={Plus} onClick={() => setCreating(true)}>{t.hosts.addHost}</Button>}
           </PageHeader>
@@ -172,6 +182,7 @@ export function HostsView() {
                             items={[
                               { label: t.hosts.files, icon: FolderOpen, onSelect: () => openFiles(h.id) },
                               { label: t.hosts.copySshCommand, icon: Terminal, onSelect: () => copyCmd(h) },
+                              { label: t.hosts.exportSsh, icon: Upload, onSelect: () => setExporting([h.id]) },
                               ...(canCreate ? [{ label: t.hosts.duplicate, icon: CopyPlus, onSelect: () => duplicate(h) }] : []),
                               ...(atLeast(h.access, "edit") ? [{ label: t.common.delete, icon: Trash2, danger: true, hint: "Del", onSelect: () => remove(h) }] : []),
                             ]}
@@ -188,11 +199,12 @@ export function HostsView() {
       </div>
 
       {selected && (
-        <HostPanel key={[selected.id, selected.address, selected.port, selected.user, selected.label, selected.group, selected.access, JSON.stringify(selected.own)].join("|")} host={selected} groups={groupNames} onClose={() => setSelectedId(null)} onDelete={() => remove(selected)} onCopy={() => copyCmd(selected)} />
+        <HostPanel key={[selected.id, selected.address, selected.port, selected.user, selected.label, selected.group, selected.access, selected.forwardAgent, JSON.stringify(selected.own)].join("|")} host={selected} groups={groupNames} onClose={() => setSelectedId(null)} onDelete={() => remove(selected)} onCopy={() => copyCmd(selected)} />
       )}
 
       {creating && <NewHostDialog groups={groupNames} onClose={() => setCreating(false)} onCreated={(h) => setSelectedId(h.id)} />}
       {importing && <ImportDialog onClose={() => setImporting(false)} />}
+      {exporting && <ExportDialog hosts={hosts} initial={exporting} onClose={() => setExporting(null)} />}
     </div>
   );
 }
@@ -303,42 +315,50 @@ function HostPanel({ host, groups, onClose, onDelete, onCopy }: { host: Host; gr
 /** What a member who may not edit the host sees of it. */
 function HostDetails({ host, shared, keyName }: { host: Host; shared: boolean; keyName?: string }) {
   const t = useT();
-  const { ws } = useStore();
+  const { ws, update } = useStore();
+  // Forwarding is each person's own choice, so it can be changed without edit access.
+  const setForward = (forwardAgent: boolean) => update((w) => ({ ...w, hosts: w.hosts.map((h) => (h.id === host.id ? { ...h, forwardAgent } : h)) }));
   const p = host.proxy;
   const via = p?.type === "jump" ? ws.hosts.find((h) => h.id === p.hostId)?.label ?? "?" : p ? `${p.type === "socks5" ? "SOCKS5" : "HTTP"} ${p.address}:${p.port}` : null;
   return (
-    <dl className="meta details">
-      <dt>{t.hosts.form.address}</dt>
-      <dd className="mono">{host.address}{host.port !== 22 && `:${host.port}`}</dd>
-      <dt>{t.hosts.form.user}</dt>
-      <dd className="mono">{host.user}</dd>
-      {shared && (
-        <>
-          <dt>{t.hosts.form.auth}</dt>
-          <dd>{authLabel(host, keyName)}</dd>
-        </>
-      )}
-      {shared && host.auth.type === "password" && host.hasPassword && (
-        <>
-          <dt>{t.common.password}</dt>
-          <dd><SavedPassword host={host} /></dd>
-        </>
-      )}
-      {via && (
-        <>
-          <dt>{t.hosts.details.via}</dt>
-          <dd className="mono">{via}</dd>
-        </>
-      )}
-      <dt>{t.hosts.form.group}</dt>
-      <dd>{groupLabel(host.group)}</dd>
-      {host.tags.length > 0 && (
-        <>
-          <dt>{t.hosts.form.tags}</dt>
-          <dd>{host.tags.join(", ")}</dd>
-        </>
-      )}
-    </dl>
+    <>
+      <dl className="meta details">
+        <dt>{t.hosts.form.address}</dt>
+        <dd className="mono">{host.address}{host.port !== 22 && `:${host.port}`}</dd>
+        <dt>{t.hosts.form.user}</dt>
+        <dd className="mono">{host.user}</dd>
+        {shared && (
+          <>
+            <dt>{t.hosts.form.auth}</dt>
+            <dd>{authLabel(host, keyName)}</dd>
+          </>
+        )}
+        {shared && host.auth.type === "password" && host.hasPassword && (
+          <>
+            <dt>{t.common.password}</dt>
+            <dd><SavedPassword host={host} /></dd>
+          </>
+        )}
+        {via && (
+          <>
+            <dt>{t.hosts.details.via}</dt>
+            <dd className="mono">{via}</dd>
+          </>
+        )}
+        <dt>{t.hosts.form.group}</dt>
+        <dd>{groupLabel(host.group)}</dd>
+        {host.tags.length > 0 && (
+          <>
+            <dt>{t.hosts.form.tags}</dt>
+            <dd>{host.tags.join(", ")}</dd>
+          </>
+        )}
+      </dl>
+      <div className="field">
+        <Checkbox checked={!!host.forwardAgent} onChange={setForward}>{t.hosts.form.forwardAgent}</Checkbox>
+        {host.forwardAgent && <span className="small warn-text">{t.hosts.form.forwardAgentRisk}</span>}
+      </div>
+    </>
   );
 }
 

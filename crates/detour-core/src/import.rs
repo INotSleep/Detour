@@ -34,6 +34,8 @@ pub struct ConfigHost {
     pub jumps: Vec<String>,
     /// Set when the host relies on something Detour does not do (`ProxyCommand`).
     pub unsupported: Option<String>,
+    /// `ForwardAgent` is on (`yes` or an agent socket).
+    pub forward_agent: bool,
 }
 
 /// A line of `known_hosts`, one per name it lists.
@@ -207,6 +209,7 @@ pub fn read_config(path: &Path, home: &Path) -> Vec<ConfigHost> {
             let jumps = opts.get("proxyjump").filter(|j| !j.eq_ignore_ascii_case("none")).map(|j| j.split(',').map(|h| h.trim().trim_start_matches("ssh://").to_string()).filter(|h| !h.is_empty()).collect()).unwrap_or_default();
             ConfigHost {
                 port: opts.get("port").and_then(|p| p.parse().ok()).unwrap_or(22),
+                forward_agent: opts.get("forwardagent").is_some_and(|v| !v.eq_ignore_ascii_case("no")),
                 unsupported: opts.get("proxycommand").filter(|c| !c.eq_ignore_ascii_case("none")).map(|_| "proxyCommand".to_string()),
                 alias,
                 address,

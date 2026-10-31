@@ -79,10 +79,6 @@ export async function copyText(text: string): Promise<boolean> {
   }
 }
 
-export function sshCommand(h: { user: string; address: string; port: number }) {
-  return `ssh ${h.port !== 22 ? `-p ${h.port} ` : ""}${h.user}@${h.address}`;
-}
-
 /** "5 min ago", "yesterday", "3 days ago", "Mar 14, 2026". */
 export function formatAgo(ms?: number): string {
   if (!ms) return "";

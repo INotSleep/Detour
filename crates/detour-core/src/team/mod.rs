@@ -720,6 +720,8 @@ impl TeamVault {
                 password: if v.auth == Auth::Password { password } else { None },
                 proxy_password: if v.proxy.as_ref().and_then(Proxy::user).is_some() { proxy_password } else { None },
                 proxy: v.proxy.clone(),
+                // Each member's own choice, kept in their personal vault.
+                forward_agent: false,
             };
             let mut new = fields_of(&host, &["lastConnected"]);
             // Members without the secret don't know the passwords: never overwrite them blindly.

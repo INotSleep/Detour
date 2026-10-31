@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import type { Auth, Host, Proxy, SshKey } from "../lib/types";
-import { Button, Field, PasswordInput, Segmented } from "./ui";
+import { Button, Checkbox, Field, PasswordInput, Segmented } from "./ui";
 import { isNoGroup } from "./common";
 import { tr, useT } from "../i18n";
 
@@ -20,6 +20,7 @@ export interface HostDraft {
   proxyPort: string;
   proxyUser: string;
   proxyPassword: string;
+  forwardAgent: boolean;
 }
 
 const proxyFields = (p: Proxy | null | undefined) => ({
@@ -42,12 +43,13 @@ export function draftFromHost(h: Host): HostDraft {
     keyId: h.auth.type === "key" ? h.auth.keyId : "",
     tags: h.tags.join(", "),
     password: "",
+    forwardAgent: !!h.forwardAgent,
     ...proxyFields(h.proxy),
   };
 }
 
 export function emptyDraft(keys: SshKey[], group = ""): HostDraft {
-  return { label: "", address: "", port: "22", user: "root", group, authType: keys.length ? "key" : "password", keyId: keys[0]?.id ?? "", tags: "", password: "", ...proxyFields(null) };
+  return { label: "", address: "", port: "22", user: "root", group, authType: keys.length ? "key" : "password", keyId: keys[0]?.id ?? "", tags: "", password: "", forwardAgent: false, ...proxyFields(null) };
 }
 
 export function draftErrors(d: HostDraft) {
@@ -73,7 +75,7 @@ function proxyOf(d: HostDraft): Proxy | null {
 }
 
 /** The typed host password is not part of the host; it goes to the vault via api.hostSetPassword. A typed proxy password goes with the host. */
-export function applyDraft(d: HostDraft): Pick<Host, "label" | "address" | "port" | "user" | "group" | "auth" | "tags" | "proxy" | "newProxyPassword" | "hasProxyPassword"> {
+export function applyDraft(d: HostDraft): Pick<Host, "label" | "address" | "port" | "user" | "group" | "auth" | "tags" | "proxy" | "newProxyPassword" | "hasProxyPassword" | "forwardAgent"> {
   const proxy = proxyOf(d);
   const typed = proxy && proxy.type !== "jump" && proxy.user && d.proxyPassword ? d.proxyPassword : undefined;
   return {
@@ -86,6 +88,7 @@ export function applyDraft(d: HostDraft): Pick<Host, "label" | "address" | "port
     group: d.group.trim(),
     auth: d.authType === "key" ? { type: "key", keyId: d.keyId } : { type: d.authType },
     tags: d.tags.split(",").map((t) => t.trim()).filter(Boolean),
+    forwardAgent: d.forwardAgent,
   };
 }
 
@@ -214,6 +217,10 @@ export function HostFields({ draft, set, keys, groups, showErrors, passwordSaved
           </div>
         </>
       )}
+      <div className="field">
+        <Checkbox checked={draft.forwardAgent} onChange={(forwardAgent) => set({ forwardAgent })}>{t.hosts.form.forwardAgent}</Checkbox>
+        {draft.forwardAgent && <span className="small warn-text">{t.hosts.form.forwardAgentRisk}</span>}
+      </div>
       <div className="row">
         <Field label={t.hosts.form.group}>
           <input className="input" list="host-groups" value={draft.group} onChange={(e) => set({ group: e.target.value })} placeholder={t.hosts.form.noGroup} />

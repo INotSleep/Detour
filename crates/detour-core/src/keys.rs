@@ -136,6 +136,33 @@ pub fn export(entry: &KeyEntry, new_passphrase: Option<&str>) -> Result<String> 
     }
 }
 
+/// Writes a private key file into `dir`, readable only by its owner (ssh refuses others).
+/// A file already there is never overwritten: one with the same key is used as it is,
+/// otherwise the key goes to `name-2`, `name-3` and so on. Returns where the key is.
+pub fn save_file(dir: &std::path::Path, name: &str, contents: &str) -> Result<std::path::PathBuf> {
+    use std::io::Write;
+    for n in 1..1000 {
+        let path = dir.join(if n == 1 { name.to_string() } else { format!("{name}-{n}") });
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+        match opts.open(&path) {
+            Ok(mut f) => {
+                f.write_all(contents.as_bytes())?;
+                return Ok(path);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                if std::fs::read_to_string(&path).is_ok_and(|t| t.trim() == contents.trim()) {
+                    return Ok(path);
+                }
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Err(Error::Io { message: format!("{}: too many files named {name}", dir.display()) })
+}
+
 /// Re-encrypts a key with a new passphrase (`None` removes it). Returns the updated entry.
 pub fn change_passphrase(entry: &KeyEntry, current: Option<&str>, new: Option<&str>, remember: bool) -> Result<KeyEntry> {
     let key = unlock(entry, current)?;
@@ -198,6 +225,19 @@ mod tests {
         let file = export(&k, Some("file-pw")).unwrap();
         assert!(is_encrypted(&file));
         assert_eq!(import("", &file, Some("file-pw"), false).unwrap().fingerprint, k.fingerprint);
+    }
+
+    #[test]
+    fn saved_key_files_never_overwrite_another_key() {
+        let dir = std::env::temp_dir().join(format!("detour-keyfiles-{}", new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("id_ed25519"), "someone else's key").unwrap();
+        let k = export(&generate("p", KeyAlgorithm::Ed25519, None, false).unwrap(), None).unwrap();
+        let first = save_file(&dir, "id_ed25519", &k).unwrap();
+        assert_eq!(first, dir.join("id_ed25519-2"));
+        assert_eq!(std::fs::read_to_string(dir.join("id_ed25519")).unwrap(), "someone else's key");
+        assert_eq!(save_file(&dir, "id_ed25519", &k).unwrap(), first, "the same key is reused");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

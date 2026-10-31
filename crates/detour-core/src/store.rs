@@ -256,6 +256,7 @@ impl Store {
                     password: if v.auth == Auth::Password { kept } else { None },
                     proxy_password: if v.proxy.as_ref().and_then(Proxy::user).is_some() { kept_proxy } else { None },
                     proxy: v.proxy,
+                    forward_agent: v.forward_agent,
                     last_connected,
                     id: v.id,
                     group: v.group,
@@ -515,6 +516,7 @@ impl Store {
             let key = format!("{id}/{}", h.id);
             h.last_connected = v.team_last_connected.get(&key).copied();
             h.own = v.team_own.get(&key).map(OwnLoginView::from);
+            h.forward_agent = v.team_forward_agent.contains(&key);
         }
         if let Some(r) = v.teams.iter().find(|t| t.id == id)
             && let Some(remote) = &r.remote
@@ -628,7 +630,21 @@ impl Store {
     }
 
     pub fn team_put(&mut self, id: &str, update: VaultUpdate) -> Result<TeamView> {
+        // Agent forwarding is this person's choice, kept here; the team never sees it.
+        let forward: Vec<(String, bool)> = update.hosts.iter().map(|h| (format!("{id}/{}", h.id), h.forward_agent)).collect();
         self.team_mut(id)?.put(update)?;
+        let v = self.vault_mut()?;
+        let before = v.team_forward_agent.clone();
+        for (key, on) in forward {
+            if on {
+                v.team_forward_agent.insert(key);
+            } else {
+                v.team_forward_agent.remove(&key);
+            }
+        }
+        if v.team_forward_agent != before {
+            self.save()?;
+        }
         self.after_team(id)
     }
 
@@ -745,6 +761,7 @@ impl Store {
         let t = self.team(vault)?;
         let mut host = t.host(host_id).ok_or_else(|| not_found("host"))?;
         let v = &self.unlocked()?.vault;
+        host.forward_agent = v.team_forward_agent.contains(&format!("{vault}/{host_id}"));
         if let Some(own) = v.team_own.get(&format!("{vault}/{host_id}")) {
             let key = match &own.auth {
                 Auth::Key { key_id } => Some(v.keys.iter().find(|k| &k.id == key_id).ok_or_else(|| not_found("key"))?.clone()),
@@ -1167,6 +1184,7 @@ impl Store {
             password: None,
             proxy: None,
             proxy_password: None,
+            forward_agent: false,
         };
         let known = v.known_hosts.iter().find(|k| k.endpoint == endpoint(&host)).cloned();
         Ok(Remote::Ssh { request: ssh::ConnectRequest { host, key, secret: None, known, trust_fingerprint, route: ssh::Route::Direct }, path: url.path })
@@ -1290,7 +1308,7 @@ mod tests {
     }
 
     fn host(id: &str, auth: Auth) -> HostView {
-        HostView { id: id.into(), group: "g".into(), label: id.into(), address: "127.0.0.1".into(), port: 22, user: "u".into(), auth, tags: vec![], last_connected: None, has_password: false, new_password: None, own: None, proxy: None, has_proxy_password: false, new_proxy_password: None }
+        HostView { id: id.into(), group: "g".into(), label: id.into(), address: "127.0.0.1".into(), port: 22, user: "u".into(), auth, tags: vec![], last_connected: None, has_password: false, new_password: None, own: None, proxy: None, has_proxy_password: false, new_proxy_password: None, forward_agent: false }
     }
 
     fn update(hosts: Vec<HostView>, keys: Vec<KeyView>) -> VaultUpdate {
@@ -1517,6 +1535,7 @@ impl Store {
                 password: None,
                 proxy: None,
                 proxy_password: None,
+                forward_agent: h.forward_agent,
             });
             result.hosts += 1;
         }
@@ -1537,7 +1556,7 @@ impl Store {
                             Some(id) => id,
                             None => {
                                 let id = crate::new_id();
-                                v.hosts.push(Host { id: id.clone(), group: IMPORT_GROUP.into(), label: hop.clone(), address, port, user, auth: Auth::Agent, tags: vec![], last_connected: None, password: None, proxy: None, proxy_password: None });
+                                v.hosts.push(Host { id: id.clone(), group: IMPORT_GROUP.into(), label: hop.clone(), address, port, user, auth: Auth::Agent, tags: vec![], last_connected: None, password: None, proxy: None, proxy_password: None, forward_agent: false });
                                 result.hosts += 1;
                                 // A hop written out in full goes through the hop before it.
                                 if let Some(prev) = &previous

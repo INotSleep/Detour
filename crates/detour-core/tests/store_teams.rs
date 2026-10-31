@@ -18,7 +18,7 @@ fn temp_dir(tag: &str) -> PathBuf {
 }
 
 fn host(id: &str) -> HostView {
-    HostView { id: id.into(), group: "g".into(), label: id.into(), address: "127.0.0.1".into(), port: 22, user: "u".into(), auth: Auth::Password, tags: vec![], last_connected: None, has_password: false, new_password: Some("pw".into()), own: None, proxy: None, has_proxy_password: false, new_proxy_password: None }
+    HostView { id: id.into(), group: "g".into(), label: id.into(), address: "127.0.0.1".into(), port: 22, user: "u".into(), auth: Auth::Password, tags: vec![], last_connected: None, has_password: false, new_password: Some("pw".into()), own: None, proxy: None, has_proxy_password: false, new_proxy_password: None, forward_agent: false }
 }
 
 /// Alice with a team holding one host with a shared password, and Bob joined with `access`.
@@ -171,4 +171,18 @@ fn a_team_opens_from_this_devices_cache_without_checking_everything_again() {
     s.unlock("m").unwrap();
     assert!(s.team_signatures_checked(&team.id) >= 1);
     assert!(s.team_view(&team.id).unwrap().problems.iter().any(|p| matches!(p.problem, Problem::Rejected { .. })));
+}
+
+#[test]
+fn agent_forwarding_is_each_members_own_choice() {
+    let (mut alice, mut bob, id) = team_with_bob(Level::Secret);
+    let forwarded = HostView { forward_agent: true, new_password: None, ..host("h1") };
+    let view = alice.team_put(&id, VaultUpdate { hosts: vec![forwarded], keys: vec![], snippets: vec![], tunnels: vec![] }).unwrap();
+    assert!(view.data.hosts[0].forward_agent);
+    assert!(alice.connect_request_in(&id, "h1", None, None).unwrap().host.forward_agent);
+
+    // Bob's keys are not forwarded because Alice wants hers to be.
+    let view = bob.sync_team(&id).unwrap();
+    assert!(!view.data.hosts[0].forward_agent);
+    assert!(!bob.connect_request_in(&id, "h1", None, None).unwrap().host.forward_agent);
 }

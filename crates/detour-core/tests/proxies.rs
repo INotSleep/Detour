@@ -84,6 +84,7 @@ fn request(s: &Server, known: bool, route: Route) -> ConnectRequest {
         password: Some("pw".into()),
         proxy: None,
         proxy_password: None,
+        forward_agent: false,
     };
     ConnectRequest { host, key: None, secret: None, known: known.then(|| s.known.clone()), trust_fingerprint: None, route }
 }
@@ -243,7 +244,7 @@ async fn through_an_http_proxy() {
 }
 
 fn view(id: &str, port: u16, proxy: Option<Proxy>) -> HostView {
-    HostView { id: id.into(), group: String::new(), label: id.into(), address: "127.0.0.1".into(), port, user: "u".into(), auth: Auth::Password, tags: vec![], last_connected: None, has_password: false, new_password: Some("pw".into()), own: None, proxy, has_proxy_password: false, new_proxy_password: None }
+    HostView { id: id.into(), group: String::new(), label: id.into(), address: "127.0.0.1".into(), port, user: "u".into(), auth: Auth::Password, tags: vec![], last_connected: None, has_password: false, new_password: Some("pw".into()), own: None, proxy, has_proxy_password: false, new_proxy_password: None, forward_agent: false }
 }
 
 #[tokio::test]

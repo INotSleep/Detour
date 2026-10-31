@@ -402,17 +402,30 @@ export const api = {
 
   /** Asks where to save and writes the file. Returns where it went, or null if cancelled. */
   async saveTextFile(defaultName: string, contents: string): Promise<string | null> {
-    if (real) {
-      const path = await save({ defaultPath: defaultName });
-      if (!path) return null;
-      await invoke("write_text_file", { path, contents });
-      return path;
-    }
+    const path = await api.pickSavePath(defaultName);
+    if (path) await api.writeTextFile(path, contents);
+    return path;
+  },
+
+  /** Asks where to save a file; null if cancelled. The demo keeps the name. */
+  async pickSavePath(defaultName: string): Promise<string | null> {
+    return real ? save({ defaultPath: defaultName }) : defaultName;
+  },
+
+  /** Writes a file at a path from pickSavePath; the demo downloads it. */
+  async writeTextFile(path: string, contents: string): Promise<void> {
+    if (real) return invoke("write_text_file", { path, contents });
     const url = URL.createObjectURL(new Blob([contents], { type: "text/plain" }));
-    const a = Object.assign(document.createElement("a"), { href: url, download: defaultName });
+    const a = Object.assign(document.createElement("a"), { href: url, download: baseName(path) });
     a.click();
     URL.revokeObjectURL(url);
-    return defaultName;
+  },
+
+  /** Saves keys as private key files in a folder (an existing file is never replaced); returns where each one is. */
+  async keyFilesSave(dir: string, keys: { key: SshKey; name: string }[]): Promise<string[]> {
+    if (real) return invoke("key_files_save", { dir, keys: keys.map(({ key, name }) => ({ vaultId: key.vaultId, keyId: key.id, name })) });
+    for (const { key, name } of keys) await api.writeTextFile(name, await api.keyExport(key, null));
+    return keys.map(({ name }) => `${dir}${name}`);
   },
 
   /* vault */

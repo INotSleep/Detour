@@ -24,7 +24,7 @@ fn device(tag: &str) -> Mutex<Store> {
 }
 
 fn host(id: &str, label: &str, auth: Auth) -> HostView {
-    HostView { id: id.into(), group: String::new(), label: label.into(), address: "10.0.0.7".into(), port: 22, user: "opsuser".into(), auth, tags: vec![], last_connected: None, has_password: false, new_password: None, own: None, proxy: None, has_proxy_password: false, new_proxy_password: None }
+    HostView { id: id.into(), group: String::new(), label: label.into(), address: "10.0.0.7".into(), port: 22, user: "opsuser".into(), auth, tags: vec![], last_connected: None, has_password: false, new_password: None, own: None, proxy: None, has_proxy_password: false, new_proxy_password: None, forward_agent: false }
 }
 
 /// The UI's edit: the current view with `f` applied.
