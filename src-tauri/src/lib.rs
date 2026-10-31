@@ -36,8 +36,9 @@ impl Core {
         let io = |e: std::io::Error| json!({ "kind": "io", "message": e.to_string() });
         let mut client = start().await.map_err(io)?;
         let mut hello = client.call("hello", json!({ "client": "desktop" })).await?;
-        // A core of another version (the app was just updated) is replaced when nothing runs in it.
-        if hello["coreVersion"] != json!(detour_core::VERSION) && client.call("sessions_list", json!({})).await?.as_array().is_some_and(|l| l.is_empty()) && client.call("tunnels_status", json!({})).await?.as_array().is_some_and(|l| l.is_empty()) {
+        // A core of another version (the app was just updated, or rebuilt) is replaced when nothing runs in it.
+        let other = hello["coreVersion"] != json!(detour_core::VERSION) || hello["protocol"] != json!(detour_ipc::PROTOCOL);
+        if other && client.call("sessions_list", json!({})).await?.as_array().is_some_and(|l| l.is_empty()) && client.call("tunnels_status", json!({})).await?.as_array().is_some_and(|l| l.is_empty()) {
             let _ = client.call("quit", json!({})).await;
             client.closed().await;
             client = start().await.map_err(io)?;
@@ -287,6 +288,44 @@ fn local_mkdir(path: String) -> Result<()> {
     Ok(std::fs::create_dir(path)?)
 }
 
+/* ---------- Detour in AI clients ---------- */
+
+/// The command line next to the app, as installers put it: what AI clients start (`detour mcp`).
+fn cli_beside() -> Option<PathBuf> {
+    let cli = std::env::current_exe().ok()?.with_file_name(format!("detour{}", std::env::consts::EXE_SUFFIX));
+    cli.is_file().then_some(cli)
+}
+
+fn mcp_server(core: &Core, cli: PathBuf) -> detour_core::mcp_clients::Server {
+    // A vault folder of its own goes with it: the client won't have $DETOUR_DATA_DIR.
+    let own = (core.data_dir != detour_core::store::Store::default_dir()).then_some(core.data_dir.as_path());
+    detour_core::mcp_clients::Server::new(cli, own)
+}
+
+fn home_dirs() -> Result<detour_core::mcp_clients::Dirs> {
+    detour_core::mcp_clients::Dirs::of_user().ok_or_else(|| Error::NotFound { what: "home directory".into() })
+}
+
+/// The AI clients on this computer and whether they have Detour; none without the command line.
+#[tauri::command]
+async fn mcp_clients(core: State<'_, Arc<Core>>) -> Result<Vec<detour_core::mcp_clients::ClientState>> {
+    let Some(cli) = cli_beside() else { return Ok(Vec::new()) };
+    let (server, dirs) = (mcp_server(&core, cli), home_dirs()?);
+    tauri::async_runtime::spawn_blocking(move || detour_core::mcp_clients::clients(&dirs, &server).into_iter().filter(|c| c.installed).collect())
+        .await
+        .map_err(|e| Error::Internal { message: e.to_string() })
+}
+
+/// Adds Detour to an AI client, or takes it out.
+#[tauri::command]
+async fn mcp_client_set(core: State<'_, Arc<Core>>, id: String, on: bool) -> Result<()> {
+    let cli = cli_beside().ok_or_else(|| Error::NotFound { what: "detour".into() })?;
+    let (server, dirs) = (mcp_server(&core, cli), home_dirs()?);
+    tauri::async_runtime::spawn_blocking(move || if on { detour_core::mcp_clients::add(&dirs, &id, &server, true) } else { detour_core::mcp_clients::remove(&dirs, &id, true).map(|_| ()) })
+        .await
+        .map_err(|e| Error::Internal { message: e.to_string() })?
+}
+
 /// `DETOUR_DATA_DIR` overrides where the vault lives (tests, portable installs).
 fn data_dir() -> PathBuf {
     std::env::var_os("DETOUR_DATA_DIR").map(Into::into).unwrap_or_else(detour_core::store::Store::default_dir)
@@ -315,6 +354,8 @@ pub fn builder<R: tauri::Runtime>(builder: tauri::Builder<R>, data_dir: PathBuf)
             open_with,
             edit_copy_path,
             local_modified,
+            mcp_clients,
+            mcp_client_set,
         ])
 }
 

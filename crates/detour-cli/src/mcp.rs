@@ -255,6 +255,10 @@ fn explain(e: &Value) -> String {
         "forbidden" => "Agents can't do that through Detour.".into(),
         "tooManyRequests" => "Too many requests are waiting for the person. Wait for an answer to those first.".into(),
         "disconnected" => "Lost the connection to Detour. Try again.".into(),
+        // An older core refuses what it doesn't know as if we weren't trusted.
+        "oldCore" | "notTrusted" | "unknownMethod" => "The Detour core running now is an older version, without support for agents. Ask the person to restart it: \
+            `detour quit` in their terminal (or quit Detour), then try again."
+            .into(),
         _ => match e["message"].as_str() {
             Some(m) if !kind.is_empty() => format!("{kind}: {m}"),
             Some(m) => m.to_string(),
@@ -312,7 +316,10 @@ impl Detour {
         if link.as_ref().is_none_or(Client::is_closed) {
             let me = std::env::current_exe().map_err(|e| json!({ "message": e.to_string() }))?;
             let c = detour_ipc::connect_or_start(&me, &self.dir).await.map_err(|e| json!({ "kind": "disconnected", "message": e.to_string() }))?;
-            c.call("hello", json!({ "client": "mcp" })).await?;
+            let hello = c.call("hello", json!({ "client": "mcp" })).await?;
+            if hello["protocol"].as_u64().unwrap_or(0) < detour_ipc::PROTOCOL {
+                return Err(json!({ "kind": "oldCore" }));
+            }
             *link = Some(c);
         }
         let c = link.as_ref().unwrap().clone();
@@ -912,4 +919,60 @@ mod tests {
         assert!(names(&team, "h9") && names(&team, "acme/WEB") && names(&team, "web"));
         assert!(!names(&team, "other/web") && !names(&team, "db"));
     }
+}
+
+/* ---------- adding the server to AI clients (`detour mcp add`) ---------- */
+
+/// `detour mcp clients | add | remove`: this `detour` in the configs of the AI clients here.
+pub fn setup(action: crate::McpAction, dir: &Path, json: bool) -> crate::conn::Res<()> {
+    use crate::conn::Fail;
+    use crate::i18n::{error_text, t};
+    use detour_core::mcp_clients::{self, Dirs, Server};
+
+    let dirs = Dirs::of_user().ok_or_else(|| Fail("home directory".into()))?;
+    let me = std::env::current_exe().map_err(|e| Fail(e.to_string()))?;
+    // A vault folder of its own goes with it: the client won't have $DETOUR_DATA_DIR.
+    let own_dir = (dir != detour_core::store::Store::default_dir()).then_some(dir);
+    let server = Server::new(me, own_dir);
+    let fail = |e: detour_core::Error| Fail(error_text(&serde_json::to_value(&e).unwrap_or_default()));
+    let all = mcp_clients::clients(&dirs, &server);
+    let find = |id: &str| all.iter().find(|c| c.id.eq_ignore_ascii_case(id) || c.name.eq_ignore_ascii_case(id)).ok_or_else(|| Fail(format!("{}: {id} ({})", t().unknown_client, all.iter().map(|c| c.id).collect::<Vec<_>>().join(", "))));
+    match action {
+        crate::McpAction::Clients => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&all).unwrap_or_default());
+                return Ok(());
+            }
+            let state = |c: &mcp_clients::ClientState| match (c.installed, c.added, c.current) {
+                (_, true, true) => t().mcp_added,
+                (_, true, false) => t().mcp_outdated,
+                (true, false, _) => t().mcp_not_added,
+                (false, false, _) => t().mcp_not_installed,
+            };
+            let rows = all.iter().map(|c| vec![c.id.to_string(), c.name.to_string(), state(c).to_string(), if c.installed { c.config.clone() } else { String::new() }]).collect();
+            crate::cmds::table(&t().headers_mcp, rows);
+        }
+        crate::McpAction::Add { client } => {
+            let picked: Vec<_> = match client {
+                Some(id) => vec![find(&id)?.clone()],
+                // All the clients here that don't have it yet.
+                None => all.iter().filter(|c| c.installed && !c.current).cloned().collect(),
+            };
+            if picked.is_empty() {
+                eprintln!("{}", if all.iter().any(|c| c.installed) { t().mcp_all_added } else { t().mcp_no_clients });
+                return Ok(());
+            }
+            for c in picked {
+                mcp_clients::add(&dirs, c.id, &server, true).map_err(fail)?;
+                eprintln!("{} {}", t().mcp_added_to, c.name);
+            }
+            eprintln!("{}", t().mcp_restart);
+        }
+        crate::McpAction::Remove { client } => {
+            let c = find(&client)?;
+            let removed = mcp_clients::remove(&dirs, c.id, true).map_err(fail)?;
+            eprintln!("{} {}", if removed { t().mcp_removed_from } else { t().mcp_was_not_in }, c.name);
+        }
+    }
+    Ok(())
 }

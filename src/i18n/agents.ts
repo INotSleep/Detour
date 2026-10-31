@@ -50,6 +50,14 @@ export const en = {
   },
   tab: (agent: string) => `Opened by ${agent}`,
   runs: { running: "Running", timedOut: "timed out", noOutput: "No output" },
+  clients: {
+    title: "Detour in AI clients",
+    add: "Add",
+    update: "Update",
+    remove: "Remove",
+    added: (client: string) => `Detour added to ${client}: restart it`,
+    removed: (client: string) => `Detour removed from ${client}`,
+  },
 };
 
 export const ru: typeof en = {
@@ -101,4 +109,12 @@ export const ru: typeof en = {
   },
   tab: (agent: string) => `Открыл ${agent}`,
   runs: { running: "Выполняется", timedOut: "время вышло", noOutput: "Вывода нет" },
+  clients: {
+    title: "Detour в ИИ-клиентах",
+    add: "Добавить",
+    update: "Обновить",
+    remove: "Убрать",
+    added: (client: string) => `Detour добавлен в ${client}: перезапустите его`,
+    removed: (client: string) => `Detour убран из ${client}`,
+  },
 };

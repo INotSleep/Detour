@@ -143,7 +143,7 @@ pub(crate) async fn dispatch(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value
     }
     match method {
         /* ---------- the core itself ---------- */
-        "hello" => Ok(json!({ "connId": ctx.id, "coreVersion": detour_core::VERSION, "pid": std::process::id() })),
+        "hello" => Ok(json!({ "connId": ctx.id, "coreVersion": detour_core::VERSION, "protocol": detour_ipc::PROTOCOL, "pid": std::process::id() })),
         "core_info" => Ok(json!({ "coreVersion": detour_core::VERSION, "os": std::env::consts::OS })),
         "activity" => Ok(Value::Null),
         "settings_get" => Ok(serde_json::to_value(core.settings.lock().unwrap().clone()).unwrap_or_default()),

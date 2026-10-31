@@ -11,6 +11,7 @@ pub mod github;
 pub mod identity;
 pub mod import;
 pub mod keys;
+pub mod mcp_clients;
 pub mod merge;
 pub mod model;
 pub mod personal;

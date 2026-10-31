@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Bot, Check, ChevronDown, ChevronUp, Loader2 } from "lucide-react";
-import { api, errorText, type AgentRequest, type AgentRun, type AgentScope, type AgentToken, type AgentTtl } from "../lib/api";
+import { api, errorText, type AgentRequest, type AgentRun, type McpClient, type AgentScope, type AgentToken, type AgentTtl } from "../lib/api";
 import { copyText, formatAgo, useStore } from "../lib/store";
 import { Button, Checkbox, Modal, Segmented } from "./ui";
 import { locale, useT } from "../i18n";
@@ -223,4 +223,47 @@ function RunState({ run }: { run: AgentRun }) {
   if (run.timedOut) return <span className="run-code err">{t.timedOut}</span>;
   if (run.exitStatus === 0) return <Check size={13} className="ok-text" aria-label="0" />;
   return <span className="run-code err">{run.exitStatus ?? "?"}</span>;
+}
+
+/** Settings: adding Detour's MCP server to the AI clients on this computer. */
+export function McpClients() {
+  const t = useT().agents.clients;
+  const { toast } = useStore();
+  const [clients, setClients] = useState<McpClient[]>([]);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  useEffect(() => void api.mcpClients().then(setClients).catch(() => {}), []);
+
+  const set = async (c: McpClient, on: boolean) => {
+    setBusy(c.id);
+    try {
+      await api.mcpClientSet(c.id, on);
+      setClients(await api.mcpClients());
+      toast({ text: on ? t.added(c.name) : t.removed(c.name), tone: "success" });
+    } catch (e) {
+      toast({ text: errorText(e), tone: "error" });
+    }
+    setBusy(null);
+  };
+
+  if (!clients.length) return null;
+  return (
+    <section className="settings-group">
+      <h3 className="section-title">{t.title}</h3>
+      {clients.map((c) => (
+        <div key={c.id} className="setting">
+          <span>{c.name}</span>
+          <div className="mcp-client-actions">
+            {c.added && c.current && <Check size={15} className="ok-text" aria-label={t.add} />}
+            {c.added && <Button size="sm" variant="ghost" disabled={busy === c.id} onClick={() => void set(c, false)}>{t.remove}</Button>}
+            {!(c.added && c.current) && (
+              <Button size="sm" loading={busy === c.id} onClick={() => void set(c, true)}>
+                {c.added ? t.update : t.add}
+              </Button>
+            )}
+          </div>
+        </div>
+      ))}
+    </section>
+  );
 }

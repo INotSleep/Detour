@@ -66,7 +66,10 @@ enum Command {
     Approve,
     #[command(subcommand)]
     Agents(Agents),
-    Mcp,
+    Mcp {
+        #[command(subcommand)]
+        action: Option<McpAction>,
+    },
     // The core in this process (the app and the CLI start it by themselves); `--app`
     // is the window's program, which the core trusts.
     #[command(hide = true)]
@@ -186,6 +189,13 @@ enum Teams {
 }
 
 #[derive(Subcommand)]
+pub enum McpAction {
+    Clients,
+    Add { client: Option<String> },
+    Remove { client: String },
+}
+
+#[derive(Subcommand)]
 enum Agents {
     Ls,
     Revoke { agent: String },
@@ -215,7 +225,16 @@ async fn main() -> ExitCode {
             }
         };
     }
-    if let Command::Mcp = cli.command {
+    if let Command::Mcp { action } = cli.command {
+        if let Some(action) = action {
+            return match mcp::setup(action, &dir, cli.json) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(Fail(msg)) => {
+                    eprintln!("detour: {msg}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
         return match mcp::serve(&dir).await {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
@@ -310,7 +329,7 @@ async fn run(command: Command, dir: &std::path::Path, team: Option<String>, json
         Command::Approve => agents::approve(&ctx).await?,
         Command::Agents(Agents::Ls) => agents::list(&ctx).await?,
         Command::Agents(Agents::Revoke { agent }) => agents::revoke(&ctx, &agent).await?,
-        Command::Status | Command::Quit | Command::Daemon { .. } | Command::Mcp => unreachable!(),
+        Command::Status | Command::Quit | Command::Daemon { .. } | Command::Mcp { .. } => unreachable!(),
     }
     Ok(0)
 }

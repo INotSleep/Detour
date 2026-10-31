@@ -1133,3 +1133,4 @@ body.resizing-col, body.resizing-col * { cursor: row-resize !important; }
 .run-code { flex: none; min-width: 13px; font-size: 11px; font-weight: 600; text-align: center; }
 .run-code.err { color: var(--err); }
 .ok-text { color: var(--ok); flex: none; }
+.mcp-client-actions { display: flex; align-items: center; gap: 8px; }

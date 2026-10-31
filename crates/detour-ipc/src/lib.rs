@@ -22,6 +22,10 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 /// Longest frame either side accepts (a file read through MCP, a vault view).
 pub const MAX_FRAME: usize = 64 * 1024 * 1024;
 
+/// What the core's methods are, as a number that grows when clients need new ones
+/// (`hello` says it). A core without it is older than AI agents (2).
+pub const PROTOCOL: u64 = 2;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "camelCase")]
 pub enum Message {

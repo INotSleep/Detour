@@ -350,7 +350,7 @@ function demoKey(vaultId: string, name: string, algorithm: SshKey["algorithm"], 
 /* ---------- the core ---------- */
 
 /** What the window does itself; everything else is a method of the core. */
-const WINDOW_COMMANDS = new Set(["core_info", "core_me", "write_text_file", "local_home", "local_list", "local_mkdir", "open_local", "editors", "open_with", "edit_copy_path", "local_modified"]);
+const WINDOW_COMMANDS = new Set(["core_info", "core_me", "write_text_file", "local_home", "local_list", "local_mkdir", "open_local", "editors", "open_with", "edit_copy_path", "local_modified", "mcp_clients", "mcp_client_set"]);
 
 /**
  * Calls the core with the arguments its method takes. A `Channel` among them becomes
@@ -419,6 +419,17 @@ export interface AgentRun {
   exitStatus: number | null;
   timedOut: boolean;
   output: string;
+}
+
+/** An AI client on this computer (detour_core::mcp_clients::ClientState). */
+export interface McpClient {
+  id: string;
+  name: string;
+  installed: boolean;
+  added: boolean;
+  /** It starts this Detour (not one from another place). */
+  current: boolean;
+  config: string;
 }
 
 /** Output of a session: bytes as they come, then its end. */
@@ -658,6 +669,15 @@ export const api = {
   /** What an agent ran in a session, for its tab. */
   sessionRuns(sessionId: string): Promise<AgentRun[]> {
     return real ? invoke("session_runs", { sessionId }) : Promise.resolve([]);
+  },
+
+  /** AI clients on this computer, to add Detour to (none when the command line isn't installed). */
+  mcpClients(): Promise<McpClient[]> {
+    return real ? invoke("mcp_clients") : Promise.resolve([]);
+  },
+
+  mcpClientSet(id: string, on: boolean): Promise<void> {
+    return invoke("mcp_client_set", { id, on });
   },
 
   /** Takes a token away: its sessions, file browsers and tunnels close. */
