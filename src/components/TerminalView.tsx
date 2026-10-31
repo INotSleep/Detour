@@ -20,6 +20,8 @@ interface Props {
   host: Host;
   active: boolean;
   initialCommand?: string;
+  /** A session the core already holds, shown instead of opening one. */
+  attach?: string;
   onStatus: (s: SessionStatus) => void;
   onExit: () => void;
   /** Splits the tab, opening another session to this host beside or below. */
@@ -39,7 +41,7 @@ const SEARCH_COLORS = {
   activeMatchColorOverviewRuler: "#e5a54b",
 };
 
-export function TerminalView({ host, active, initialCommand, onStatus, onExit, onSplit, splitDirs = ["row", "col"], onFocus }: Props) {
+export function TerminalView({ host, active, initialCommand, attach, onStatus, onExit, onSplit, splitDirs = ["row", "col"], onFocus }: Props) {
   const { settings, themes, ws, update, toast, applyTeamView } = useStore();
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -153,9 +155,11 @@ export function TerminalView({ host, active, initialCommand, onStatus, onExit, o
     if (api.usesCore(host.vaultId)) {
       stop = runRealSession(term, host, {
         initialCommand,
+        attach,
         onStatus: (s) => {
           cb.current.onStatus(s);
-          if (s === "connected") update((w) => ({ ...w, hosts: w.hosts.map((h) => (h.id === host.id ? { ...h, lastConnected: Date.now() } : h)) }));
+          // A session shown again was connected earlier.
+          if (s === "connected" && !attach) update((w) => ({ ...w, hosts: w.hosts.map((h) => (h.id === host.id ? { ...h, lastConnected: Date.now() } : h)) }));
         },
         onExit: () => cb.current.onExit(),
         onSecret: offerSave,

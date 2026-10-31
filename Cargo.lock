@@ -1344,6 +1344,8 @@ name = "detour"
 version = "0.2.3"
 dependencies = [
  "detour-core",
+ "detour-daemon",
+ "detour-ipc",
  "serde",
  "serde_json",
  "tauri",
@@ -1353,6 +1355,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-process",
  "tauri-plugin-updater",
+ "tokio",
 ]
 
 [[package]]

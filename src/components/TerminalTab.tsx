@@ -7,12 +7,16 @@ import { TerminalView, type SplitDir } from "./TerminalView";
 interface Pane {
   id: string;
   command?: string;
+  /** A session the core already holds, shown instead of opening one. */
+  attach?: string;
 }
 
 interface Props {
   host: Host;
   active: boolean;
   initialCommand?: string;
+  /** The first pane shows this session of the core. */
+  attach?: string;
   onStatus: (s: SessionStatus) => void;
   /** The last pane closed. */
   onExit: () => void;
@@ -22,8 +26,8 @@ interface Props {
 const MAX_PANES = 6;
 
 /** A terminal tab: one session, or several to the same host side by side or stacked. */
-export function TerminalTab({ host, active, initialCommand, onStatus, onExit }: Props) {
-  const [panes, setPanes] = useState<Pane[]>(() => [{ id: uid("p"), command: initialCommand }]);
+export function TerminalTab({ host, active, initialCommand, attach, onStatus, onExit }: Props) {
+  const [panes, setPanes] = useState<Pane[]>(() => [{ id: uid("p"), command: initialCommand, attach }]);
   const [dir, setDir] = useState<SplitDir>("row");
   // Share of the tab per pane, summing to 1.
   const [sizes, setSizes] = useState<number[]>([1]);
@@ -87,6 +91,7 @@ export function TerminalTab({ host, active, initialCommand, onStatus, onExit }: 
               host={host}
               active={active && focused === p.id}
               initialCommand={p.command}
+              attach={p.attach}
               onStatus={(s) => {
                 statuses.current.set(p.id, s);
                 if (p.id === focused) report();

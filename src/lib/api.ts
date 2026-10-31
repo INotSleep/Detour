@@ -1,11 +1,13 @@
 // The only place the UI talks to the backend.
 //
-// In the Tauri window everything goes to detour-core. In a plain browser
+// In the Tauri window everything goes to the Detour core, a process of its own
+// that the window starts when none runs (see src-tauri). In a plain browser
 // (vite dev) everything is demo data, so the UI can be developed without the
 // Rust side.
 
 import { tr } from "../i18n";
-import { Channel, invoke, isTauri } from "@tauri-apps/api/core";
+import { Channel, invoke as tauriInvoke, isTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -345,6 +347,55 @@ function demoKey(vaultId: string, name: string, algorithm: SshKey["algorithm"], 
   };
 }
 
+/* ---------- the core ---------- */
+
+/** What the window does itself; everything else is a method of the core. */
+const WINDOW_COMMANDS = new Set(["core_info", "core_me", "write_text_file", "local_home", "local_list", "local_mkdir", "open_local", "editors", "open_with", "edit_copy_path", "local_modified"]);
+
+/**
+ * Calls the core with the arguments its method takes. A `Channel` among them becomes
+ * the method's stream: terminal output, transfer progress.
+ */
+function invoke<T>(cmd: string, args: Record<string, unknown> = {}): Promise<T> {
+  if (WINDOW_COMMANDS.has(cmd)) return tauriInvoke<T>(cmd, args);
+  const key = Object.keys(args).find((k) => args[k] instanceof Channel);
+  if (!key) return tauriInvoke<T>("core_call", { method: cmd, params: args });
+  const { [key]: channel, ...params } = args;
+  return tauriInvoke<T>("core_stream", { method: cmd, params, channel });
+}
+
+/** Something that changed in the core because of someone else (the CLI, an agent, sync). */
+export interface CoreEvent {
+  name: string;
+  data: unknown;
+}
+
+/** A terminal session the core holds (detour_daemon::sessions::SessionInfo). */
+export interface CoreSession {
+  id: string;
+  vaultId: string;
+  hostId: string;
+  owner: { type: "user" } | { type: "agent"; tokenId: string };
+  startedAt: number;
+  /** Ends with the client that opened it (`detour ssh`): not a tab of the window. */
+  transient: boolean;
+}
+
+/** Output of a session: bytes as they come, then its end. */
+function sessionChannel(cb: SessionCallbacks) {
+  const ch = new Channel<ArrayBuffer | { closed: true; exitStatus: number | null }>();
+  ch.onmessage = (m) => {
+    // A handler that throws would stop the channel for good: Tauri waits for that message forever.
+    try {
+      if (m instanceof ArrayBuffer) cb.onData(new Uint8Array(m));
+      else if (m && typeof m === "object" && "closed" in m) cb.onClosed(m.exitStatus);
+    } catch (e) {
+      console.error("session event failed", e);
+    }
+  };
+  return ch;
+}
+
 /* ---------- files helpers ---------- */
 
 function progressChannel(onProgress: OnProgress) {
@@ -458,8 +509,9 @@ export const api = {
     if (real) await invoke("vault_change_master_password", { current, new: next });
   },
 
-  async vaultPut(data: PersonalData): Promise<VaultView> {
-    return invoke("vault_put", { update: toView(data) });
+  /** `base` is the vault as this window last saw it: only what changed since goes in. */
+  async vaultPut(data: PersonalData, base?: PersonalData): Promise<VaultView> {
+    return invoke("vault_put", { update: toView(data), base: base ? toView(base) : null });
   },
 
   /* hosts */
@@ -516,17 +568,33 @@ export const api = {
     args: { vaultId: string; hostId: string; secret: string | null; trustFingerprint: string | null; cols: number; rows: number },
     cb: SessionCallbacks,
   ): Promise<OpenedSession> {
-    const onEvent = new Channel<ArrayBuffer | { closed: true; exitStatus: number | null }>();
-    onEvent.onmessage = (m) => {
-      // A handler that throws would stop the channel for good: Tauri waits for that message forever.
-      try {
-        if (m instanceof ArrayBuffer) cb.onData(new Uint8Array(m));
-        else if (m && typeof m === "object" && "closed" in m) cb.onClosed(m.exitStatus);
-      } catch (e) {
-        console.error("session event failed", e);
-      }
-    };
-    return invoke("session_open", { args, onEvent });
+    return invoke("session_open", { args, onEvent: sessionChannel(cb) });
+  },
+
+  /** Shows a session the core already holds: its recent output, then what follows. */
+  sessionAttach(sessionId: string, cb: SessionCallbacks): Promise<void> {
+    return invoke("session_attach", { sessionId, onEvent: sessionChannel(cb) });
+  },
+
+  sessionsList(): Promise<CoreSession[]> {
+    return real ? invoke("sessions_list") : Promise.resolve([]);
+  },
+
+  /** Events of the core; returns a way to stop listening. */
+  onCoreEvent(cb: (e: CoreEvent) => void): () => void {
+    if (!real) return () => {};
+    const stop = listen<CoreEvent>("core-event", (e) => cb(e.payload));
+    return () => void stop.then((f) => f());
+  },
+
+  /** Auto-lock runs in the core, so it locks with or without a window. */
+  coreSettingsSet(autoLockMinutes: number): Promise<void> {
+    return real ? invoke("settings_set", { autoLockMinutes }) : Promise.resolve();
+  },
+
+  /** Someone is using the window: auto-lock counts from now. */
+  activity(): Promise<void> {
+    return real ? invoke("activity") : Promise.resolve();
   },
 
   sessionInput(sessionId: string, data: string) {
@@ -567,7 +635,7 @@ export const api = {
   teamUseGithub: (id: string): Promise<TeamView> => invoke("team_use_github", { id }),
   teamRecoverGit: (g: GitLogin, recoveryKey: string, myName: string, trustFingerprint?: string): Promise<TeamView> =>
     invoke("team_recover_git", { url: g.url, auth: g.auth, token: g.token ?? null, github: g.github ?? false, recoveryKey, myName, trustFingerprint: trustFingerprint ?? null }),
-  teamPut: (id: string, data: PersonalData): Promise<TeamView> => invoke("team_put", { id, update: toView(data) }),
+  teamPut: (id: string, data: PersonalData, base?: PersonalData): Promise<TeamView> => invoke("team_put", { id, update: toView(data), base: base ? toView(base) : null }),
   teamRename: (id: string, name: string): Promise<TeamView> => invoke("team_rename", { id, name }),
   teamMemberAdd: (id: string, detourId: string, name: string, role: Role, access: Level): Promise<TeamView> => invoke("team_member_add", { id, detourId, name, role, access }),
   teamMemberUpdate: (id: string, member: string, role: Role): Promise<TeamView> => invoke("team_member_update", { id, member, role }),

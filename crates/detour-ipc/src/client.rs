@@ -115,6 +115,10 @@ impl Client {
         self.events.subscribe()
     }
 
+    pub fn is_closed(&self) -> bool {
+        *self.closed.borrow() || self.out.is_closed()
+    }
+
     /// Resolves when the connection to the core is gone.
     pub async fn closed(&self) {
         let _ = self.closed.clone().wait_for(|gone| *gone).await;

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeftRight, Code, FolderOpen, FolderPlus, KeyRound, Plus, Server, Settings as SettingsIcon, Users, X } from "lucide-react";
 import { LangContext, lang as currentLang, resolveLang, setLang, tr, useT } from "./i18n";
 import { api, errorText, fromView, type CoreInfo, type SyncInfo, type TeamView, type VaultView } from "./lib/api";
+import { shownSessions } from "./lib/realSession";
 import { applyTeamEntries, applyTeamView, dataOf, removeVault, writable } from "./lib/teams";
 import { mockWorkspace } from "./lib/mockData";
 import { StoreContext, shortcutKey, uid, type Section, type Store, type UpdateState } from "./lib/store";
@@ -31,6 +32,8 @@ interface Session {
   title: string;
   status: SessionStatus;
   command?: string;
+  /** A session the core already holds (opened before the window was, or by an agent). */
+  attach?: string;
 }
 
 const sectionIcon: Record<Section, typeof Server> = {
@@ -107,28 +110,51 @@ export default function App() {
   const [updateState, setUpdateState] = useState<UpdateState>({ kind: "idle" });
   const toaster = useToaster();
 
+  /** Tabs for the core's sessions this window doesn't show: those it had before it closed, an agent's. */
+  const restoreSessions = useCallback(async () => {
+    const list = await api.sessionsList().catch(() => []);
+    const hosts = wsRef.current?.hosts ?? [];
+    setSessions((tabs) => {
+      const fresh = list.filter((c) => !c.transient && !shownSessions.has(c.id) && !tabs.some((t) => t.attach === c.id) && hosts.some((h) => h.id === c.hostId && h.vaultId === c.vaultId));
+      if (!fresh.length) return tabs;
+      return [
+        ...tabs,
+        ...fresh.map((c) => {
+          const host = hosts.find((h) => h.id === c.hostId)!;
+          return { id: uid("s"), hostId: c.hostId, kind: "terminal" as const, title: host.label, status: "connected" as const, attach: c.id };
+        }),
+      ];
+    });
+  }, []);
+
   useEffect(() => {
     api.coreInfo().then(setCoreInfo).catch(() => setCoreInfo(null));
     api.vaultStatus().then(async (st) => {
       if (!st.initialized) return setPhase("setup");
       if (!st.unlocked) return setPhase("locked");
-      setWs(await loadWorkspace(null));
+      const fresh = await loadWorkspace(null);
+      wsRef.current = fresh;
+      setWs(fresh);
       setPhase("ready");
+      void restoreSessions();
     });
-  }, []);
+  }, [restoreSessions]);
 
   const unlocked = async (view: VaultView | null) => {
     lastSaved.current.clear();
     const fresh = await loadWorkspace(view);
     // Keep tunnel switches and other in-memory state of a workspace that was only locked.
     setWs((prev) => (prev && api.real ? { ...fresh, tunnels: fresh.tunnels.map((t) => prev.tunnels.find((p) => p.id === t.id) ?? t) } : prev ?? fresh));
+    wsRef.current = fresh;
     setPhase("ready");
+    void restoreSessions();
   };
 
   const lock = useCallback(async () => {
     await api.vaultLock();
     setPhase("locked");
   }, []);
+
 
   // The latest workspace, for decisions made outside React's state updaters.
   // Updaters must stay pure: React may run them twice, and a side effect there
@@ -229,28 +255,11 @@ export default function App() {
     });
   }, []);
 
-  // The personal vault's sync: its state, and a sync every 20 seconds while it is on.
+  // The personal vault's sync: its state now; the core syncs every 20 seconds and says so.
   useEffect(() => {
     if (phase === "ready") api.syncStatus().then(setSync).catch(() => {});
   }, [phase]);
   const syncOn = sync?.enabled ?? false;
-  useEffect(() => {
-    if (!api.real || phase !== "ready" || !syncOn) return;
-    const run = () =>
-      api
-        .syncNow()
-        .then((r) => {
-          setSync(r.status);
-          if (r.changed) {
-            void refreshPersonal();
-            void refreshTeams();
-          }
-        })
-        .catch(() => {});
-    void run();
-    const timer = setInterval(run, 20_000);
-    return () => clearInterval(timer);
-  }, [phase, syncOn, refreshPersonal, refreshTeams]);
   // After an edit the core merges and sends it; look at the outcome once it had time to go out.
   const syncCheck = useRef<ReturnType<typeof setTimeout>>(undefined);
   const afterPersonalEdit = useCallback(() => {
@@ -272,9 +281,10 @@ export default function App() {
       if (json === prev) continue;
       lastSaved.current.set(v.id, json);
       const fail = (e: unknown) => toaster.push({ text: tr().common.saveFailed(errorText(e)), tone: "error" });
+      const base = JSON.parse(prev) as typeof data;
       if (v.kind === "personal") {
         api
-          .vaultPut(data)
+          .vaultPut(data, base)
           .then(() => {
             if (syncOn) afterPersonalEdit();
             // A typed password is now in the vault: drop it from UI memory without another save.
@@ -287,63 +297,93 @@ export default function App() {
           })
           .catch(fail);
       } else {
-        api.teamPut(v.id, data).then(applyView).catch(fail);
+        api.teamPut(v.id, data, base).then(applyView).catch(fail);
       }
     }
   }, [ws, phase, toaster.push, applyView, syncOn, afterPersonalEdit]);
 
   // Tunnels run in the core: keep switches, connection counts and failures in step with it.
-  const tunnelsActive = ws?.tunnels.some((t) => t.state === "on" || t.state === "starting") ?? false;
+  const applyTunnels = useCallback((list: Awaited<ReturnType<typeof api.tunnelsStatus>>) => {
+    const byKey = new Map(list.map((s) => [s.key, s]));
+    setWs(
+      (w) =>
+        w && {
+          ...w,
+          tunnels: w.tunnels.map((t) => {
+            const s = byKey.get(`${t.vaultId}/${t.id}`);
+            if (t.state === "starting") return t;
+            if (!s) return t.state === "on" ? { ...t, state: "off" as const, connections: 0 } : t;
+            if (s.state === "error") return { ...t, state: "error" as const, connections: 0, error: s.error ? errorText(s.error) : undefined };
+            return t.state === "on" && t.connections === s.connections ? t : { ...t, state: "on" as const, connections: s.connections, error: undefined };
+          }),
+        },
+    );
+  }, []);
+  useEffect(() => {
+    if (api.real && phase === "ready") api.tunnelsStatus().then(applyTunnels).catch(() => {});
+  }, [phase, applyTunnels]);
+
+  // What the core does without the window (sync, teammates' changes, tunnels, the CLI
+  // or an agent at work, locking) reaches it as events.
+  const phaseRef = useRef(phase);
+  phaseRef.current = phase;
+  useEffect(
+    () =>
+      api.onCoreEvent((e) => {
+        const ready = phaseRef.current === "ready";
+        switch (e.name) {
+          case "data.changed":
+            if (ready) {
+              void refreshPersonal();
+              void refreshTeams();
+            }
+            break;
+          case "sync.status":
+            if (e.data) setSync(e.data as SyncInfo);
+            break;
+          case "team.synced":
+            if (ready) applyView(e.data as TeamView);
+            break;
+          case "tunnels.status":
+            if (ready) applyTunnels(e.data as Awaited<ReturnType<typeof api.tunnelsStatus>>);
+            break;
+          case "sessions.changed":
+            if (ready) void restoreSessions();
+            break;
+          case "locked":
+            if (ready) setPhase("locked");
+            break;
+          case "unlocked":
+            if (phaseRef.current === "locked") void unlockedRef.current(null);
+            break;
+          case "disconnected":
+            // The core went away; the next call starts a new one, locked.
+            void api.vaultStatus().then((st) => st.initialized && !st.unlocked && setPhase("locked")).catch(() => {});
+            break;
+        }
+      }),
+    [refreshPersonal, refreshTeams, applyView, applyTunnels, restoreSessions],
+  );
+  const unlockedRef = useRef(unlocked);
+  unlockedRef.current = unlocked;
+
+  // Auto-lock runs in the core, so it locks without a window too: it needs the setting
+  // and to know the window is in use.
+  useEffect(() => {
+    if (phase === "ready") void api.coreSettingsSet(settings.autoLockMinutes).catch(() => {});
+  }, [phase, settings.autoLockMinutes]);
   useEffect(() => {
     if (!api.real || phase !== "ready") return;
-    const poll = () =>
-      api
-        .tunnelsStatus()
-        .then((list) => {
-          const byKey = new Map(list.map((s) => [s.key, s]));
-          setWs((w) =>
-            w && {
-              ...w,
-              tunnels: w.tunnels.map((t) => {
-                const s = byKey.get(`${t.vaultId}/${t.id}`);
-                if (t.state === "starting") return t;
-                if (!s) return t.state === "on" ? { ...t, state: "off" as const, connections: 0 } : t;
-                if (s.state === "error") return { ...t, state: "error" as const, connections: 0, error: s.error ? errorText(s.error) : undefined };
-                return t.state === "on" && t.connections === s.connections ? t : { ...t, state: "on" as const, connections: s.connections, error: undefined };
-              }),
-            },
-          );
-        })
-        .catch(() => {});
-    void poll();
-    if (!tunnelsActive) return;
-    const timer = setInterval(poll, 1500);
-    return () => clearInterval(timer);
-  }, [phase, tunnelsActive]);
-
-  // Pick up teammates' changes in the background.
-  const teamIds = ws?.vaults.filter((v) => v.kind === "team").map((v) => v.id).join(",") ?? "";
-  useEffect(() => {
-    if (!api.real || phase !== "ready" || !teamIds) return;
-    const timer = setInterval(() => {
-      for (const id of teamIds.split(",")) api.teamSync(id).then(applyView).catch(() => {});
-    }, 20_000);
-    return () => clearInterval(timer);
-  }, [phase, teamIds, applyView]);
-
-  // Auto-lock after inactivity.
-  useEffect(() => {
-    if (!api.real || phase !== "ready" || !settings.autoLockMinutes) return;
-    let last = Date.now();
-    const touch = () => (last = Date.now());
+    let last = 0;
+    const touch = () => {
+      if (Date.now() - last < 30_000) return;
+      last = Date.now();
+      void api.activity().catch(() => {});
+    };
     const events = ["keydown", "mousedown", "wheel"] as const;
     events.forEach((e) => window.addEventListener(e, touch, true));
-    const timer = setInterval(() => Date.now() - last > settings.autoLockMinutes * 60_000 && lock(), 15_000);
-    return () => {
-      events.forEach((e) => window.removeEventListener(e, touch, true));
-      clearInterval(timer);
-    };
-  }, [phase, settings.autoLockMinutes, lock]);
+    return () => events.forEach((e) => window.removeEventListener(e, touch, true));
+  }, [phase]);
 
   // Text follows the language right away: set it before anything below renders.
   const lang = resolveLang(settings.language);
@@ -538,7 +578,7 @@ export default function App() {
                     {s.kind === "files" || !host ? (
                       <FilesView host={host} active={activeId === s.id} onStatus={(st) => setStatus(s.id, st)} onClose={() => closeSession(s.id)} onPickHost={(hostId) => pickHost(s.id, hostId)} />
                     ) : (
-                      <TerminalTab host={host} active={activeId === s.id} initialCommand={s.command} onStatus={(st) => setStatus(s.id, st)} onExit={() => closeSession(s.id)} />
+                      <TerminalTab host={host} active={activeId === s.id} initialCommand={s.command} attach={s.attach} onStatus={(st) => setStatus(s.id, st)} onExit={() => closeSession(s.id)} />
                     )}
                   </div>
                 );

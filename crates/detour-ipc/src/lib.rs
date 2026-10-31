@@ -13,7 +13,7 @@ mod start;
 pub use client::{Client, Event, StreamItem};
 pub use interprocess::local_socket::tokio::Stream;
 pub use name::{Server, listen, socket_name};
-pub use start::{connect_or_start, start_core};
+pub use start::{connect_or_start, connect_or_start_with, runnable_copy, start_core, start_process};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

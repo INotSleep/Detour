@@ -449,13 +449,14 @@ async fn dispatch(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value) -> Out {
             s!().record_connection_in(&o.vault_id, &o.host_id, connected.new_keys).map_err(err)?;
 
             let id = format!("s{:x}{:x}", now_ms(), ctx.id);
-            let info = SessionInfo { id: id.clone(), vault_id: o.vault_id, host_id: o.host_id, owner: Owner::User, started_at: now_ms() };
+            let transient = a.close_with_client.unwrap_or(false);
+            let info = SessionInfo { id: id.clone(), vault_id: o.vault_id, host_id: o.host_id, owner: Owner::User, started_at: now_ms(), transient };
             let c = core.clone();
-            let session = core.sessions.add(info, connected.handle, connected.events, a.close_with_client.unwrap_or(false).then_some(ctx.id), move || c.emit("sessions.changed", Value::Null));
+            let session = core.sessions.add(info, connected.handle, connected.events, transient.then_some(ctx.id), move || c.emit("sessions.changed", json!({ "by": 0 })));
             if let Some(stream) = a.stream {
                 core.sessions.attach(&session, ctx.id, stream, ctx.out.clone());
             }
-            core.emit("sessions.changed", Value::Null);
+            core.emit("sessions.changed", json!({ "by": ctx.id }));
             Ok(json!({ "sessionId": id, "pinnedFingerprint": pinned_fingerprint }))
         }
         "sessions_list" => Ok(serde_json::to_value(core.sessions.list()).unwrap_or_default()),

@@ -16,8 +16,13 @@ export type HostKeyQuestion = ({ kind: "unknown"; fingerprint: string } | { kind
 /** `trust` for an unknown key, `replace` for a changed one, `cancel` otherwise. */
 export type HostKeyAnswer = "trust" | "replace" | "cancel";
 
+/** Sessions of the core this window shows, so one is never shown twice. */
+export const shownSessions = new Set<string>();
+
 interface Options {
   initialCommand?: string;
+  /** A session the core already holds: show it instead of opening one. */
+  attach?: string;
   onStatus: (s: SessionStatus) => void;
   onExit: () => void;
   /** A secret the user typed in worked; the UI may offer to save it. */
@@ -57,34 +62,51 @@ export function runRealSession(term: Terminal, host: Host, opts: Options): () =>
     term.write(prompt);
   };
 
+  const events = {
+    onData: (bytes: Uint8Array) => output.write(bytes),
+    onClosed: (exitStatus: number | null) => {
+      if (sessionId) shownSessions.delete(sessionId);
+      sessionId = null;
+      if (disposed) return;
+      output.flush();
+      if (exitStatus === 0) {
+        opts.onStatus("closed");
+        opts.onExit();
+        return;
+      }
+      term.write(`\r\n${C.dim}${tr().terminal.session.closed}${C.reset}\r\n`);
+      mode = "failed";
+      opts.onStatus("closed");
+    },
+  };
+
+  /** Shows a session the core kept: its recent output, then what follows. */
+  const attach = async (id: string) => {
+    shownSessions.add(id);
+    try {
+      await api.sessionAttach(id, events);
+      if (disposed) return;
+      sessionId = id;
+      mode = "live";
+      opts.onStatus("connected");
+      void api.sessionResize(id, term.cols, term.rows);
+    } catch (e) {
+      shownSessions.delete(id);
+      if (!disposed) fail(errorText(e));
+    }
+  };
+
   const open = async () => {
     mode = "busy";
     opts.onStatus("connecting");
     try {
-      const opened = await api.sessionOpen(
-        { vaultId: host.vaultId, hostId: host.id, secret, trustFingerprint: trust, cols: term.cols, rows: term.rows },
-        {
-          onData: (bytes) => output.write(bytes),
-          onClosed: (exitStatus) => {
-            sessionId = null;
-            if (disposed) return;
-            output.flush();
-            if (exitStatus === 0) {
-              opts.onStatus("closed");
-              opts.onExit();
-              return;
-            }
-            term.write(`\r\n${C.dim}${tr().terminal.session.closed}${C.reset}\r\n`);
-            mode = "failed";
-            opts.onStatus("closed");
-          },
-        },
-      );
+      const opened = await api.sessionOpen({ vaultId: host.vaultId, hostId: host.id, secret, trustFingerprint: trust, cols: term.cols, rows: term.rows }, events);
       if (disposed) {
         void api.sessionClose(opened.sessionId);
         return;
       }
       sessionId = opened.sessionId;
+      shownSessions.add(opened.sessionId);
       mode = "live";
       attemptsLeft = MAX_SECRET_ATTEMPTS;
       opts.onStatus("connected");
@@ -191,14 +213,20 @@ export function runRealSession(term: Terminal, host: Host, opts: Options): () =>
     if (mode === "live" && sessionId) void api.sessionResize(sessionId, cols, rows);
   });
 
-  term.write(`${C.dim}${host.user}@${host.address}:${host.port}${C.reset}\r\n`);
-  void open();
+  if (opts.attach) void attach(opts.attach);
+  else {
+    term.write(`${C.dim}${host.user}@${host.address}:${host.port}${C.reset}\r\n`);
+    void open();
+  }
 
   return () => {
     disposed = true;
     output.flush();
     data.dispose();
     resize.dispose();
-    if (sessionId) void api.sessionClose(sessionId);
+    if (sessionId) {
+      shownSessions.delete(sessionId);
+      void api.sessionClose(sessionId);
+    }
   };
 }

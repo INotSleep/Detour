@@ -30,6 +30,8 @@ pub struct SessionInfo {
     pub host_id: String,
     pub owner: Owner,
     pub started_at: i64,
+    /// Ends with the client that opened it (`detour ssh`): not something to show elsewhere.
+    pub transient: bool,
 }
 
 struct Watcher {
