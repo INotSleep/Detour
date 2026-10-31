@@ -58,13 +58,22 @@ fn git_remote(url: String, auth: Auth, token: Option<String>, github: Option<boo
 /// Methods that only read: everything else may change what clients show.
 const READ_ONLY: &[&str] = &[
     "hello", "core_info", "vault_status", "vault_get", "ssh_import_preview", "sync_status", "teams_pending", "sync_recovery_key", "sync_add_device",
-    "host_password", "key_export", "key_files_save", "my_id", "id_inspect", "recovery_key_new", "teams_list", "team_inspect", "team_inspect_git",
+    "host_password", "key_export", "my_id", "id_inspect", "recovery_key_new", "teams_list", "team_inspect", "team_inspect_git",
     "github_user", "github_start", "github_repo_access", "session_input", "session_resize", "session_attach", "session_detach", "sessions_list",
     "files_open", "files_list", "files_resolve", "files_cancel", "files_close", "tunnels_status", "tunnel_start", "tunnel_stop", "settings_get",
-    "settings_set", "activity", "quit",
+    "settings_set", "activity", "quit", "trust_request", "trust_answer", "trust_with_password", "hosts_export",
 ];
 
+/// What a client may call before it is trusted: enough to become trusted.
+const OPEN: &[&str] = &["hello", "core_info", "vault_status", "vault_create", "vault_unlock", "trust_request", "trust_with_password"];
+
+/// How long a terminal waits for "Allow" in the window.
+const ASK_FOR: std::time::Duration = std::time::Duration::from_secs(120);
+
 pub(crate) async fn call(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value) -> Out {
+    if !OPEN.contains(&method) && !core.is_trusted(ctx.id) {
+        return Err(json!({ "kind": "notTrusted", "window": core.has_window() }));
+    }
     if method != "tunnels_status" {
         core.touch();
     }
@@ -114,14 +123,6 @@ struct OpenArgs {
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct KeyFile {
-    vault_id: String,
-    key_id: String,
-    name: String,
-}
-
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
 enum SecretKindArg {
     Password,
     Passphrase,
@@ -164,19 +165,72 @@ async fn dispatch(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value) -> Out {
             s.create(&a.master_password).map_err(err)?;
             let view = ok(s.view());
             drop(s);
+            core.trust_conn(ctx.id);
             core.emit("unlocked", Value::Null);
             view
         }
+        // Whoever knows the master password is the person: their terminal is trusted too.
         "vault_unlock" => {
             let a = args!(method, p, { master_password: String });
             let mut s = s!();
             if !s.is_unlocked() {
                 s.unlock(&a.master_password).map_err(err)?;
                 drop(s);
+                core.trust_conn(ctx.id);
                 core.emit("unlocked", Value::Null);
                 return ok(store.lock().map_err(poisoned)?.view());
             }
+            if !core.is_trusted(ctx.id) {
+                s.check_master_password(&a.master_password).map_err(err)?;
+                core.trust_conn(ctx.id);
+            }
             ok(s.view())
+        }
+
+        /* ---------- trusting a terminal ---------- */
+        // Asks the window to allow this terminal; without a window the master password is needed.
+        "trust_request" => {
+            if core.is_trusted(ctx.id) {
+                return Ok(Value::Null);
+            }
+            if !core.has_window() {
+                return Err(json!({ "kind": "needMasterPassword" }));
+            }
+            let terminal = core.terminal_of(ctx.id);
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            core.asking.lock().unwrap().insert(ctx.id, tx);
+            core.emit("trust.requested", json!({ "id": ctx.id, "terminal": terminal }));
+            let answer = tokio::time::timeout(ASK_FOR, rx).await;
+            core.asking.lock().unwrap().remove(&ctx.id);
+            core.emit("trust.answered", json!({ "id": ctx.id }));
+            match answer {
+                Ok(Ok(true)) => {
+                    core.trust_conn(ctx.id);
+                    Ok(Value::Null)
+                }
+                Ok(_) => Err(json!({ "kind": "denied" })),
+                Err(_) => Err(json!({ "kind": "timedOut" })),
+            }
+        }
+        "trust_answer" => {
+            let a = args!(method, p, { id: u64, allow: bool });
+            if let Some(tx) = core.asking.lock().unwrap().remove(&a.id) {
+                let _ = tx.send(a.allow);
+            }
+            Ok(Value::Null)
+        }
+        "trust_with_password" => {
+            let a = args!(method, p, { master_password: String });
+            let mut s = s!();
+            if s.is_unlocked() {
+                s.check_master_password(&a.master_password).map_err(err)?;
+            } else {
+                s.unlock(&a.master_password).map_err(err)?;
+                drop(s);
+                core.emit("unlocked", Value::Null);
+            }
+            core.trust_conn(ctx.id);
+            Ok(Value::Null)
         }
         "vault_lock" => {
             core.lock();
@@ -201,19 +255,6 @@ async fn dispatch(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value) -> Out {
             let a = args!(method, p, { aliases: Vec<String>, known_hosts: bool });
             let r = s!().ssh_import(&a.aliases, a.known_hosts);
             ok(pushed(core, PERSONAL, r))
-        }
-        "key_files_save" => {
-            let a = args!(method, p, { dir: String, keys: Vec<KeyFile> });
-            let s = s!();
-            let paths: detour_core::Result<Vec<String>> = a
-                .keys
-                .iter()
-                .map(|k| {
-                    let text = s.export_key_in(&k.vault_id, &k.key_id, None)?;
-                    Ok(detour_core::keys::save_file(std::path::Path::new(&a.dir), &k.name, &text)?.display().to_string())
-                })
-                .collect();
-            ok(paths)
         }
 
         /* ---------- personal vault sync ---------- */
@@ -489,6 +530,53 @@ async fn dispatch(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value) -> Out {
                 s.close();
             }
             Ok(Value::Null)
+        }
+
+        /* ---------- commands and export ---------- */
+        // Runs a command: stdout to `stream`, stderr to `errStream`, as raw bytes; returns its exit status.
+        "host_exec" => {
+            let a = args!(method, p, { vault_id: String, host_id: String, command: String, secret: Option<String>, trust_fingerprint: Option<String>, stream: Option<u64>, err_stream: Option<u64> });
+            let request = s!().connect_request_in(&a.vault_id, &a.host_id, a.secret, a.trust_fingerprint).map_err(err)?;
+            let send = |stream: Option<u64>| {
+                let out = ctx.out.clone();
+                move |bytes: &[u8]| {
+                    if let Some(stream) = stream {
+                        let _ = out.send(Frame::Data { stream, bytes: bytes.to_vec() });
+                    }
+                }
+            };
+            let (status, new_keys) = ssh::run_command(&request, &a.command, send(a.stream), send(a.err_stream)).await.map_err(err)?;
+            s!().record_connection_in(&a.vault_id, &a.host_id, new_keys).map_err(err)?;
+            Ok(json!({ "exitStatus": status }))
+        }
+        // `~/.ssh/config` entries for hosts of a vault; with `keyDir` their keys are saved there as files.
+        "hosts_export" => {
+            let a = args!(method, p, { vault_id: String, host_ids: Option<Vec<String>>, key_dir: Option<String> });
+            let s = s!();
+            let personal = s.view().map_err(err)?;
+            let (hosts, mut keys) = if a.vault_id == PERSONAL { (personal.hosts, personal.keys.clone()) } else {
+                let team = s.team_view(&a.vault_id).map_err(err)?;
+                (team.data.hosts, team.data.keys)
+            };
+            // An own login for a team host uses a personal key.
+            if a.vault_id != PERSONAL {
+                keys.extend(personal.keys);
+            }
+            let picked: Vec<_> = match &a.host_ids {
+                Some(ids) => ids.iter().filter_map(|id| hosts.iter().find(|h| &h.id == id).cloned()).collect(),
+                None => hosts.clone(),
+            };
+            let mut paths = std::collections::HashMap::new();
+            if let Some(dir) = &a.key_dir {
+                for k in detour_core::export::keys_of(&detour_core::export::with_jumps(&picked, &hosts), &keys) {
+                    let vault = if a.vault_id != PERSONAL && s.team_view(&a.vault_id).is_ok_and(|t| t.data.keys.iter().any(|x| x.id == k.id)) { a.vault_id.as_str() } else { PERSONAL };
+                    let text = s.export_key_in(vault, &k.id, None).map_err(err)?;
+                    let path = detour_core::keys::save_file(std::path::Path::new(dir), &detour_core::export::key_file_name(&k.name), &text).map_err(err)?;
+                    paths.insert(k.id.clone(), path.display().to_string());
+                }
+            }
+            let config = detour_core::export::ssh_config(&picked, &hosts, &keys, &paths);
+            Ok(json!({ "config": config, "keyFiles": paths.values().collect::<Vec<_>>() }))
         }
 
         /* ---------- tunnels ---------- */

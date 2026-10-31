@@ -149,6 +149,8 @@ pub fn save_file(dir: &std::path::Path, name: &str, contents: &str) -> Result<st
         std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
         match opts.open(&path) {
             Ok(mut f) => {
+                #[cfg(windows)]
+                owner_only(&path)?;
                 f.write_all(contents.as_bytes())?;
                 return Ok(path);
             }
@@ -161,6 +163,54 @@ pub fn save_file(dir: &std::path::Path, name: &str, contents: &str) -> Result<st
         }
     }
     Err(Error::Io { message: format!("{}: too many files named {name}", dir.display()) })
+}
+
+/// Lets only this user (and the system) read a file, as OpenSSH for Windows requires of
+/// a private key: what the folder would pass on is dropped.
+#[cfg(windows)]
+fn owner_only(path: &std::path::Path) -> Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, LocalFree};
+    use windows_sys::Win32::Security::Authorization::{ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1, SE_FILE_OBJECT, SetNamedSecurityInfoW};
+    use windows_sys::Win32::Security::{ACL, DACL_SECURITY_INFORMATION, GetSecurityDescriptorDacl, GetTokenInformation, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, TOKEN_QUERY, TOKEN_USER, TokenUser};
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+    let fail = |what: &str| Error::Io { message: format!("{}: {what}: {}", path.display(), std::io::Error::last_os_error()) };
+    // SAFETY: Win32 calls with buffers sized as the calls ask; every handle and allocation is freed below.
+    unsafe {
+        let mut token: HANDLE = std::ptr::null_mut();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
+            return Err(fail("process token"));
+        }
+        let mut len = 0u32;
+        GetTokenInformation(token, TokenUser, std::ptr::null_mut(), 0, &mut len);
+        let mut buf = vec![0u8; len as usize];
+        let ok = GetTokenInformation(token, TokenUser, buf.as_mut_ptr().cast(), len, &mut len);
+        CloseHandle(token);
+        if ok == 0 {
+            return Err(fail("token user"));
+        }
+        let user = &*(buf.as_ptr() as *const TOKEN_USER);
+        let mut sid_text: *mut u16 = std::ptr::null_mut();
+        if ConvertSidToStringSidW(user.User.Sid, &mut sid_text) == 0 {
+            return Err(fail("user id"));
+        }
+        let sid = String::from_utf16_lossy(std::slice::from_raw_parts(sid_text, (0..).take_while(|&i| *sid_text.add(i) != 0).count()));
+        LocalFree(sid_text.cast());
+        let sddl: Vec<u16> = format!("D:P(A;;FA;;;{sid})(A;;FA;;;SY)").encode_utf16().chain([0]).collect();
+        let mut sd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+        if ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.as_ptr(), SDDL_REVISION_1, &mut sd, std::ptr::null_mut()) == 0 {
+            return Err(fail("security descriptor"));
+        }
+        let (mut present, mut dacl, mut defaulted) = (0, std::ptr::null_mut::<ACL>(), 0);
+        GetSecurityDescriptorDacl(sd, &mut present, &mut dacl, &mut defaulted);
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+        let r = SetNamedSecurityInfoW(wide.as_ptr(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, std::ptr::null_mut(), std::ptr::null_mut(), dacl, std::ptr::null());
+        LocalFree(sd);
+        if r != 0 {
+            return Err(Error::Io { message: format!("{}: permissions: {}", path.display(), std::io::Error::from_raw_os_error(r as i32)) });
+        }
+    }
+    Ok(())
 }
 
 /// Re-encrypts a key with a new passphrase (`None` removes it). Returns the updated entry.

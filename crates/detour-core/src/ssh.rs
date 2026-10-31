@@ -404,6 +404,35 @@ pub async fn exec(req: &ConnectRequest, command: &str) -> Result<Exec> {
     }
 }
 
+/// Runs a command over a kept connection, passing its output on as it comes:
+/// `out` gets stdout, `err` stderr. Returns its exit status and server keys to pin.
+pub async fn run_command(req: &ConnectRequest, command: &str, mut out: impl FnMut(&[u8]), mut err: impl FnMut(&[u8])) -> Result<(Option<u32>, NewKeys)> {
+    let (session, new_keys) = session(req).await?;
+    let channel = match session.0.handle.channel_open_session().await {
+        Ok(c) => c,
+        // A kept connection the server dropped in the meantime: connect again.
+        Err(_) if new_keys.is_empty() => {
+            forget_pooled(req);
+            let (session, _) = self::session(req).await?;
+            session.0.handle.channel_open_session().await.map_err(connect_error)?
+        }
+        Err(e) => return Err(connect_error(e)),
+    };
+    let mut channel = channel;
+    channel.exec(true, command).await.map_err(connect_error)?;
+    let mut status = None;
+    while let Some(msg) = channel.wait().await {
+        match msg {
+            ChannelMsg::Data { data } => out(&data),
+            ChannelMsg::ExtendedData { data, ext: 1 } => err(&data),
+            ChannelMsg::ExitStatus { exit_status } => status = Some(exit_status),
+            ChannelMsg::Close => break,
+            _ => {}
+        }
+    }
+    Ok((status, new_keys))
+}
+
 /// Is a connection kept for this target and login (for tests)?
 #[doc(hidden)]
 pub fn pooled_count_for(req: &ConnectRequest) -> usize {

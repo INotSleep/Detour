@@ -22,6 +22,12 @@ export const en = {
   joinTeam: "Join team",
   updateAvailable: (version: string) => `Version ${version} is available`,
   update: "Update",
+  trustTerminal: {
+    title: "A terminal asks to use Detour",
+    shell: (shell: string, host: string | null, pid: number) => (host ? `${shell} in ${host} (PID ${pid})` : `${shell} (PID ${pid})`),
+    allow: "Allow",
+    deny: "Deny",
+  },
   palette: {
     title: "Quick connect",
     placeholder: "Host, address or section",
@@ -65,6 +71,12 @@ export const ru: typeof en = {
   joinTeam: "Подключить команду",
   updateAvailable: (version: string) => `Доступна версия ${version}`,
   update: "Обновить",
+  trustTerminal: {
+    title: "Терминал просит доступ к Detour",
+    shell: (shell: string, host: string | null, pid: number) => (host ? `${shell} в ${host} (PID ${pid})` : `${shell} (PID ${pid})`),
+    allow: "Разрешить",
+    deny: "Отклонить",
+  },
   palette: {
     title: "Быстрое подключение",
     placeholder: "Хост, адрес или раздел",

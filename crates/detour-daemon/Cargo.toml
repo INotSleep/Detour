@@ -11,6 +11,7 @@ detour-ipc = { path = "../detour-ipc" }
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util"] }
 serde.workspace = true
 serde_json.workspace = true
+sysinfo = { version = "0.40.1", default-features = false, features = ["system"] }
 
 [dev-dependencies]
 detour-ipc = { path = "../detour-ipc" }

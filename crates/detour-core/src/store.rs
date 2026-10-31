@@ -182,6 +182,13 @@ impl Store {
         ssh::close_pooled();
     }
 
+    /// Is this the master password? (A client proves it is the person without unlocking again.)
+    pub fn check_master_password(&self, master_password: &str) -> Result<()> {
+        let sealed = std::fs::read(self.dir.join(IDENTITY_FILE))?;
+        let scrypt = age::scrypt::Identity::new(SecretString::from(master_password.to_owned()));
+        age::decrypt(&scrypt, &sealed).map(|_| ()).map_err(|_| Error::WrongMasterPassword)
+    }
+
     pub fn change_master_password(&mut self, current: &str, new: &str) -> Result<()> {
         let identity = {
             let sealed = std::fs::read(self.dir.join(IDENTITY_FILE))?;

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ArrowRight, Check, Copy, Save } from "lucide-react";
 import { api, errorText } from "../lib/api";
 import { copyText, useStore } from "../lib/store";
@@ -17,7 +17,17 @@ export function ExportDialog({ hosts, initial, onClose }: { hosts: Host[]; initi
 
   const picked = hosts.filter((h) => chosen.has(h.id));
   const keys = useMemo(() => keysOf(withJumps(picked, ws.hosts), ws.keys), [picked, ws.hosts, ws.keys]);
-  const text = useMemo(() => (picked.length ? sshConfig(picked, ws.hosts, ws.keys) : ""), [picked, ws.hosts, ws.keys]);
+  // The app's export is the core's, the same as `detour hosts export`; the demo makes its own.
+  const ids = picked.map((h) => h.id).join(",");
+  const demoText = useMemo(() => (!api.real && picked.length ? sshConfig(picked, ws.hosts, ws.keys) : ""), [picked, ws.hosts, ws.keys]);
+  const [coreText, setCoreText] = useState("");
+  useEffect(() => {
+    if (!api.real || !ids) return setCoreText("");
+    let live = true;
+    api.hostsExport(hosts[0]!.vaultId, ids.split(","), null).then((r) => live && setCoreText(r.config)).catch(() => {});
+    return () => void (live = false);
+  }, [ids, hosts]);
+  const text = api.real ? coreText : demoText;
   const all = chosen.size === hosts.length;
   const saveKeys = withKeys && keys.length > 0;
 
@@ -42,12 +52,17 @@ export function ExportDialog({ hosts, initial, onClose }: { hosts: Host[]; initi
       const path = await api.pickSavePath("detour.conf");
       if (!path) return setBusy(false);
       const dir = path.slice(0, Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\")) + 1);
-      const paths: Record<string, string> = {};
-      if (saveKeys) {
-        const where = await api.keyFilesSave(dir, keys.map((key) => ({ key, name: keyFileName(key.name) })));
-        keys.forEach((k, i) => (paths[k.id] = where[i]));
+      if (api.real) {
+        const r = await api.hostsExport(picked[0]!.vaultId, picked.map((h) => h.id), saveKeys ? dir : null);
+        await api.writeTextFile(path, r.config);
+      } else {
+        const paths: Record<string, string> = {};
+        if (saveKeys) {
+          const where = await api.keyFilesSave(dir, keys.map((key) => ({ key, name: keyFileName(key.name) })));
+          keys.forEach((k, i) => (paths[k.id] = where[i]));
+        }
+        await api.writeTextFile(path, sshConfig(picked, ws.hosts, ws.keys, paths));
       }
-      await api.writeTextFile(path, sshConfig(picked, ws.hosts, ws.keys, paths));
       toast({ text: saveKeys ? t.hosts.export.savedWithKeys(path, t.common.keyCount(keys.length)) : t.hosts.export.saved(path), tone: "success" });
       onClose();
     } catch (e) {

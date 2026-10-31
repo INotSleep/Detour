@@ -11,7 +11,7 @@ async fn start(tag: &str) -> String {
     let dir = std::env::temp_dir().join(format!("detour-core-{tag}-{}-{nanos}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let socket = detour_ipc::socket_name(&dir);
-    tokio::spawn(async move { detour_daemon::run(&dir).await.unwrap() });
+    tokio::spawn(async move { detour_daemon::serve_with(&dir, detour_daemon::Trust::Everyone).await.unwrap() });
     for _ in 0..100 {
         if Client::connect(&socket).await.is_ok() {
             return socket;

@@ -18,7 +18,7 @@ impl Ui {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let core_dir = dir.clone();
-        std::thread::spawn(move || tokio::runtime::Runtime::new().unwrap().block_on(detour_daemon::run(&core_dir)).unwrap());
+        std::thread::spawn(move || tokio::runtime::Runtime::new().unwrap().block_on(detour_daemon::serve_with(&core_dir, detour_daemon::Trust::Everyone)).unwrap());
         let socket = detour_ipc::socket_name(&dir);
         let rt = tokio::runtime::Runtime::new().unwrap();
         assert!((0..100).any(|_| rt.block_on(detour_ipc::Client::connect(&socket)).is_ok() || { std::thread::sleep(std::time::Duration::from_millis(20)); false }));

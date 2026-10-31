@@ -6,6 +6,7 @@
 //! replaced without touching it.
 
 pub mod agent;
+pub mod export;
 pub mod github;
 pub mod identity;
 pub mod import;
@@ -148,6 +149,6 @@ impl From<serde_json::Error> for Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-pub(crate) fn new_id() -> String {
+pub fn new_id() -> String {
     uuid::Uuid::new_v4().simple().to_string()
 }

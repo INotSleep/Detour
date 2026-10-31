@@ -472,11 +472,15 @@ export const api = {
     URL.revokeObjectURL(url);
   },
 
-  /** Saves keys as private key files in a folder (an existing file is never replaced); returns where each one is. */
+  /** The demo's key files: downloads, named as the export names them. */
   async keyFilesSave(dir: string, keys: { key: SshKey; name: string }[]): Promise<string[]> {
-    if (real) return invoke("key_files_save", { dir, keys: keys.map(({ key, name }) => ({ vaultId: key.vaultId, keyId: key.id, name })) });
     for (const { key, name } of keys) await api.writeTextFile(name, await api.keyExport(key, null));
     return keys.map(({ name }) => `${dir}${name}`);
+  },
+
+  /** Hosts of a vault as ~/.ssh/config entries, made by the core; with `keyDir` their keys are saved there. */
+  hostsExport(vaultId: string, hostIds: string[], keyDir: string | null): Promise<{ config: string; keyFiles: string[] }> {
+    return invoke("hosts_export", { vaultId, hostIds, keyDir });
   },
 
   /* vault */
@@ -590,6 +594,11 @@ export const api = {
   /** Auto-lock runs in the core, so it locks with or without a window. */
   coreSettingsSet(autoLockMinutes: number): Promise<void> {
     return real ? invoke("settings_set", { autoLockMinutes }) : Promise.resolve();
+  },
+
+  /** Answers a terminal that asked to use Detour (`detour` run in a terminal not trusted yet). */
+  trustAnswer(id: number, allow: boolean): Promise<void> {
+    return invoke("trust_answer", { id, allow });
   },
 
   /** Someone is using the window: auto-lock counts from now. */

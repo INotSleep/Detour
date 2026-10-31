@@ -22,7 +22,7 @@ fn temp_dir(tag: &str) -> std::path::PathBuf {
 async fn start(tag: &str) -> String {
     let dir = temp_dir(tag);
     let socket = detour_ipc::socket_name(&dir);
-    tokio::spawn(async move { detour_daemon::run(&dir).await.unwrap() });
+    tokio::spawn(async move { detour_daemon::serve_with(&dir, detour_daemon::Trust::Everyone).await.unwrap() });
     for _ in 0..100 {
         if Client::connect(&socket).await.is_ok() {
             return socket;
@@ -218,8 +218,8 @@ async fn a_session_outlives_its_window_and_comes_back_with_its_output() {
 async fn only_one_core_serves_a_folder() {
     let dir = temp_dir("one");
     let d = dir.clone();
-    tokio::spawn(async move { detour_daemon::run(&d).await.unwrap() });
+    tokio::spawn(async move { detour_daemon::serve_with(&d, detour_daemon::Trust::Everyone).await.unwrap() });
     tokio::time::sleep(Duration::from_millis(200)).await;
-    let second = detour_daemon::run(&dir).await;
+    let second = detour_daemon::serve_with(&dir, detour_daemon::Trust::Everyone).await;
     assert_eq!(second.unwrap_err().kind(), std::io::ErrorKind::AddrInUse);
 }

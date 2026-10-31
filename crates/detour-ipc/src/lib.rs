@@ -100,6 +100,13 @@ fn invalid(what: &str) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidData, format!("detour ipc: bad {what}"))
 }
 
+/// The process on the other end of a connection, where the system says.
+pub fn peer_pid(stream: &Stream) -> Option<u32> {
+    use interprocess::local_socket::traits::StreamCommon;
+    #[allow(clippy::unnecessary_cast)]
+    stream.peer_creds().ok()?.pid().map(|p| p as u32)
+}
+
 /// An error made on this side of the socket, shaped like the core's.
 pub fn local_error(kind: &str, message: impl Into<String>) -> Value {
     serde_json::json!({ "kind": kind, "message": message.into() })

@@ -74,7 +74,9 @@ fn start_core(data_dir: &std::path::Path) -> std::io::Result<()> {
         Some(p) => PathBuf::from(p),
         None => detour_ipc::runnable_copy(&std::env::current_exe()?)?,
     };
-    detour_ipc::start_process(&exe, &["--core".into(), "--data-dir".into(), data_dir.as_os_str().to_owned()])
+    // The core trusts the window when it is this program, not the copy it runs from.
+    let app = std::env::current_exe()?;
+    detour_ipc::start_process(&exe, &["--core".into(), "--data-dir".into(), data_dir.as_os_str().to_owned(), "--app".into(), app.into_os_string()])
 }
 
 /// Runs the core instead of the window when started with `--core [--data-dir DIR]`.
@@ -83,9 +85,10 @@ pub fn run_core_if_asked() -> bool {
     if args.first().is_none_or(|a| a != "--core") {
         return false;
     }
-    let dir = args.iter().position(|a| a == "--data-dir").and_then(|i| args.get(i + 1)).map(PathBuf::from).unwrap_or_else(data_dir);
+    let after = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).map(PathBuf::from);
+    let dir = after("--data-dir").unwrap_or_else(data_dir);
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let _ = rt.block_on(detour_daemon::run(&dir));
+    let _ = rt.block_on(detour_daemon::run(&dir, after("--app")));
     true
 }
 

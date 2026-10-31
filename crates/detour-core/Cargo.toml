@@ -26,6 +26,9 @@ thiserror.workspace = true
 russh-sftp = "3.0.1"
 futures = "0.3.34"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Threading"] }
+
 [dev-dependencies]
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "io-util", "test-util"] }
 serde_json.workspace = true

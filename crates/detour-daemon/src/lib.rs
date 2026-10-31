@@ -8,6 +8,7 @@
 mod background;
 mod rpc;
 pub mod sessions;
+mod trust;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -46,7 +47,20 @@ pub enum ClientKind {
 
 struct Conn {
     kind: ClientKind,
+    /// May do what the person can (see `trust`).
+    trusted: bool,
+    peer: trust::Peer,
     out: mpsc::UnboundedSender<Frame>,
+}
+
+/// Who the core trusts without asking.
+#[derive(Debug, Clone)]
+pub enum Trust {
+    /// The window when it is this program (`detour-desktop`), terminals once allowed.
+    App(Option<PathBuf>),
+    /// Every client: only for tests in this process.
+    #[doc(hidden)]
+    Everyone,
 }
 
 pub struct Core {
@@ -56,6 +70,10 @@ pub struct Core {
     pub(crate) tunnels: Tunnels,
     pub(crate) files: Files,
     pub(crate) settings: Mutex<Settings>,
+    trust: Trust,
+    pub(crate) grants: trust::Grants,
+    /// Terminals waiting for "Allow" in the window.
+    pub(crate) asking: Mutex<HashMap<u64, tokio::sync::oneshot::Sender<bool>>>,
     conns: Mutex<HashMap<u64, Conn>>,
     next_conn: AtomicU64,
     /// When someone last did something (for auto-lock and for ending when idle).
@@ -64,7 +82,7 @@ pub struct Core {
 }
 
 impl Core {
-    fn new(data_dir: PathBuf) -> Arc<Self> {
+    fn new(data_dir: PathBuf, trust: Trust) -> Arc<Self> {
         let settings = std::fs::read(data_dir.join("core.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
         Arc::new(Self {
             store: Arc::new(Mutex::new(Store::open(&data_dir))),
@@ -73,6 +91,9 @@ impl Core {
             tunnels: Tunnels::new(),
             files: Files::new(),
             settings: Mutex::new(settings),
+            trust,
+            grants: trust::Grants::default(),
+            asking: Mutex::new(HashMap::new()),
             conns: Mutex::new(HashMap::new()),
             next_conn: AtomicU64::new(1),
             last_activity: Mutex::new(Instant::now()),
@@ -80,10 +101,36 @@ impl Core {
         })
     }
 
-    /// Tells every client that something changed. `by` is the connection that did it (0: the core itself).
+    /// Tells every trusted client that something changed. `by` is the connection that did it (0: the core itself).
     pub(crate) fn emit(&self, name: &str, data: Value) {
         let frame = Frame::Msg(Message::Event { name: name.into(), data });
-        self.conns.lock().unwrap().retain(|_, c| c.out.send(frame.clone()).is_ok());
+        self.conns.lock().unwrap().retain(|_, c| !c.trusted || c.out.send(frame.clone()).is_ok());
+    }
+
+    pub(crate) fn is_trusted(&self, conn: u64) -> bool {
+        matches!(self.trust, Trust::Everyone) || self.conns.lock().unwrap().get(&conn).is_some_and(|c| c.trusted)
+    }
+
+    /// A connection proved it is the person (master password, "Allow"): it and its terminal are trusted.
+    pub(crate) fn trust_conn(&self, conn: u64) {
+        if let Some(c) = self.conns.lock().unwrap().get_mut(&conn) {
+            c.trusted = true;
+            // Only the command line is in a terminal: the window's parent is not one to trust.
+            if c.kind == ClientKind::Cli
+                && let Some(t) = &c.peer.terminal
+            {
+                self.grants.grant(t);
+            }
+        }
+    }
+
+    pub(crate) fn terminal_of(&self, conn: u64) -> Option<trust::Terminal> {
+        self.conns.lock().unwrap().get(&conn).and_then(|c| c.peer.terminal.clone())
+    }
+
+    /// Is a trusted window open to ask in?
+    pub(crate) fn has_window(&self) -> bool {
+        self.conns.lock().unwrap().values().any(|c| c.kind == ClientKind::Desktop && c.trusted)
     }
 
     pub(crate) fn touch(&self) {
@@ -114,6 +161,11 @@ impl Core {
             drop(s);
             self.emit("locked", Value::Null);
         }
+        // Terminals are asked again after a lock; the window is still the app.
+        self.grants.clear();
+        for c in self.conns.lock().unwrap().values_mut().filter(|c| c.kind != ClientKind::Desktop) {
+            c.trusted = false;
+        }
     }
 }
 
@@ -125,9 +177,15 @@ pub(crate) struct Ctx {
 
 /// Runs the core of a vault folder until it is told to quit or ends by itself.
 /// Fails at once when another core already serves this folder.
-pub async fn run(data_dir: &Path) -> std::io::Result<()> {
+/// `app` is the window's program, which is trusted when it connects.
+pub async fn run(data_dir: &Path, app: Option<PathBuf>) -> std::io::Result<()> {
+    serve_with(data_dir, Trust::App(app)).await
+}
+
+#[doc(hidden)]
+pub async fn serve_with(data_dir: &Path, trust: Trust) -> std::io::Result<()> {
     let listener = detour_ipc::listen(&detour_ipc::socket_name(data_dir)).await?;
-    let core = Core::new(data_dir.to_path_buf());
+    let core = Core::new(data_dir.to_path_buf(), trust);
     background::spawn(core.clone());
     loop {
         tokio::select! {
@@ -149,10 +207,12 @@ pub async fn run(data_dir: &Path) -> std::io::Result<()> {
 }
 
 async fn serve(core: Arc<Core>, stream: detour_ipc::Stream) {
+    let pid = detour_ipc::peer_pid(&stream);
+    let peer = tokio::task::spawn_blocking(move || trust::peer(pid)).await.unwrap_or_default();
     let stream = Arc::new(stream);
     let id = core.next_conn.fetch_add(1, Ordering::Relaxed);
     let (out, mut out_rx) = mpsc::unbounded_channel::<Frame>();
-    core.conns.lock().unwrap().insert(id, Conn { kind: ClientKind::Desktop, out: out.clone() });
+    core.conns.lock().unwrap().insert(id, Conn { kind: ClientKind::Desktop, trusted: false, peer, out: out.clone() });
 
     let writer = stream.clone();
     let write_task = tokio::spawn(async move {
@@ -170,8 +230,17 @@ async fn serve(core: Arc<Core>, stream: detour_ipc::Stream) {
         // The first call says who is on the other end.
         if method == "hello" {
             let kind = params.get("client").and_then(|k| serde_json::from_value(k.clone()).ok()).unwrap_or_default();
+            let app = match &core.trust {
+                Trust::App(app) => app.clone(),
+                Trust::Everyone => None,
+            };
             if let Some(c) = core.conns.lock().unwrap().get_mut(&id) {
                 c.kind = kind;
+                c.trusted = match kind {
+                    ClientKind::Desktop => c.peer.exe.as_deref().is_some_and(|exe| trust::is_app(exe, app.as_deref())),
+                    ClientKind::Cli => c.peer.terminal.as_ref().is_some_and(|t| core.grants.holds(t)),
+                    ClientKind::Mcp => false,
+                };
             }
         }
         let (core, out) = (core.clone(), out.clone());

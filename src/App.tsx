@@ -20,7 +20,7 @@ import { TunnelsView } from "./components/TunnelsView";
 import { FilesView } from "./components/FilesView";
 import { CommandPalette } from "./components/CommandPalette";
 import { ConflictDialog } from "./components/ConflictDialog";
-import { IconButton, useToaster } from "./components/ui";
+import { Button, IconButton, Modal, useToaster } from "./components/ui";
 import { LockScreen } from "./components/LockScreen";
 
 interface Session {
@@ -97,6 +97,8 @@ export default function App() {
   const [activeId, setActiveId] = useState("home");
   const [palette, setPalette] = useState(false);
   const [conflictVaultId, setConflictVaultId] = useState<string | null>(null);
+  /** A terminal waiting for "Allow" to use Detour from the command line. */
+  const [trustAsk, setTrustAsk] = useState<{ id: number; terminal: { name: string; pid: number; host: string | null } | null } | null>(null);
   const [settings, setSettingsState] = useState<Settings>(loadSettings);
   const appliedVars = useRef<string[]>([]);
   useEffect(() => {
@@ -356,6 +358,12 @@ export default function App() {
           case "unlocked":
             if (phaseRef.current === "locked") void unlockedRef.current(null);
             break;
+          case "trust.requested":
+            setTrustAsk(e.data as { id: number; terminal: { name: string; pid: number; host: string | null } | null });
+            break;
+          case "trust.answered":
+            setTrustAsk((a) => (a && a.id === (e.data as { id: number }).id ? null : a));
+            break;
           case "disconnected":
             // The core went away; the next call starts a new one, locked.
             void api.vaultStatus().then((st) => st.initialized && !st.unlocked && setPhase("locked")).catch(() => {});
@@ -589,6 +597,42 @@ export default function App() {
 
         {palette && <CommandPalette onClose={() => setPalette(false)} />}
         {conflictVault && conflictVault.conflicts.length > 0 && <ConflictDialog vault={conflictVault} onClose={() => setConflictVaultId(null)} />}
+        {trustAsk && (
+          <Modal
+            title={tr().app.trustTerminal.title}
+            onClose={() => {
+              void api.trustAnswer(trustAsk.id, false);
+              setTrustAsk(null);
+            }}
+            onSubmit={() => {
+              void api.trustAnswer(trustAsk.id, true);
+              setTrustAsk(null);
+            }}
+            footer={
+              <>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => {
+                    void api.trustAnswer(trustAsk.id, false);
+                    setTrustAsk(null);
+                  }}
+                >
+                  {tr().app.trustTerminal.deny}
+                </Button>
+                <Button type="submit" variant="primary" autoFocus>
+                  {tr().app.trustTerminal.allow}
+                </Button>
+              </>
+            }
+          >
+            {trustAsk.terminal && (
+              <div className="modal-text mono">
+                {tr().app.trustTerminal.shell(trustAsk.terminal.name, trustAsk.terminal.host, trustAsk.terminal.pid)}
+              </div>
+            )}
+          </Modal>
+        )}
         {toaster.view}
         {phase === "locked" && <LockScreen mode="unlock" onUnlocked={(v) => void unlocked(v)} />}
       </StoreContext.Provider>

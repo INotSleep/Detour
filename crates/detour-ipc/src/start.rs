@@ -48,9 +48,15 @@ pub fn runnable_copy(program: &Path) -> io::Result<std::path::PathBuf> {
     Ok(copy)
 }
 
-/// Starts `<detour> daemon --data-dir <dir>`.
+/// Starts `<detour> daemon --data-dir <dir>`, telling it where the window's program is
+/// (next to `detour`, as installers put them): the core trusts that window.
 pub fn start_core(detour: &Path, data_dir: &Path) -> io::Result<()> {
-    start_process(&runnable_copy(detour)?, &["daemon".into(), "--data-dir".into(), data_dir.as_os_str().to_owned()])
+    let mut args: Vec<OsString> = vec!["daemon".into(), "--data-dir".into(), data_dir.as_os_str().to_owned()];
+    let app = detour.with_file_name(format!("detour-desktop{}", std::env::consts::EXE_SUFFIX));
+    if app.exists() {
+        args.extend(["--app".into(), app.into_os_string()]);
+    }
+    start_process(&runnable_copy(detour)?, &args)
 }
 
 /// The core of a vault folder, started with `detour daemon` if it doesn't run yet.
