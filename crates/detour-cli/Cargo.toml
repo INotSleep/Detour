@@ -1,0 +1,18 @@
+[package]
+name = "detour-cli"
+description = "Detour on the command line: `detour`, also the core (`detour daemon`) and the MCP server for agents (`detour mcp`)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "detour"
+path = "src/main.rs"
+
+[dependencies]
+detour-core.workspace = true
+detour-daemon = { path = "../detour-daemon" }
+detour-ipc = { path = "../detour-ipc" }
+clap = { version = "4.6.7", features = ["derive"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros"] }
+serde_json.workspace = true

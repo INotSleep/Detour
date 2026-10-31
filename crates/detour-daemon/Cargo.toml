@@ -1,0 +1,19 @@
+[package]
+name = "detour-daemon"
+description = "The Detour core as a process of its own: the vault, sessions, tunnels and sync, for the desktop app, the CLI and agents"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+detour-core.workspace = true
+detour-ipc = { path = "../detour-ipc" }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util"] }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+detour-ipc = { path = "../detour-ipc" }
+russh = { version = "0.64.1", default-features = false, features = ["ring", "rsa", "flate2"] }
+rand = { version = "0.10.3", features = ["thread_rng"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "io-util"] }

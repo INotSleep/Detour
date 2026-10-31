@@ -10,6 +10,7 @@ pub mod github;
 pub mod identity;
 pub mod import;
 pub mod keys;
+pub mod merge;
 pub mod model;
 pub mod personal;
 pub mod proxy;

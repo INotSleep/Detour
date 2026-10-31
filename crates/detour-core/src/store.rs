@@ -296,6 +296,12 @@ impl Store {
         self.view()
     }
 
+    /// A client's edit of the vault as it saw it (`base`): only what it changed is applied.
+    pub fn put_from(&mut self, base: &VaultUpdate, next: VaultUpdate) -> Result<VaultView> {
+        let current = self.view()?.into();
+        self.put(crate::merge::merge(base, next, current))
+    }
+
     pub fn set_host_password(&mut self, host_id: &str, password: Option<String>) -> Result<()> {
         let host = self.vault_mut()?.hosts.iter_mut().find(|h| h.id == host_id).ok_or_else(|| not_found("host"))?;
         host.password = password.filter(|p| !p.is_empty());
@@ -646,6 +652,12 @@ impl Store {
             self.save()?;
         }
         self.after_team(id)
+    }
+
+    /// A client's edit of a team as it saw it (`base`): only what it changed is applied.
+    pub fn team_put_from(&mut self, id: &str, base: &VaultUpdate, next: VaultUpdate) -> Result<TeamView> {
+        let current = self.team_view(id)?.data.into();
+        self.team_put(id, crate::merge::merge(base, next, current))
     }
 
     pub fn team_rename(&mut self, id: &str, name: &str) -> Result<TeamView> {
