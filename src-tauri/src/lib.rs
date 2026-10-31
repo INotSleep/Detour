@@ -4,6 +4,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use detour_core::sftp::{self, FileEntry};
 use detour_core::{Error, Result};
@@ -11,7 +12,9 @@ use detour_ipc::{Client, StreamItem};
 use serde::Serialize;
 use serde_json::{Value, json};
 use tauri::ipc::{Channel, InvokeResponseBody};
-use tauri::{Emitter, State};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{Emitter, Manager, State};
 
 /// The connection to the core, made on first use and again after the core went away.
 struct Core {
@@ -326,6 +329,96 @@ async fn mcp_client_set(core: State<'_, Arc<Core>>, id: String, on: bool) -> Res
         .map_err(|e| Error::Internal { message: e.to_string() })?
 }
 
+/* ---------- the tray ---------- */
+
+/// The window hides to the tray instead of closing while the core holds something
+/// (the vault unlocked, sessions, tunnels): the window says so with `tray_set`.
+#[derive(Default)]
+struct Keep(AtomicBool);
+
+/// What the tray says, in the window's language (texts live with the UI's, see `src/i18n`).
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TrayTexts {
+    tooltip: String,
+    status: String,
+    open: String,
+    /// None while the vault is locked.
+    lock: Option<String>,
+    quit: String,
+    keep: bool,
+}
+
+const TRAY: &str = "main";
+
+fn show_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
+}
+
+/// The tray's menu and tooltip as the window has them now.
+#[tauri::command]
+fn tray_set<R: tauri::Runtime>(app: tauri::AppHandle<R>, keep: State<'_, Keep>, texts: TrayTexts) -> std::result::Result<(), String> {
+    keep.0.store(texts.keep, Ordering::Relaxed);
+    let Some(tray) = app.tray_by_id(TRAY) else { return Ok(()) };
+    let e = |e: tauri::Error| e.to_string();
+    let status = MenuItem::with_id(&app, "status", &texts.status, false, None::<&str>).map_err(e)?;
+    let open = MenuItem::with_id(&app, "open", &texts.open, true, None::<&str>).map_err(e)?;
+    let lock = texts.lock.as_ref().map(|l| MenuItem::with_id(&app, "lock", l, true, None::<&str>)).transpose().map_err(e)?;
+    let quit = MenuItem::with_id(&app, "quit", &texts.quit, true, None::<&str>).map_err(e)?;
+    let sep = || PredefinedMenuItem::separator(&app).map_err(e);
+    let (s1, s2) = (sep()?, sep()?);
+    let mut items: Vec<&dyn tauri::menu::IsMenuItem<R>> = vec![&status, &s1, &open];
+    if let Some(l) = &lock {
+        items.push(l);
+    }
+    items.extend([&s2 as &dyn tauri::menu::IsMenuItem<R>, &quit]);
+    tray.set_menu(Some(Menu::with_items(&app, &items).map_err(e)?)).map_err(e)?;
+    tray.set_tooltip(Some(&texts.tooltip)).map_err(e)
+}
+
+/// Brings the window forward: an agent or a terminal waits for an answer in it.
+#[tauri::command]
+fn window_show<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
+    show_window(&app);
+}
+
+/// The tray icon, when this system has a tray; the menu comes from the window (`tray_set`).
+fn tray<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
+    let mut b = TrayIconBuilder::with_id(TRAY).tooltip("Detour").show_menu_on_left_click(false);
+    if let Some(icon) = app.default_window_icon() {
+        b = b.icon(icon.clone());
+    }
+    b.on_tray_icon_event(|tray, e| {
+        if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = e {
+            show_window(tray.app_handle());
+        }
+    })
+    .on_menu_event(|app, e| match e.id().as_ref() {
+        "open" => show_window(app),
+        "lock" | "quit" => {
+            let (app, what) = (app.clone(), e.id().as_ref().to_string());
+            tauri::async_runtime::spawn(async move {
+                let core = app.state::<Arc<Core>>().inner().clone();
+                let method = if what == "lock" { "vault_lock" } else { "quit" };
+                if let Ok(link) = core.link(&app).await {
+                    let _ = link.client.call(method, json!({})).await;
+                }
+                // Quitting ends the core and its sessions, then the app.
+                if what == "quit" {
+                    app.exit(0);
+                }
+            });
+        }
+        _ => {}
+    })
+    .build(app)?;
+    Ok(())
+}
+
 /// `DETOUR_DATA_DIR` overrides where the vault lives (tests, portable installs).
 fn data_dir() -> PathBuf {
     std::env::var_os("DETOUR_DATA_DIR").map(Into::into).unwrap_or_else(detour_core::store::Store::default_dir)
@@ -340,6 +433,7 @@ pub fn builder<R: tauri::Runtime>(builder: tauri::Builder<R>, data_dir: PathBuf)
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init())
         .manage(Arc::new(Core { data_dir, link: tokio::sync::Mutex::new(None) }))
+        .manage(Keep::default())
         .invoke_handler(tauri::generate_handler![
             core_call,
             core_stream,
@@ -356,13 +450,35 @@ pub fn builder<R: tauri::Runtime>(builder: tauri::Builder<R>, data_dir: PathBuf)
             local_modified,
             mcp_clients,
             mcp_client_set,
+            tray_set,
+            window_show,
         ])
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let mut app = tauri::Builder::default();
+    // Started again, Detour comes forward instead of opening a second window. A vault folder
+    // of its own (tests, a portable copy) is another Detour and may run beside it.
+    if std::env::var_os("DETOUR_DATA_DIR").is_none() {
+        app = app.plugin(tauri_plugin_single_instance::init(|app, _, _| show_window(app)));
+    }
     // The updater reads its key and address from tauri.conf.json, which test builds don't have.
-    builder(tauri::Builder::default().plugin(tauri_plugin_updater::Builder::new().build()), data_dir())
+    builder(app.plugin(tauri_plugin_updater::Builder::new().build()), data_dir())
+        .setup(|app| {
+            // No tray on this system (some Linux desktops): the window just closes, as before.
+            let _ = tray(app.handle());
+            Ok(())
+        })
+        .on_window_event(|w, e| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = e
+                && w.app_handle().tray_by_id(TRAY).is_some()
+                && w.state::<Keep>().0.load(Ordering::Relaxed)
+            {
+                api.prevent_close();
+                let _ = w.hide();
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error while running Detour");
 }

@@ -367,10 +367,13 @@ export default function App() {
             if (phaseRef.current === "locked") void unlockedRef.current(null);
             break;
           case "trust.requested":
+            void api.windowShow();
             setTrustAsk(e.data as { id: number; terminal: { name: string; pid: number; host: string | null } | null });
             break;
           case "agents.requested": {
             const req = e.data as AgentRequest;
+            // The answer is given in the window: out of the tray with it.
+            void api.windowShow();
             setAgentAsks((list) => (list.some((r) => r.id === req.id) ? list : [...list, req]));
             break;
           }
@@ -412,6 +415,17 @@ export default function App() {
   // Text follows the language right away: set it before anything below renders.
   const lang = resolveLang(settings.language);
   if (currentLang() !== lang) setLang(lang);
+
+  // The tray says what the core holds; while it holds anything, closing the window hides it there.
+  const liveSessions = sessions.filter((s) => s.kind === "terminal" && s.status === "connected").length;
+  const liveTunnels = ws?.tunnels.filter((t) => t.state === "on").length ?? 0;
+  useEffect(() => {
+    if (phase === "loading") return;
+    const t = tr().app.tray;
+    const unlocked = phase === "ready";
+    const status = [unlocked ? t.unlocked : t.locked, liveSessions ? t.sessions(liveSessions) : "", liveTunnels ? t.tunnels(liveTunnels) : ""].filter(Boolean).join(" · ");
+    void api.traySet({ tooltip: `Detour: ${status}`, status, open: t.open, lock: unlocked ? t.lock : null, quit: t.quit, keep: unlocked || liveSessions > 0 || liveTunnels > 0 }).catch(() => {});
+  }, [phase, liveSessions, liveTunnels, lang]);
   useEffect(() => {
     setWs((cur) => cur && { ...cur, vaults: cur.vaults.map((v) => (v.kind === "personal" ? { ...v, name: tr().app.personal } : v)) });
   }, [lang]);

@@ -22,6 +22,15 @@ export const en = {
   joinTeam: "Join team",
   updateAvailable: (version: string) => `Version ${version} is available`,
   update: "Update",
+  tray: {
+    open: "Open Detour",
+    lock: "Lock",
+    quit: "Quit Detour",
+    unlocked: "Unlocked",
+    locked: "Locked",
+    sessions: (n: number) => `${n} ${enForm(n, "session", "sessions")}`,
+    tunnels: (n: number) => `${n} ${enForm(n, "tunnel", "tunnels")}`,
+  },
   trustTerminal: {
     title: "A terminal asks to use Detour",
     shell: (shell: string, host: string | null, pid: number) => (host ? `${shell} in ${host} (PID ${pid})` : `${shell} (PID ${pid})`),
@@ -71,6 +80,15 @@ export const ru: typeof en = {
   joinTeam: "Подключить команду",
   updateAvailable: (version: string) => `Доступна версия ${version}`,
   update: "Обновить",
+  tray: {
+    open: "Открыть Detour",
+    lock: "Заблокировать",
+    quit: "Выйти из Detour",
+    unlocked: "Разблокирован",
+    locked: "Заблокирован",
+    sessions: (n: number) => `${n} ${ruForm(n, "сессия", "сессии", "сессий")}`,
+    tunnels: (n: number) => `${n} ${ruForm(n, "туннель", "туннеля", "туннелей")}`,
+  },
   trustTerminal: {
     title: "Терминал просит доступ к Detour",
     shell: (shell: string, host: string | null, pid: number) => (host ? `${shell} в ${host} (PID ${pid})` : `${shell} (PID ${pid})`),

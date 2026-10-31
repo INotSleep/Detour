@@ -350,7 +350,7 @@ function demoKey(vaultId: string, name: string, algorithm: SshKey["algorithm"], 
 /* ---------- the core ---------- */
 
 /** What the window does itself; everything else is a method of the core. */
-const WINDOW_COMMANDS = new Set(["core_info", "core_me", "write_text_file", "local_home", "local_list", "local_mkdir", "open_local", "editors", "open_with", "edit_copy_path", "local_modified", "mcp_clients", "mcp_client_set"]);
+const WINDOW_COMMANDS = new Set(["core_info", "core_me", "write_text_file", "local_home", "local_list", "local_mkdir", "open_local", "editors", "open_with", "edit_copy_path", "local_modified", "mcp_clients", "mcp_client_set", "tray_set", "window_show"]);
 
 /**
  * Calls the core with the arguments its method takes. A `Channel` among them becomes
@@ -678,6 +678,16 @@ export const api = {
 
   mcpClientSet(id: string, on: boolean): Promise<void> {
     return invoke("mcp_client_set", { id, on });
+  },
+
+  /** What the tray says, and whether closing the window hides it there (`keep`). */
+  traySet(texts: { tooltip: string; status: string; open: string; lock: string | null; quit: string; keep: boolean }): Promise<void> {
+    return real ? invoke("tray_set", { texts }) : Promise.resolve();
+  },
+
+  /** Brings the window forward (from the tray): someone waits for an answer in it. */
+  windowShow(): Promise<void> {
+    return real ? invoke("window_show") : Promise.resolve();
   },
 
   /** Takes a token away: its sessions, file browsers and tunnels close. */

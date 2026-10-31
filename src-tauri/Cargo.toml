@@ -22,7 +22,7 @@ detour-core.workspace = true
 detour-daemon = { path = "../crates/detour-daemon" }
 detour-ipc = { path = "../crates/detour-ipc" }
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "sync", "macros"] }
-tauri = { version = "2.12.5", features = [] }
+tauri = { version = "2.12.5", features = ["tray-icon"] }
 tauri-plugin-dialog = "2.8.3"
 serde.workspace = true
 serde_json.workspace = true
@@ -30,6 +30,7 @@ tauri-plugin-clipboard-manager = "2.5.0"
 tauri-plugin-updater = "2.14.0"
 tauri-plugin-process = "2.4.0"
 tauri-plugin-opener = "2.7.2"
+tauri-plugin-single-instance = "2.5.5"
 
 [dev-dependencies]
 tauri = { version = "2.12.5", features = ["test"] }
