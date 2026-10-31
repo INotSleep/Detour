@@ -210,7 +210,7 @@ export function SettingsView() {
         <h3 className="section-title">{t.about}</h3>
         <div className="setting">
           <span>{t.version}</span>
-          <span className="muted mono">{coreInfo ? `${coreInfo.coreVersion} · ${coreInfo.os}` : "0.2.3"}</span>
+          <span className="muted mono">{coreInfo ? `${coreInfo.coreVersion} · ${coreInfo.os}` : "0.3.0"}</span>
         </div>
         <div className="setting">
           <span>{t.license}</span>
