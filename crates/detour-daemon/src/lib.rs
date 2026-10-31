@@ -5,6 +5,7 @@
 //! to the desktop app, the command line and agents. Closing a client doesn't
 //! stop anything; the core ends on `quit`, or by itself once it is locked and idle.
 
+mod agents;
 mod background;
 mod rpc;
 pub mod sessions;
@@ -72,6 +73,7 @@ pub struct Core {
     pub(crate) settings: Mutex<Settings>,
     trust: Trust,
     pub(crate) grants: trust::Grants,
+    pub(crate) agents: agents::Agents,
     /// Terminals waiting for "Allow" in the window.
     pub(crate) asking: Mutex<HashMap<u64, tokio::sync::oneshot::Sender<bool>>>,
     conns: Mutex<HashMap<u64, Conn>>,
@@ -93,6 +95,7 @@ impl Core {
             settings: Mutex::new(settings),
             trust,
             grants: trust::Grants::default(),
+            agents: agents::Agents::default(),
             asking: Mutex::new(HashMap::new()),
             conns: Mutex::new(HashMap::new()),
             next_conn: AtomicU64::new(1),

@@ -6,6 +6,7 @@ import { uid, useStore } from "../lib/store";
 import { atLeast, writable } from "../lib/teams";
 import type { Snippet } from "../lib/types";
 import { Button, Empty, Field, IconButton, Menu, Modal, PageHeader, PasswordInput, Segmented, Switch } from "./ui";
+import { AgentsSettings } from "./Agents";
 import { SyncSettings } from "./SyncSettings";
 import { useEditors } from "./Editors";
 import { ThemeSetting } from "./Themes";
@@ -200,6 +201,8 @@ export function SettingsView() {
         </div>
       </section>
       )}
+
+      {api.real && <AgentsSettings />}
 
       <section className="settings-group">
         <h3 className="section-title">{t.about}</h3>

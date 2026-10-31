@@ -84,7 +84,8 @@ export function TerminalView({ host, active, initialCommand, attach, onStatus, o
     term.loadAddon(fit);
     term.loadAddon(search);
     term.open(hostRef.current!);
-    fit.fit();
+    // A terminal of a tab in the background has no size yet: it fits when the tab comes forward.
+    if (hostRef.current!.clientWidth) fit.fit();
     termRef.current = term;
     fitRef.current = fit;
     searchRef.current = search;

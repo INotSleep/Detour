@@ -2,6 +2,7 @@
 //! when none runs, and asks for the master password only in a terminal not trusted yet.
 //! `detour daemon` is the core itself.
 
+mod agents;
 mod cmds;
 mod conn;
 mod help;
@@ -61,6 +62,9 @@ enum Command {
     #[command(subcommand)]
     Teams(Teams),
     Id,
+    Approve,
+    #[command(subcommand)]
+    Agents(Agents),
     // The core in this process (the app and the CLI start it by themselves); `--app`
     // is the window's program, which the core trusts.
     #[command(hide = true)]
@@ -179,6 +183,12 @@ enum Teams {
     Leave,
 }
 
+#[derive(Subcommand)]
+enum Agents {
+    Ls,
+    Revoke { agent: String },
+}
+
 fn data_dir(given: Option<PathBuf>) -> PathBuf {
     given.or_else(|| std::env::var_os("DETOUR_DATA_DIR").map(Into::into)).unwrap_or_else(detour_core::store::Store::default_dir)
 }
@@ -286,6 +296,9 @@ async fn run(command: Command, dir: &std::path::Path, team: Option<String>, json
             }
         }
         Command::Id => cmds::my_id(&ctx.c, json).await?,
+        Command::Approve => agents::approve(&ctx).await?,
+        Command::Agents(Agents::Ls) => agents::list(&ctx).await?,
+        Command::Agents(Agents::Revoke { agent }) => agents::revoke(&ctx, &agent).await?,
         Command::Status | Command::Quit | Command::Daemon { .. } => unreachable!(),
     }
     Ok(0)

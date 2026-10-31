@@ -209,12 +209,16 @@ impl Store {
         self.state.as_ref().ok_or(Error::Locked)
     }
 
-    fn vault_mut(&mut self) -> Result<&mut VaultData> {
+    pub(crate) fn vault(&self) -> Result<&VaultData> {
+        Ok(&self.unlocked()?.vault)
+    }
+
+    pub(crate) fn vault_mut(&mut self) -> Result<&mut VaultData> {
         Ok(&mut self.state.as_mut().ok_or(Error::Locked)?.vault)
     }
 
     /// Writes the vault file; with sync on, what changed goes to the synced copy first.
-    fn save(&mut self) -> Result<()> {
+    pub(crate) fn save(&mut self) -> Result<()> {
         self.refresh_team_links();
         if self.personal.is_some() && self.has_unsynced() {
             let merged = self.merge_personal().map(|_| ());

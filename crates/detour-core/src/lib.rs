@@ -20,6 +20,7 @@ pub mod ssh;
 pub mod store;
 pub mod sync;
 pub mod team;
+pub mod tokens;
 pub mod tunnel;
 
 use serde::Serialize;

@@ -375,10 +375,50 @@ export interface CoreSession {
   id: string;
   vaultId: string;
   hostId: string;
-  owner: { type: "user" } | { type: "agent"; tokenId: string };
+  owner: { type: "user" } | { type: "agent"; tokenId: string; agent: string };
   startedAt: number;
   /** Ends with the client that opened it (`detour ssh`): not a tab of the window. */
   transient: boolean;
+}
+
+/** What an AI agent may do with a token (detour_core::tokens::Scope). */
+export type AgentScope = "connect" | "exec" | "files:read" | "files:write" | "tunnels" | "vault:edit";
+export type AgentTtl = "2h" | "1d" | "7d" | "never";
+export interface AgentHost {
+  vaultId: string;
+  hostId: string;
+  label: string;
+  /** The team it is in; none for the personal vault. */
+  team: string | null;
+}
+
+/** Something an agent waits on the person for (detour_daemon::agents::PendingView). */
+export type AgentRequest = { id: string; at: number; agent: string } & (
+  | { type: "access"; hosts: AgentHost[]; scopes: AgentScope[]; ttl: AgentTtl; reason: string | null }
+  | { type: "command"; tokenId: string; host: AgentHost; command: string }
+);
+
+/** An agent's token, as Settings → Agents shows it. */
+export interface AgentToken {
+  id: string;
+  agent: string;
+  hosts: AgentHost[];
+  scopes: AgentScope[];
+  createdAt: number;
+  expiresAt: number | null;
+  expired: boolean;
+  lastUsed: number | null;
+}
+
+/** A command an agent ran in its session (detour_daemon::sessions::Run). */
+export interface AgentRun {
+  id: number;
+  command: string;
+  startedAt: number;
+  finishedAt: number | null;
+  exitStatus: number | null;
+  timedOut: boolean;
+  output: string;
 }
 
 /** Output of a session: bytes as they come, then its end. */
@@ -599,6 +639,30 @@ export const api = {
   /** Answers a terminal that asked to use Detour (`detour` run in a terminal not trusted yet). */
   trustAnswer(id: number, allow: boolean): Promise<void> {
     return invoke("trust_answer", { id, allow });
+  },
+
+  /** What agents wait on: requests for access, commands of tokens that ask each time. */
+  agentsPending(): Promise<AgentRequest[]> {
+    return real ? invoke("agents_pending") : Promise.resolve([]);
+  },
+
+  /** Allows or denies a request; for access the person may keep fewer hosts and rights. Returns the new token. */
+  agentsAnswer(id: string, allow: boolean, opts: { ttl?: AgentTtl; scopes?: AgentScope[]; hosts?: { vaultId: string; hostId: string }[]; always?: boolean } = {}): Promise<{ tokenId: string; token: string } | null> {
+    return invoke("agents_answer", { id, allow, ...opts });
+  },
+
+  agentsList(): Promise<AgentToken[]> {
+    return real ? invoke("agents_list") : Promise.resolve([]);
+  },
+
+  /** What an agent ran in a session, for its tab. */
+  sessionRuns(sessionId: string): Promise<AgentRun[]> {
+    return real ? invoke("session_runs", { sessionId }) : Promise.resolve([]);
+  },
+
+  /** Takes a token away: its sessions, file browsers and tunnels close. */
+  agentsRevoke(id: string): Promise<boolean> {
+    return invoke("agents_revoke", { id });
   },
 
   /** Someone is using the window: auto-lock counts from now. */

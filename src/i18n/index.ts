@@ -3,6 +3,7 @@
 // plain functions called while rendering with `tr()`. Never keep a translated
 // string at module scope: the language can change while the app runs.
 import { createContext, useContext } from "react";
+import * as agents from "./agents";
 import * as app from "./app";
 import * as common from "./common";
 import * as demo from "./demo";
@@ -22,6 +23,7 @@ export type LangSetting = Lang | "system";
 const en = {
   common: common.en,
   app: app.en,
+  agents: agents.en,
   settings: settings.en,
   sync: sync.en,
   teams: teams.en,
@@ -36,6 +38,7 @@ export type Dict = typeof en;
 const ru: Dict = {
   common: common.ru,
   app: app.ru,
+  agents: agents.ru,
   settings: settings.ru,
   sync: sync.ru,
   teams: teams.ru,

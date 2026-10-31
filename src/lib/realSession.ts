@@ -89,7 +89,8 @@ export function runRealSession(term: Terminal, host: Host, opts: Options): () =>
       sessionId = id;
       mode = "live";
       opts.onStatus("connected");
-      void api.sessionResize(id, term.cols, term.rows);
+      // Shown in a tab in the background: the session keeps its size until the tab comes forward.
+      if (term.element?.offsetParent) void api.sessionResize(id, term.cols, term.rows);
     } catch (e) {
       shownSessions.delete(id);
       if (!disposed) fail(errorText(e));

@@ -3,6 +3,7 @@ import type { Host } from "../lib/types";
 import type { SessionStatus } from "../lib/fakeShell";
 import { uid } from "../lib/store";
 import { TerminalView, type SplitDir } from "./TerminalView";
+import { AgentRuns } from "./Agents";
 
 interface Pane {
   id: string;
@@ -17,6 +18,8 @@ interface Props {
   initialCommand?: string;
   /** The first pane shows this session of the core. */
   attach?: string;
+  /** The AI agent whose session it is: what it runs shows under the terminal. */
+  agent?: string;
   onStatus: (s: SessionStatus) => void;
   /** The last pane closed. */
   onExit: () => void;
@@ -26,7 +29,7 @@ interface Props {
 const MAX_PANES = 6;
 
 /** A terminal tab: one session, or several to the same host side by side or stacked. */
-export function TerminalTab({ host, active, initialCommand, attach, onStatus, onExit }: Props) {
+export function TerminalTab({ host, active, initialCommand, attach, agent, onStatus, onExit }: Props) {
   const [panes, setPanes] = useState<Pane[]>(() => [{ id: uid("p"), command: initialCommand, attach }]);
   const [dir, setDir] = useState<SplitDir>("row");
   // Share of the tab per pane, summing to 1.
@@ -82,6 +85,7 @@ export function TerminalTab({ host, active, initialCommand, attach, onStatus, on
   };
 
   return (
+    <>
     <div className={`term-panes ${dir}`} ref={box}>
       {panes.map((p, i) => (
         <Fragment key={p.id}>
@@ -105,5 +109,7 @@ export function TerminalTab({ host, active, initialCommand, attach, onStatus, on
         </Fragment>
       ))}
     </div>
+    {agent && attach && <AgentRuns sessionId={attach} agent={agent} />}
+    </>
   );
 }

@@ -318,6 +318,9 @@ pub struct VaultData {
     /// This device's GitHub sign-in; never syncs (see `github`).
     #[serde(default)]
     pub github: Option<crate::github::GithubLogin>,
+    /// AI agents' tokens on this device; never syncs (see `tokens`).
+    #[serde(default)]
+    pub agents: Vec<crate::tokens::AgentToken>,
 }
 
 /// A team as this person's devices share it: where it is, not where it sits on one device.

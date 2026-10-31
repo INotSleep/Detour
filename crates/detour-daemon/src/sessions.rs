@@ -18,7 +18,16 @@ const SCROLLBACK: usize = 1024 * 1024;
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Owner {
     User,
-    Agent { token_id: String },
+    Agent { token_id: String, agent: String },
+}
+
+impl Owner {
+    pub fn token_id(&self) -> Option<&str> {
+        match self {
+            Owner::Agent { token_id, .. } => Some(token_id),
+            Owner::User => None,
+        }
+    }
 }
 
 /// What a client sees of a session.
@@ -32,6 +41,24 @@ pub struct SessionInfo {
     pub started_at: i64,
     /// Ends with the client that opened it (`detour ssh`): not something to show elsewhere.
     pub transient: bool,
+}
+
+/// How many of an agent's commands a session remembers, and how much of each one's output.
+const RUNS: usize = 100;
+const RUN_OUTPUT: usize = 64 * 1024;
+
+/// A command an agent ran on the session's host (on a channel of its own), for the person to see.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Run {
+    pub id: u64,
+    pub command: String,
+    pub started_at: i64,
+    pub finished_at: Option<i64>,
+    pub exit_status: Option<u32>,
+    pub timed_out: bool,
+    /// Its output, stdout and stderr as they came; the end of it when long.
+    pub output: String,
 }
 
 struct Watcher {
@@ -51,6 +78,7 @@ pub struct Session {
     /// Closed when the connection that opened it goes (`detour ssh`), not kept like the app's.
     close_with: Option<u64>,
     state: Mutex<State>,
+    runs: Mutex<VecDeque<Run>>,
 }
 
 impl Session {
@@ -63,6 +91,61 @@ impl Session {
     pub fn close(&self) {
         self.handle.close();
     }
+
+    /// Output for whoever watches, kept for whoever attaches later.
+    pub fn output(&self, bytes: Vec<u8>) {
+        let mut st = self.state.lock().unwrap();
+        st.scrollback.extend(&bytes);
+        if st.scrollback.len() > SCROLLBACK {
+            let cut = st.scrollback.len() - SCROLLBACK;
+            st.scrollback.drain(..cut);
+            // Start at a line, not in the middle of one.
+            if let Some(nl) = st.scrollback.iter().take(4096).position(|&b| b == b'\n') {
+                st.scrollback.drain(..=nl);
+            }
+        }
+        st.watchers.retain(|w| w.out.send(Frame::Data { stream: w.stream, bytes: bytes.clone() }).is_ok());
+    }
+
+    pub fn run_started(&self, command: &str, at: i64) -> u64 {
+        let mut runs = self.runs.lock().unwrap();
+        let id = runs.back().map_or(1, |r| r.id + 1);
+        runs.push_back(Run { id, command: command.to_string(), started_at: at, finished_at: None, exit_status: None, timed_out: false, output: String::new() });
+        if runs.len() > RUNS {
+            runs.pop_front();
+        }
+        id
+    }
+
+    pub fn run_output(&self, id: u64, bytes: &[u8]) {
+        if let Some(r) = self.runs.lock().unwrap().iter_mut().find(|r| r.id == id) {
+            r.output.push_str(&String::from_utf8_lossy(bytes));
+            if r.output.len() > RUN_OUTPUT {
+                let mut cut = r.output.len() - RUN_OUTPUT;
+                while !r.output.is_char_boundary(cut) {
+                    cut += 1;
+                }
+                r.output.drain(..cut);
+            }
+        }
+    }
+
+    pub fn run_finished(&self, id: u64, at: i64, exit_status: Option<u32>, timed_out: bool) {
+        if let Some(r) = self.runs.lock().unwrap().iter_mut().find(|r| r.id == id) {
+            (r.finished_at, r.exit_status, r.timed_out) = (Some(at), exit_status, timed_out);
+        }
+    }
+
+    pub fn runs(&self) -> Vec<Run> {
+        self.runs.lock().unwrap().iter().cloned().collect()
+    }
+
+    /// The last `max` bytes of output.
+    pub fn recent(&self, max: usize) -> Vec<u8> {
+        let st = self.state.lock().unwrap();
+        let skip = st.scrollback.len().saturating_sub(max);
+        st.scrollback.iter().skip(skip).copied().collect()
+    }
 }
 
 #[derive(Clone, Default)]
@@ -72,26 +155,14 @@ impl Sessions {
     /// Keeps a session that just connected and starts passing its output on.
     /// `on_closed` runs once it ends.
     pub fn add(&self, info: SessionInfo, handle: SessionHandle, mut events: UnboundedReceiver<SessionEvent>, close_with: Option<u64>, on_closed: impl FnOnce() + Send + 'static) -> Arc<Session> {
-        let session = Arc::new(Session { info, handle, close_with, state: Mutex::new(State { scrollback: VecDeque::new(), watchers: Vec::new() }) });
+        let session = Arc::new(Session { info, handle, close_with, state: Mutex::new(State { scrollback: VecDeque::new(), watchers: Vec::new() }), runs: Mutex::default() });
         self.0.lock().unwrap().insert(session.info.id.clone(), session.clone());
         let (all, s) = (self.0.clone(), session.clone());
         tokio::spawn(async move {
             let mut exit_status = None;
             while let Some(ev) = events.recv().await {
                 match ev {
-                    SessionEvent::Data(bytes) => {
-                        let mut st = s.state.lock().unwrap();
-                        st.scrollback.extend(&bytes);
-                        if st.scrollback.len() > SCROLLBACK {
-                            let cut = st.scrollback.len() - SCROLLBACK;
-                            st.scrollback.drain(..cut);
-                            // Start at a line, not in the middle of one.
-                            if let Some(nl) = st.scrollback.iter().take(4096).position(|&b| b == b'\n') {
-                                st.scrollback.drain(..=nl);
-                            }
-                        }
-                        st.watchers.retain(|w| w.out.send(Frame::Data { stream: w.stream, bytes: bytes.clone() }).is_ok());
-                    }
+                    SessionEvent::Data(bytes) => s.output(bytes),
                     SessionEvent::Closed { exit_status: e } => {
                         exit_status = e;
                         break;
@@ -146,8 +217,8 @@ impl Sessions {
     }
 
     /// Closes every session of an agent's token (when it is revoked).
-    pub fn close_owned_by(&self, owner: &Owner) {
-        for s in self.0.lock().unwrap().values().filter(|s| &s.info.owner == owner) {
+    pub fn close_owned_by(&self, token_id: &str) {
+        for s in self.0.lock().unwrap().values().filter(|s| s.info.owner.token_id() == Some(token_id)) {
             s.close();
         }
     }

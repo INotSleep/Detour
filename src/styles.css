@@ -1074,6 +1074,7 @@ body.resizing-col, body.resizing-col * { cursor: row-resize !important; }
 .menu button:disabled { opacity: 0.4; pointer-events: none; }
 /* Terminals and file browsers fill their view and scroll inside. */
 .view:has(> .term-panes), .view:has(> .files) { overflow: hidden; }
+.term-panes:has(+ .agent-runs) { bottom: 34px; }
 
 /* import from ~/.ssh */
 .import-wait { display: grid; place-items: center; padding: 32px; color: var(--muted); }
@@ -1106,3 +1107,29 @@ body.resizing-col, body.resizing-col * { cursor: row-resize !important; }
 .github-install { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .deploy-key { display: flex; flex-direction: column; gap: 6px; margin-top: -4px; }
 .deploy-key .id-box { font-size: 11.5px; padding: 8px 10px; }
+
+/* AI agents */
+.agent-reason { margin-bottom: 14px; padding: 10px 12px; border-radius: 8px; background: var(--input); color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.agent-group { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+.agent-group:last-child { margin-bottom: 0; }
+.agent-group .segmented { align-self: flex-start; }
+.agent-label { display: block; font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 2px; }
+.agent-command { margin: 8px 0 14px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; }
+.agent-token { justify-content: flex-start; }
+.agent-icon { flex: none; color: var(--muted); }
+.agent-token-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.agent-token-main > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-token-name { font-weight: 600; }
+.agent-runs { position: absolute; left: 0; right: 0; bottom: 0; display: flex; flex-direction: column; background: var(--surface); border-top: 1px solid var(--line-strong); z-index: 3; }
+.agent-runs-bar { display: flex; align-items: center; gap: 8px; height: 33px; padding: 0 12px; text-align: left; color: var(--text-2); flex: none; }
+.agent-runs-bar:hover, .agent-run-head:hover { background: var(--hover); }
+.agent-runs-bar:active, .agent-run-head:active { background: var(--press); }
+.agent-runs-who { font-weight: 600; color: var(--text); flex: none; }
+.agent-run-cmd { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--text); }
+.agent-runs-list { max-height: min(50vh, 420px); overflow: auto; border-bottom: 1px solid var(--line); }
+.agent-run + .agent-run { border-top: 1px solid var(--line); }
+.agent-run-head { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 12px; text-align: left; }
+.agent-run-output { margin: 0; padding: 8px 12px 10px 33px; max-height: 260px; overflow: auto; font-size: 12px; line-height: 1.45; color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; background: var(--term); }
+.run-code { flex: none; min-width: 13px; font-size: 11px; font-weight: 600; text-align: center; }
+.run-code.err { color: var(--err); }
+.ok-text { color: var(--ok); flex: none; }

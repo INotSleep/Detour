@@ -43,7 +43,7 @@ fn localize(mut cmd: Command, path: &str) -> Command {
             _ => format!("<{id}>"),
         };
         // The text for this command, or the one its options and arguments share elsewhere.
-        let help = text(&format!("{path} {part}").trim_start().to_owned()).or_else(|| text(&part));
+        let help = text(format!("{path} {part}").trim_start()).or_else(|| text(&part));
         cmd = cmd.mut_arg(id, |a| {
             // Defaults and possible values, where they matter, are in the text itself.
             let a = a.help_heading(if positional { t.help_arguments } else { t.help_options }).display_order(first + i);

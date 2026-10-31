@@ -21,9 +21,9 @@ use serde_json::{Value, json};
 use crate::sessions::{Owner, SessionInfo};
 use crate::{Core, Ctx};
 
-type Out = Result<Value, Value>;
+pub(crate) type Out = Result<Value, Value>;
 
-fn err(e: Error) -> Value {
+pub(crate) fn err(e: Error) -> Value {
     serde_json::to_value(&e).unwrap_or_else(|_| json!({ "kind": "internal", "message": e.to_string() }))
 }
 
@@ -31,12 +31,12 @@ fn ok<T: Serialize>(r: detour_core::Result<T>) -> Out {
     r.map(|v| serde_json::to_value(v).unwrap_or(Value::Null)).map_err(err)
 }
 
-fn poisoned<T>(_: T) -> Value {
+pub(crate) fn poisoned<T>(_: T) -> Value {
     err(Error::Internal { message: "state lock poisoned".into() })
 }
 
 /// The arguments of a method, as a struct its handler declares.
-fn args<T: DeserializeOwned>(method: &str, p: Value) -> Result<T, Value> {
+pub(crate) fn args<T: DeserializeOwned>(method: &str, p: Value) -> Result<T, Value> {
     let p = if p.is_null() { json!({}) } else { p };
     serde_json::from_value(p).map_err(|e| json!({ "kind": "badArguments", "message": format!("{method}: {e}") }))
 }
@@ -56,12 +56,13 @@ fn git_remote(url: String, auth: Auth, token: Option<String>, github: Option<boo
 }
 
 /// Methods that only read: everything else may change what clients show.
-const READ_ONLY: &[&str] = &[
+pub(crate) const READ_ONLY: &[&str] = &[
     "hello", "core_info", "vault_status", "vault_get", "ssh_import_preview", "sync_status", "teams_pending", "sync_recovery_key", "sync_add_device",
     "host_password", "key_export", "my_id", "id_inspect", "recovery_key_new", "teams_list", "team_inspect", "team_inspect_git",
-    "github_user", "github_start", "github_repo_access", "session_input", "session_resize", "session_attach", "session_detach", "sessions_list",
+    "github_user", "github_start", "github_repo_access", "session_input", "session_resize", "session_attach", "session_detach", "sessions_list", "session_runs",
     "files_open", "files_list", "files_resolve", "files_cancel", "files_close", "tunnels_status", "tunnel_start", "tunnel_stop", "settings_get",
     "settings_set", "activity", "quit", "trust_request", "trust_answer", "trust_with_password", "hosts_export",
+    "agents_pending", "agents_list", "agents_answer", "agents_revoke",
 ];
 
 /// What a client may call before it is trusted: enough to become trusted.
@@ -71,6 +72,11 @@ const OPEN: &[&str] = &["hello", "core_info", "vault_status", "vault_create", "v
 const ASK_FOR: std::time::Duration = std::time::Duration::from_secs(120);
 
 pub(crate) async fn call(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value) -> Out {
+    // Agents prove themselves with a token in each call (see `agents`).
+    if method.starts_with("agent_") {
+        core.touch();
+        return crate::agents::call(core, ctx, method, p).await;
+    }
     if !OPEN.contains(&method) && !core.is_trusted(ctx.id) {
         return Err(json!({ "kind": "notTrusted", "window": core.has_window() }));
     }
@@ -128,7 +134,7 @@ enum SecretKindArg {
     Passphrase,
 }
 
-async fn dispatch(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value) -> Out {
+pub(crate) async fn dispatch(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value) -> Out {
     let store = &core.store;
     macro_rules! s {
         () => {
@@ -153,6 +159,9 @@ async fn dispatch(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value) -> Out {
             core.quit.notify_one();
             Ok(Value::Null)
         }
+
+        /* ---------- agents ---------- */
+        "agents_pending" | "agents_list" | "agents_answer" | "agents_revoke" => crate::agents::person(core, method, p).await,
 
         /* ---------- vault ---------- */
         "vault_status" => {
@@ -501,6 +510,11 @@ async fn dispatch(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value) -> Out {
             Ok(json!({ "sessionId": id, "pinnedFingerprint": pinned_fingerprint }))
         }
         "sessions_list" => Ok(serde_json::to_value(core.sessions.list()).unwrap_or_default()),
+        // What an agent ran in a session, for its tab.
+        "session_runs" => {
+            let a = args!(method, p, { session_id: String });
+            Ok(serde_json::to_value(core.sessions.get(&a.session_id).map(|s| s.runs()).unwrap_or_default()).unwrap_or_default())
+        }
         "session_attach" => {
             let a = args!(method, p, { session_id: String, stream: u64 });
             let session = core.sessions.get(&a.session_id).ok_or_else(|| err(Error::NotFound { what: "session".into() }))?;

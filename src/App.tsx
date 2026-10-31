@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeftRight, Code, FolderOpen, FolderPlus, KeyRound, Plus, Server, Settings as SettingsIcon, Users, X } from "lucide-react";
+import { ArrowLeftRight, Bot, Code, FolderOpen, FolderPlus, KeyRound, Plus, Server, Settings as SettingsIcon, Users, X } from "lucide-react";
 import { LangContext, lang as currentLang, resolveLang, setLang, tr, useT } from "./i18n";
-import { api, errorText, fromView, type CoreInfo, type SyncInfo, type TeamView, type VaultView } from "./lib/api";
+import { api, errorText, fromView, type AgentRequest, type CoreInfo, type SyncInfo, type TeamView, type VaultView } from "./lib/api";
 import { shownSessions } from "./lib/realSession";
 import { applyTeamEntries, applyTeamView, dataOf, removeVault, writable } from "./lib/teams";
 import { mockWorkspace } from "./lib/mockData";
@@ -22,6 +22,7 @@ import { CommandPalette } from "./components/CommandPalette";
 import { ConflictDialog } from "./components/ConflictDialog";
 import { Button, IconButton, Modal, useToaster } from "./components/ui";
 import { LockScreen } from "./components/LockScreen";
+import { AgentRequestDialog } from "./components/Agents";
 
 interface Session {
   id: string;
@@ -34,6 +35,8 @@ interface Session {
   command?: string;
   /** A session the core already holds (opened before the window was, or by an agent). */
   attach?: string;
+  /** The AI agent whose session it is. */
+  agent?: string;
 }
 
 const sectionIcon: Record<Section, typeof Server> = {
@@ -99,6 +102,8 @@ export default function App() {
   const [conflictVaultId, setConflictVaultId] = useState<string | null>(null);
   /** A terminal waiting for "Allow" to use Detour from the command line. */
   const [trustAsk, setTrustAsk] = useState<{ id: number; terminal: { name: string; pid: number; host: string | null } | null } | null>(null);
+  /** What AI agents wait on, oldest first. */
+  const [agentAsks, setAgentAsks] = useState<AgentRequest[]>([]);
   const [settings, setSettingsState] = useState<Settings>(loadSettings);
   const appliedVars = useRef<string[]>([]);
   useEffect(() => {
@@ -123,7 +128,8 @@ export default function App() {
         ...tabs,
         ...fresh.map((c) => {
           const host = hosts.find((h) => h.id === c.hostId)!;
-          return { id: uid("s"), hostId: c.hostId, kind: "terminal" as const, title: host.label, status: "connected" as const, attach: c.id };
+          const agent = c.owner.type === "agent" ? c.owner.agent : undefined;
+          return { id: uid("s"), hostId: c.hostId, kind: "terminal" as const, title: host.label, status: "connected" as const, attach: c.id, agent };
         }),
       ];
     });
@@ -139,6 +145,7 @@ export default function App() {
       setWs(fresh);
       setPhase("ready");
       void restoreSessions();
+      void api.agentsPending().then(setAgentAsks).catch(() => {});
     });
   }, [restoreSessions]);
 
@@ -150,6 +157,7 @@ export default function App() {
     wsRef.current = fresh;
     setPhase("ready");
     void restoreSessions();
+    void api.agentsPending().then(setAgentAsks).catch(() => {});
   };
 
   const lock = useCallback(async () => {
@@ -361,6 +369,14 @@ export default function App() {
           case "trust.requested":
             setTrustAsk(e.data as { id: number; terminal: { name: string; pid: number; host: string | null } | null });
             break;
+          case "agents.requested": {
+            const req = e.data as AgentRequest;
+            setAgentAsks((list) => (list.some((r) => r.id === req.id) ? list : [...list, req]));
+            break;
+          }
+          case "agents.answered":
+            setAgentAsks((list) => list.filter((r) => r.id !== (e.data as { id: string }).id));
+            break;
           case "trust.answered":
             setTrustAsk((a) => (a && a.id === (e.data as { id: number }).id ? null : a));
             break;
@@ -547,11 +563,13 @@ export default function App() {
                     tabIndex={0}
                     aria-selected={activeId === s.id}
                     className={`tab ${activeId === s.id ? "active" : ""}`}
+                    title={s.agent && tr().agents.tab(s.agent)}
                     onClick={() => setActiveId(s.id)}
                     onAuxClick={(e) => e.button === 1 && closeSession(s.id)}
                   >
                     <span className={`session-dot ${s.status}`} />
                     {s.kind === "files" && <FolderOpen size={13} className="tab-kind" />}
+                    {s.agent && <Bot size={13} className="tab-kind" />}
                     <span className="tab-label">{s.title}</span>
                     <button
                       className="tab-close"
@@ -586,7 +604,7 @@ export default function App() {
                     {s.kind === "files" || !host ? (
                       <FilesView host={host} active={activeId === s.id} onStatus={(st) => setStatus(s.id, st)} onClose={() => closeSession(s.id)} onPickHost={(hostId) => pickHost(s.id, hostId)} />
                     ) : (
-                      <TerminalTab host={host} active={activeId === s.id} initialCommand={s.command} attach={s.attach} onStatus={(st) => setStatus(s.id, st)} onExit={() => closeSession(s.id)} />
+                      <TerminalTab host={host} active={activeId === s.id} initialCommand={s.command} attach={s.attach} agent={s.agent} onStatus={(st) => setStatus(s.id, st)} onExit={() => closeSession(s.id)} />
                     )}
                   </div>
                 );
@@ -632,6 +650,9 @@ export default function App() {
               </div>
             )}
           </Modal>
+        )}
+        {!trustAsk && phase === "ready" && agentAsks[0] && (
+          <AgentRequestDialog key={agentAsks[0].id} request={agentAsks[0]} onDone={() => setAgentAsks((list) => list.slice(1))} />
         )}
         {toaster.view}
         {phase === "locked" && <LockScreen mode="unlock" onUnlocked={(v) => void unlocked(v)} />}
