@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The MSI's install folder, where the command line `detour` is, on the system PATH
+     (bundle.windows.wix.fragmentPaths). The MSI installs for every user, so it is the
+     system's PATH; uninstalling takes it out. -->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+    <DirectoryRef Id="INSTALLDIR">
+      <Component Id="DetourCliPath" Guid="{6F4B2C1E-8A3D-4E57-9B21-3C7D5E8F9A10}">
+        <Environment Id="DetourCliPath" Name="PATH" Value="[INSTALLDIR]" Permanent="no" Part="last" Action="set" System="yes" />
+        <CreateFolder />
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+</Wix>

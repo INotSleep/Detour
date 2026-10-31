@@ -350,7 +350,7 @@ function demoKey(vaultId: string, name: string, algorithm: SshKey["algorithm"], 
 /* ---------- the core ---------- */
 
 /** What the window does itself; everything else is a method of the core. */
-const WINDOW_COMMANDS = new Set(["core_info", "core_me", "write_text_file", "local_home", "local_list", "local_mkdir", "open_local", "editors", "open_with", "edit_copy_path", "local_modified", "mcp_clients", "mcp_client_set", "tray_set", "window_show"]);
+const WINDOW_COMMANDS = new Set(["core_info", "core_me", "write_text_file", "local_home", "local_list", "local_mkdir", "open_local", "editors", "open_with", "edit_copy_path", "local_modified", "mcp_clients", "mcp_client_set", "tray_set", "window_show", "cli_status", "cli_install"]);
 
 /**
  * Calls the core with the arguments its method takes. A `Channel` among them becomes
@@ -683,6 +683,16 @@ export const api = {
   /** What the tray says, and whether closing the window hides it there (`keep`). */
   traySet(texts: { tooltip: string; status: string; open: string; lock: string | null; quit: string; keep: boolean }): Promise<void> {
     return real ? invoke("tray_set", { texts }) : Promise.resolve();
+  },
+
+  /** Whether `detour` can be put on the PATH from the app (macOS), and is. */
+  cliStatus(): Promise<{ canInstall: boolean; installed: boolean }> {
+    return real ? invoke("cli_status") : Promise.resolve({ canInstall: false, installed: false });
+  },
+
+  /** Puts `detour` on the PATH (macOS asks for the administrator password). */
+  cliInstall(): Promise<void> {
+    return invoke("cli_install");
   },
 
   /** Brings the window forward (from the tray): someone waits for an answer in it. */

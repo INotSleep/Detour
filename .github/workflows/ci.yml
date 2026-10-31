@@ -1,6 +1,6 @@
-# Tests on every push and pull request that touches code. Installers for macOS and Linux
-# on a tag `v*` (into a draft release) or when run by hand: macOS minutes are
-# expensive on private repositories. Windows installers are signed with a code signing
+# Tests on every push and pull request that touches code. Installers for macOS and Linux,
+# and the command line alone for servers, on a tag `v*` (into a draft release) or when run
+# by hand: macOS minutes are expensive on private repositories. Windows installers are signed with a code signing
 # certificate that lives in SimplySign, so they are built and added to the release on the
 # maintainer's computer: scripts/release-windows.ps1.
 name: CI
@@ -101,8 +101,9 @@ jobs:
 
       - run: npm ci
 
-      # Builds the installers; on a tag, also attaches them to a draft release, with the
-      # signed update files and latest.json the app's updater reads.
+      # Builds the installers, with the command line inside (tauri.bundle.conf.json); on a tag,
+      # also attaches them to a draft release, with the signed update files and latest.json
+      # the app's updater reads.
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -112,7 +113,7 @@ jobs:
           tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
           releaseName: Detour ${{ github.ref_name }}
           releaseDraft: true
-          args: ${{ matrix.args }}
+          args: ${{ matrix.args }} --config src-tauri/tauri.bundle.conf.json
 
       - uses: actions/upload-artifact@v7
         with:
@@ -127,3 +128,62 @@ jobs:
             target/**/release/bundle/**/*.sig
             target/**/release/bundle/**/*.app.tar.gz
           if-no-files-found: error
+
+  # The command line alone, for servers without a desktop: `detour` in a .tar.gz with its
+  # SHA-256. Windows' is built and signed with the installers (scripts/release-windows.ps1).
+  cli:
+    name: Command line (${{ matrix.name }})
+    needs: bundle
+    if: ${{ !cancelled() && needs.bundle.result == 'success' }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-22.04
+          - name: linux-arm64
+            os: ubuntu-22.04-arm
+          # One binary for Apple Silicon and Intel Macs.
+          - name: macos
+            os: macos-latest
+            targets: aarch64-apple-darwin,x86_64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.targets }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        shell: bash
+        run: |
+          version=$(sed -n 's/.*"version": "\(.*\)".*/\1/p' src-tauri/tauri.conf.json | head -1)
+          if [ "${{ runner.os }}" = macOS ]; then
+            for t in aarch64-apple-darwin x86_64-apple-darwin; do cargo build -p detour-cli --release --locked --target $t; done
+            lipo -create -output detour target/aarch64-apple-darwin/release/detour target/x86_64-apple-darwin/release/detour
+          else
+            cargo build -p detour-cli --release --locked
+            cp target/release/detour detour
+          fi
+          name=detour-cli-$version-${{ matrix.name }}.tar.gz
+          tar czf "$name" detour
+          shasum -a 256 "$name" > "$name.sha256"
+          echo "ARCHIVE=$name" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: detour-cli-${{ matrix.name }}
+          path: detour-cli-*.tar.gz*
+          if-no-files-found: error
+
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$GITHUB_REF_NAME" "$ARCHIVE" "$ARCHIVE.sha256" --clobber -R "$GITHUB_REPOSITORY"

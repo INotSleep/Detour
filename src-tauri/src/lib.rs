@@ -329,6 +329,52 @@ async fn mcp_client_set(core: State<'_, Arc<Core>>, id: String, on: bool) -> Res
         .map_err(|e| Error::Internal { message: e.to_string() })?
 }
 
+/* ---------- the command line on the PATH (macOS) ---------- */
+
+/// Where macOS gets `detour` from: the app bundle holds it, a link here puts it on the PATH.
+#[cfg(target_os = "macos")]
+const CLI_LINK: &str = "/usr/local/bin/detour";
+
+/// Whether `detour` can be put on the PATH from here (macOS: installers elsewhere do it), and is.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CliStatus {
+    can_install: bool,
+    installed: bool,
+}
+
+#[tauri::command]
+fn cli_status() -> CliStatus {
+    #[cfg(target_os = "macos")]
+    if let Some(cli) = cli_beside() {
+        let installed = std::fs::canonicalize(CLI_LINK).ok() == std::fs::canonicalize(&cli).ok();
+        return CliStatus { can_install: true, installed };
+    }
+    CliStatus { can_install: false, installed: false }
+}
+
+/// Links `detour` into /usr/local/bin, asking for the administrator password as macOS does.
+#[tauri::command]
+async fn cli_install() -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let cli = cli_beside().ok_or_else(|| Error::NotFound { what: "detour".into() })?;
+        let quote = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
+        let shell = format!("mkdir -p /usr/local/bin && ln -sf {} {}", quote(&cli.display().to_string()), quote(CLI_LINK));
+        let script = format!("do shell script \"{}\" with administrator privileges", shell.replace('\\', "\\\\").replace('"', "\\\""));
+        let out = tauri::async_runtime::spawn_blocking(move || std::process::Command::new("osascript").args(["-e", &script]).output())
+            .await
+            .map_err(|e| Error::Internal { message: e.to_string() })??;
+        if !out.status.success() {
+            // Cancelled in the password dialog, or refused.
+            return Err(Error::Cancelled);
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    Err(Error::Forbidden)
+}
+
 /* ---------- the tray ---------- */
 
 /// The window hides to the tray instead of closing while the core holds something
@@ -452,6 +498,8 @@ pub fn builder<R: tauri::Runtime>(builder: tauri::Builder<R>, data_dir: PathBuf)
             mcp_client_set,
             tray_set,
             window_show,
+            cli_status,
+            cli_install,
         ])
 }
 

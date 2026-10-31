@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Code, Download, Ellipsis, Lock, Pencil, Play, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { locale, useT } from "../i18n";
 import { api, errorText, isCoreError } from "../lib/api";
@@ -202,6 +202,7 @@ export function SettingsView() {
       </section>
       )}
 
+      {api.real && <CliSetting />}
       {api.real && <AgentsSettings />}
       {api.real && <McpClients />}
 
@@ -312,5 +313,35 @@ function EditorSetting() {
       <option value="">{t.defaultApp}</option>
       {list.map((e) => <option key={e.path} value={e.path}>{e.name}</option>)}
     </select>
+  );
+}
+
+/** Settings: the `detour` command on the PATH, where the app puts it there itself (macOS). */
+function CliSetting() {
+  const t = useT().settings.cli;
+  const { toast } = useStore();
+  const [status, setStatus] = useState<{ canInstall: boolean; installed: boolean } | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => void api.cliStatus().then(setStatus).catch(() => {}), []);
+  if (!status?.canInstall) return null;
+  const install = async () => {
+    setBusy(true);
+    try {
+      await api.cliInstall();
+      setStatus(await api.cliStatus());
+      toast({ text: t.done, tone: "success" });
+    } catch (e) {
+      toast({ text: errorText(e), tone: "error" });
+    }
+    setBusy(false);
+  };
+  return (
+    <section className="settings-group">
+      <h3 className="section-title">{t.title}</h3>
+      <div className="setting">
+        <span>{t.command}</span>
+        {status.installed ? <span className="muted small">{t.installed}</span> : <Button size="sm" loading={busy} onClick={() => void install()}>{t.install}</Button>}
+      </div>
+    </section>
   );
 }

@@ -1,6 +1,7 @@
 # Builds the Windows installers on this computer, signs them with the Certum code signing
 # certificate in SimplySign Desktop, and adds them to the tag's draft release that CI made
-# for the other systems, with their entries in latest.json.
+# for the other systems, with their entries in latest.json. The command line (`detour`) is
+# signed first and goes into the installers and, zipped, into the release on its own.
 #
 # Needs: SimplySign Desktop signed in, the GitHub CLI signed in, the updater key at
 # ~/.tauri/detour-updater.key (or TAURI_SIGNING_PRIVATE_KEY). Its password comes from
@@ -49,13 +50,34 @@ if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
 
 # ---------- build and sign ----------
 
-# Tauri signs the app before packing it, then each installer.
+$sidecar = Join-Path $root "src-tauri\binaries\detour-x86_64-pc-windows-msvc.exe"
+$cliZip = Join-Path $root "target\release\detour-cli-$version-windows-x86_64.zip"
+
+# The command line, signed, where Tauri takes it for the installers (scripts/sidecar.mjs
+# would build it again unsigned: DETOUR_SIDECAR_READY tells it not to). Then Tauri signs
+# the app before packing it, and each installer.
 if (-not $SkipBuild) {
+  Step "Building the command line"
+  cargo build -p detour-cli --release --locked
+  if ($LASTEXITCODE -ne 0) { throw "The command line build failed." }
+  New-Item -ItemType Directory -Force (Split-Path $sidecar) | Out-Null
+  Copy-Item (Join-Path $root "target\release\detour.exe") $sidecar -Force
+  & $signtool.FullName sign /sha1 $cert.Thumbprint /fd sha256 /tr http://time.certum.pl /td sha256 $sidecar
+  if ($LASTEXITCODE -ne 0) { throw "Signing the command line failed." }
+  $zipDir = Join-Path $env:TEMP "detour-cli-zip"
+  Remove-Item -Recurse -Force $zipDir -ErrorAction SilentlyContinue
+  New-Item -ItemType Directory $zipDir | Out-Null
+  Copy-Item $sidecar (Join-Path $zipDir "detour.exe")
+  Compress-Archive -Path (Join-Path $zipDir "detour.exe") -DestinationPath $cliZip -Force
+  $hash = (Get-FileHash $cliZip -Algorithm SHA256).Hash.ToLower()
+  [IO.File]::WriteAllText("$cliZip.sha256", "$hash  $(Split-Path $cliZip -Leaf)`n", (New-Object Text.UTF8Encoding $false))
+
   Step "Building $tag"
   $config = Join-Path $env:TEMP "detour-sign.json"
   $sign = @{ bundle = @{ windows = @{ certificateThumbprint = $cert.Thumbprint; digestAlgorithm = "sha256"; timestampUrl = "http://time.certum.pl"; tsp = $true } } }
   [IO.File]::WriteAllText($config, ($sign | ConvertTo-Json -Depth 5), (New-Object Text.UTF8Encoding $false))
-  npm run tauri build -- --bundles nsis,msi --config $config
+  $env:DETOUR_SIDECAR_READY = "1"
+  npm run tauri build -- --bundles nsis,msi --config src-tauri/tauri.bundle.conf.json --config $config
   if ($LASTEXITCODE -ne 0) { throw "The build failed." }
 }
 
@@ -66,6 +88,9 @@ $files = @{
 }
 
 Step "Checking signatures"
+& $signtool.FullName verify /pa /q $sidecar
+if ($LASTEXITCODE -ne 0) { throw "Not signed: $sidecar" }
+Write-Host "signed  detour.exe (command line)"
 foreach ($file in @($files.nsis, $files.msi)) {
   & $signtool.FullName verify /pa /q $file
   if ($LASTEXITCODE -ne 0) { throw "Not signed: $file" }
@@ -88,7 +113,7 @@ while ($true) {
 }
 
 Step "Uploading"
-$assets = @($files.nsis, "$($files.nsis).sig", $files.msi, "$($files.msi).sig")
+$assets = @($files.nsis, "$($files.nsis).sig", $files.msi, "$($files.msi).sig", $cliZip, "$cliZip.sha256")
 gh release upload $tag @assets -R $repo --clobber
 if ($LASTEXITCODE -ne 0) { throw "Upload failed." }
 
