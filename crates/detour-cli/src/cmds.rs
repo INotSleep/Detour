@@ -6,7 +6,7 @@ use detour_ipc::{Client, StreamItem};
 use serde_json::{Value, json};
 
 use crate::conn::{Fail, Res, confirm, fail, secret};
-use crate::i18n::{error_text, t};
+use crate::i18n::t;
 
 pub const PERSONAL: &str = "personal";
 

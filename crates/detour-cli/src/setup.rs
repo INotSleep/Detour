@@ -366,13 +366,21 @@ pub async fn team_token(ctx: &Ctx, github: bool) -> Res<()> {
     Ok(())
 }
 
-/// Teams joined on the person's other devices and not here yet: a folder one needs its folder.
+/// Teams joined on the person's other devices and not here yet: a folder one needs its folder;
+/// one in Git joins by itself, or says why it couldn't.
 pub async fn pending_teams(c: &Client) -> Res<()> {
     let pending = c.call("teams_pending", json!({})).await?;
-    let folders: Vec<String> = pending.as_array().into_iter().flatten().filter(|p| p["url"].is_null()).map(|p| s(&p["name"])).collect();
+    let all = pending.as_array().cloned().unwrap_or_default();
+    let folders: Vec<String> = all.iter().filter(|p| p["url"].is_null()).map(|p| s(&p["name"])).collect();
     if !folders.is_empty() {
         eprintln!("\n{} {}", t().teams_elsewhere, folders.join(", "));
         eprintln!("    detour teams join <folder>");
+    }
+    for p in all.iter().filter(|p| !p["url"].is_null()) {
+        match p["error"].is_null() {
+            true => eprintln!("\n{} {}", t().team_joining, s(&p["name"])),
+            false => eprintln!("\n{} {}: {}", t().team_cant_join, s(&p["name"]), error_text(&p["error"])),
+        }
     }
     Ok(())
 }
