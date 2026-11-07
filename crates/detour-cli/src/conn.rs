@@ -36,6 +36,18 @@ pub fn secret(prompt: &str) -> Res<String> {
     rpassword::read_password().map_err(|e| Fail(e.to_string()))
 }
 
+/// A line typed on the terminal (a code, a name): never from a pipe.
+pub fn line(prompt: &str) -> Res<String> {
+    if !std::io::stdin().is_terminal() {
+        return fail(t().needs_terminal);
+    }
+    eprint!("{prompt}");
+    let _ = std::io::stderr().flush();
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line).map_err(|e| Fail(e.to_string()))?;
+    Ok(line.trim().to_string())
+}
+
 /// A yes/no question on the terminal; anything but "y" is no.
 pub fn confirm(prompt: &str) -> bool {
     if !std::io::stdin().is_terminal() {

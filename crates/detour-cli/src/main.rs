@@ -8,6 +8,7 @@ mod conn;
 mod help;
 mod i18n;
 mod mcp;
+mod setup;
 mod term;
 
 use std::path::PathBuf;
@@ -59,6 +60,12 @@ enum Command {
     Sync {
         #[arg(long)]
         now: bool,
+        #[command(subcommand)]
+        action: Option<SyncAction>,
+    },
+    Github {
+        #[command(subcommand)]
+        action: Option<GithubAction>,
     },
     #[command(subcommand)]
     Teams(Teams),
@@ -161,8 +168,62 @@ enum Snippets {
 }
 
 #[derive(Subcommand)]
+enum SyncAction {
+    Enable {
+        place: String,
+        #[command(flatten)]
+        login: setup::GitLogin,
+    },
+    Join {
+        place: String,
+        #[arg(long)]
+        code: Option<String>,
+        #[command(flatten)]
+        login: setup::GitLogin,
+    },
+    AddDevice,
+    RecoveryKey,
+    Token {
+        #[arg(long)]
+        github: bool,
+    },
+    Disable,
+}
+
+#[derive(Subcommand)]
+pub enum GithubAction {
+    Login,
+    Logout,
+}
+
+#[derive(Subcommand)]
 enum Teams {
     Ls,
+    Create {
+        place: String,
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        me: String,
+        #[command(flatten)]
+        login: setup::GitLogin,
+    },
+    Join {
+        place: String,
+        #[command(flatten)]
+        login: setup::GitLogin,
+    },
+    Recover {
+        place: String,
+        #[arg(long)]
+        me: String,
+        #[command(flatten)]
+        login: setup::GitLogin,
+    },
+    Token {
+        #[arg(long)]
+        github: bool,
+    },
     Sync,
     Members,
     Add {
@@ -311,21 +372,39 @@ async fn run(command: Command, dir: &std::path::Path, team: Option<String>, json
         Command::Snippets(Snippets::Add { name, command }) => cmds::snippet_add(&ctx, &name, &command.join(" ")).await?,
         Command::Snippets(Snippets::Rm { name }) => cmds::snippet_rm(&ctx, &name).await?,
         Command::Snippets(Snippets::Run { name, host }) => return cmds::snippet_run(&ctx, &name, &host).await,
-        Command::Sync { now } => cmds::sync(&ctx, now).await?,
-        Command::Teams(Teams::Ls) => cmds::teams(&ctx).await?,
+        Command::Sync { now, action: None } => setup::sync(&ctx, now).await?,
+        Command::Sync { action: Some(a), .. } => match a {
+            SyncAction::Enable { place, login } => setup::sync_enable(&ctx, &place, &login).await?,
+            SyncAction::Join { place, code, login } => setup::sync_join(&ctx, &place, code, &login).await?,
+            SyncAction::AddDevice => setup::sync_add_device(&ctx).await?,
+            SyncAction::RecoveryKey => setup::sync_recovery_key(&ctx).await?,
+            SyncAction::Token { github } => setup::sync_token(&ctx, github).await?,
+            SyncAction::Disable => setup::sync_disable(&ctx).await?,
+        },
+        Command::Github { action } => setup::github(&ctx.c, action).await?,
+        Command::Teams(Teams::Ls) => {
+            cmds::teams(&ctx).await?;
+            if !json {
+                setup::pending_teams(&ctx.c).await?;
+            }
+        }
+        Command::Teams(Teams::Create { place, name, me, login }) => setup::team_create(&ctx, &place, &name, &me, &login).await?,
+        Command::Teams(Teams::Join { place, login }) => setup::team_join(&ctx, &place, &login).await?,
+        Command::Teams(Teams::Recover { place, me, login }) => setup::team_recover(&ctx, &place, &me, &login).await?,
         Command::Teams(rest) => {
             if ctx.vault == cmds::PERSONAL {
                 return Err(Fail("--team <TEAM>".into()));
             }
             match rest {
-                Teams::Sync => cmds::team_sync(&ctx).await?,
+                Teams::Sync => setup::team_sync(&ctx).await?,
+                Teams::Token { github } => setup::team_token(&ctx, github).await?,
                 Teams::Members => cmds::members(&ctx).await?,
                 Teams::Add { detour_id, name, role, access } => cmds::member_add(&ctx, &detour_id, &name, &role, &access).await?,
                 Teams::Remove { member } => cmds::member_rm(&ctx, &member).await?,
                 Teams::Role { member, role } => cmds::member_role(&ctx, &member, &role).await?,
                 Teams::Access { record, member, level } => cmds::access(&ctx, &record, &member, &level).await?,
                 Teams::Leave => cmds::team_leave(&ctx).await?,
-                Teams::Ls => unreachable!(),
+                Teams::Ls | Teams::Create { .. } | Teams::Join { .. } | Teams::Recover { .. } => unreachable!(),
             }
         }
         Command::Id => cmds::my_id(&ctx.c, json).await?,

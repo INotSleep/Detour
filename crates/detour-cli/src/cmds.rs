@@ -682,23 +682,6 @@ pub async fn snippet_run(ctx: &Ctx, name: &str, host: &str) -> Res<i32> {
 
 /* ---------- sync ---------- */
 
-pub async fn sync(ctx: &Ctx, now: bool) -> Res<()> {
-    let st = if now { ctx.c.call("sync_now", json!({})).await?["status"].clone() } else { ctx.c.call("sync_status", json!({})).await? };
-    if ctx.json {
-        print_json(&st);
-        return Ok(());
-    }
-    if st["enabled"] == false {
-        println!("{}", t().sync_off);
-        return Ok(());
-    }
-    match st["error"].is_null() {
-        true => println!("{}: {} ({})", t().synced, s(&st["location"]), when(&st["syncedAt"])),
-        false => println!("{}: {}", s(&st["location"]), error_text(&st["error"])),
-    }
-    Ok(())
-}
-
 /* ---------- teams ---------- */
 
 pub async fn teams(ctx: &Ctx) -> Res<()> {
@@ -712,12 +695,6 @@ pub async fn teams(ctx: &Ctx) -> Res<()> {
         if v.is_null() { vec![s(&e["id"]), String::new(), s(&e["error"])] } else { vec![s(&v["name"]), s(&v["myRole"]), v["data"]["hosts"].as_array().map_or(0, |h| h.len()).to_string()] }
     });
     table(&t().headers_teams, rows.collect());
-    Ok(())
-}
-
-pub async fn team_sync(ctx: &Ctx) -> Res<()> {
-    ctx.c.call("team_sync", json!({ "id": ctx.vault })).await?;
-    eprintln!("{}", t().synced);
     Ok(())
 }
 
