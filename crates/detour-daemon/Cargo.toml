@@ -12,6 +12,7 @@ tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "sync", "
 serde.workspace = true
 serde_json.workspace = true
 sysinfo = { version = "0.40.1", default-features = false, features = ["system"] }
+base64 = "0.22"
 
 [dev-dependencies]
 detour-ipc = { path = "../detour-ipc" }

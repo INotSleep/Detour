@@ -899,28 +899,6 @@ pub async fn serve(dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn paths_start_at_home_unless_absolute() {
-        assert_eq!(remote("/home/u", "/etc/hosts"), "/etc/hosts");
-        assert_eq!(remote("/home/u", "notes.txt"), "/home/u/notes.txt");
-        assert_eq!(remote("/home/u/", "~/a/b"), "/home/u/a/b");
-        assert_eq!(remote("/home/u", "~"), "/home/u");
-        assert_eq!(parent("/etc/hosts"), "/etc");
-        assert_eq!(parent("/hosts"), "/");
-    }
-
-    #[test]
-    fn hosts_by_id_name_or_team_name() {
-        let team = ("t1".to_string(), "h9".to_string(), "Acme/web".to_string());
-        assert!(names(&team, "h9") && names(&team, "acme/WEB") && names(&team, "web"));
-        assert!(!names(&team, "other/web") && !names(&team, "db"));
-    }
-}
-
 /* ---------- adding the server to AI clients (`detour mcp add`) ---------- */
 
 /// `detour mcp clients | add | remove`: this `detour` in the configs of the AI clients here.
@@ -975,4 +953,26 @@ pub fn setup(action: crate::McpAction, dir: &Path, json: bool) -> crate::conn::R
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn paths_start_at_home_unless_absolute() {
+        assert_eq!(remote("/home/u", "/etc/hosts"), "/etc/hosts");
+        assert_eq!(remote("/home/u", "notes.txt"), "/home/u/notes.txt");
+        assert_eq!(remote("/home/u/", "~/a/b"), "/home/u/a/b");
+        assert_eq!(remote("/home/u", "~"), "/home/u");
+        assert_eq!(parent("/etc/hosts"), "/etc");
+        assert_eq!(parent("/hosts"), "/");
+    }
+
+    #[test]
+    fn hosts_by_id_name_or_team_name() {
+        let team = ("t1".to_string(), "h9".to_string(), "Acme/web".to_string());
+        assert!(names(&team, "h9") && names(&team, "acme/WEB") && names(&team, "web"));
+        assert!(!names(&team, "other/web") && !names(&team, "db"));
+    }
 }

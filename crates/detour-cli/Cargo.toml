@@ -23,6 +23,7 @@ sys-locale = "0.3.2"
 rmcp = { version = "3.8.0", features = ["server", "transport-io", "macros"] }
 schemars = "1"
 vt100 = "0.18"
+base64 = "0.22"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_System_Console", "Win32_Foundation"] }

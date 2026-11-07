@@ -1,6 +1,6 @@
 //! The commands: each asks the core and prints what it said, as a table or with `--json`.
 
-use std::io::{IsTerminal, Write};
+use std::io::{IsTerminal, Read, Write};
 
 use detour_ipc::{Client, StreamItem};
 use serde_json::{Value, json};
@@ -369,8 +369,22 @@ pub async fn host_export(ctx: &Ctx, names: Vec<String>, out: Option<std::path::P
 
 /* ---------- running commands ---------- */
 
+/// The most of piped input `exec` passes on: it travels in one message to the core.
+const MAX_STDIN: usize = 32 * 1024 * 1024;
+
 pub async fn exec(ctx: &Ctx, name: &str, command: &str) -> Res<i32> {
     let h = host(ctx, name).await?;
+    // Piped input goes to the command; a terminal's doesn't (the command gets none, as with ssh -n).
+    let stdin = if std::io::stdin().is_terminal() {
+        None
+    } else {
+        let mut data = Vec::new();
+        std::io::stdin().take(MAX_STDIN as u64 + 1).read_to_end(&mut data).map_err(|e| Fail(e.to_string()))?;
+        if data.len() > MAX_STDIN {
+            return fail(t().stdin_too_big);
+        }
+        (!data.is_empty()).then(|| base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data))
+    };
     let (out_id, mut out) = ctx.c.stream();
     let (err_id, mut err) = ctx.c.stream();
     let pump = tokio::spawn(async move {
@@ -385,8 +399,8 @@ pub async fn exec(ctx: &Ctx, name: &str, command: &str) -> Res<i32> {
     });
     let (c, vault, host_id) = (ctx.c.clone(), ctx.vault.clone(), s(&h["id"]));
     let r = with_login(ctx, &h, |secret, trust| {
-        let (c, vault, host_id, command) = (c.clone(), vault.clone(), host_id.clone(), command.to_string());
-        async move { c.call("host_exec", json!({ "vaultId": vault, "hostId": host_id, "command": command, "secret": secret, "trustFingerprint": trust, "stream": out_id, "errStream": err_id })).await }
+        let (c, vault, host_id, command, stdin) = (c.clone(), vault.clone(), host_id.clone(), command.to_string(), stdin.clone());
+        async move { c.call("host_exec", json!({ "vaultId": vault, "hostId": host_id, "command": command, "secret": secret, "trustFingerprint": trust, "stream": out_id, "errStream": err_id, "stdin": stdin })).await }
     })
     .await;
     // What is still on its way is printed before exiting.

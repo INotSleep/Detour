@@ -553,9 +553,14 @@ pub(crate) async fn dispatch(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value
         }
 
         /* ---------- commands and export ---------- */
-        // Runs a command: stdout to `stream`, stderr to `errStream`, as raw bytes; returns its exit status.
+        // Runs a command: `stdin` (base64) is its input, stdout goes to `stream`, stderr to `errStream`,
+        // as raw bytes; returns its exit status.
         "host_exec" => {
-            let a = args!(method, p, { vault_id: String, host_id: String, command: String, secret: Option<String>, trust_fingerprint: Option<String>, stream: Option<u64>, err_stream: Option<u64> });
+            let a = args!(method, p, { vault_id: String, host_id: String, command: String, secret: Option<String>, trust_fingerprint: Option<String>, stream: Option<u64>, err_stream: Option<u64>, stdin: Option<String> });
+            let input = match &a.stdin {
+                Some(b) => base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b).map_err(|e| json!({ "kind": "badArguments", "message": format!("stdin: {e}") }))?,
+                None => Vec::new(),
+            };
             let request = s!().connect_request_in(&a.vault_id, &a.host_id, a.secret, a.trust_fingerprint).map_err(err)?;
             let send = |stream: Option<u64>| {
                 let out = ctx.out.clone();
@@ -565,7 +570,7 @@ pub(crate) async fn dispatch(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value
                     }
                 }
             };
-            let (status, new_keys) = ssh::run_command(&request, &a.command, send(a.stream), send(a.err_stream)).await.map_err(err)?;
+            let (status, new_keys) = ssh::run_command(&request, &a.command, &input, send(a.stream), send(a.err_stream)).await.map_err(err)?;
             s!().record_connection_in(&a.vault_id, &a.host_id, new_keys).map_err(err)?;
             Ok(json!({ "exitStatus": status }))
         }

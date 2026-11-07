@@ -438,7 +438,7 @@ pub(crate) async fn call(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value) ->
                 }
             };
             let secs = a.timeout_secs.unwrap_or(60).clamp(1, 3600);
-            let result = tokio::time::timeout(Duration::from_secs(secs), ssh::run_command(&request, &a.command, collect(out.clone()), collect(errs.clone()))).await;
+            let result = tokio::time::timeout(Duration::from_secs(secs), ssh::run_command(&request, &a.command, &[], collect(out.clone()), collect(errs.clone()))).await;
             let (status, timed_out) = match result {
                 Ok(Ok((status, keys))) => {
                     let _ = core.store.lock().map_err(poisoned)?.record_connection_in(&session.info.vault_id, &session.info.host_id, keys);

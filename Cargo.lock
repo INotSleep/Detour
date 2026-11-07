@@ -1386,6 +1386,7 @@ dependencies = [
 name = "detour-cli"
 version = "0.3.0"
 dependencies = [
+ "base64 0.22.1",
  "clap",
  "crossterm",
  "detour-core",
@@ -1432,6 +1433,7 @@ dependencies = [
 name = "detour-daemon"
 version = "0.3.0"
 dependencies = [
+ "base64 0.22.1",
  "detour-core",
  "detour-ipc",
  "rand 0.10.3",
