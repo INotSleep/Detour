@@ -1384,7 +1384,7 @@ dependencies = [
 
 [[package]]
 name = "detour-cli"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "base64 0.22.1",
  "clap",
@@ -1405,7 +1405,7 @@ dependencies = [
 
 [[package]]
 name = "detour-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "age",
  "base64 0.22.1",
@@ -1431,7 +1431,7 @@ dependencies = [
 
 [[package]]
 name = "detour-daemon"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "base64 0.22.1",
  "detour-core",
@@ -1446,7 +1446,7 @@ dependencies = [
 
 [[package]]
 name = "detour-desktop"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "detour-core",
  "detour-daemon",
@@ -1466,7 +1466,7 @@ dependencies = [
 
 [[package]]
 name = "detour-ipc"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "interprocess",
  "libc",
