@@ -156,7 +156,7 @@ impl Files {
                 }
             })
             .collect();
-        out.sort_by(|a, b| (a.kind != FileKind::Dir, a.name.to_lowercase()).cmp(&(b.kind != FileKind::Dir, b.name.to_lowercase())));
+        out.sort_by_key(|a| (a.kind != FileKind::Dir, a.name.to_lowercase()));
         Ok(out)
     }
 

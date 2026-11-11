@@ -181,11 +181,11 @@ fn connect_error(e: impl std::fmt::Display) -> Error {
 
 /// Marks an error from the host a connection goes through as about that host.
 fn via(e: Error, id: &str) -> Error {
-    let id = Some(id.to_string());
+    let id = id.to_string();
     match e {
-        Error::HostKeyUnknown { fingerprint, via: None } => Error::HostKeyUnknown { fingerprint, via: id },
-        Error::HostKeyChanged { expected, actual, via: None } => Error::HostKeyChanged { expected, actual, via: id },
-        Error::NeedSecret { .. } | Error::AuthFailed { secret: Some(_) } => Error::JumpNeedsLogin { via: id.unwrap_or_default() },
+        Error::HostKeyUnknown { fingerprint, via: None } => Error::HostKeyUnknown { fingerprint, via: Some(id) },
+        Error::HostKeyChanged { expected, actual, via: None } => Error::HostKeyChanged { expected, actual, via: Some(id) },
+        Error::NeedSecret { .. } | Error::AuthFailed { secret: Some(_) } => Error::JumpNeedsLogin { via: id },
         other => other,
     }
 }
