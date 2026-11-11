@@ -31,6 +31,9 @@ socket2 = "0.6.5"
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
 rustls-platform-verifier = "0.7.1"
+ml-kem = "0.3.3"
+curve25519-dalek = "5.0.0"
+ring = "0.17.14"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Threading"] }
