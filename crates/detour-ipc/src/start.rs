@@ -11,8 +11,13 @@ use crate::{Client, socket_name};
 /// Starts a program on its own: no console window, not stopped by Ctrl+C in the
 /// terminal that started it, outliving its starter.
 pub fn start_process(program: &Path, args: &[OsString]) -> io::Result<()> {
+    start_process_with(program, args, &[])
+}
+
+/// `start_process` with environment variables of its own.
+pub fn start_process_with(program: &Path, args: &[OsString], envs: &[(&str, &std::ffi::OsStr)]) -> io::Result<()> {
     let mut cmd = Command::new(program);
-    cmd.args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    cmd.args(args).envs(envs.iter().copied()).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

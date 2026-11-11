@@ -182,19 +182,60 @@ pub(crate) struct Ctx {
 /// Fails at once when another core already serves this folder.
 /// `app` is the window's program, which is trusted when it connects.
 pub async fn run(data_dir: &Path, app: Option<PathBuf>) -> std::io::Result<()> {
-    serve_with(data_dir, Trust::App(app)).await
+    serve(data_dir, Trust::App(app), false).await
+}
+
+/// The core as the command line or an agent's MCP server starts it. On a computer with a
+/// desktop the app comes up in the tray (its window hidden): what the core holds shows
+/// there, and an agent's or a terminal's request reaches the person.
+pub async fn run_with_tray(data_dir: &Path, app: Option<PathBuf>) -> std::io::Result<()> {
+    serve(data_dir, Trust::App(app), true).await
 }
 
 #[doc(hidden)]
 pub async fn serve_with(data_dir: &Path, trust: Trust) -> std::io::Result<()> {
+    serve(data_dir, trust, false).await
+}
+
+/// Whether a window can show here: not over SSH, and on Linux with a display.
+fn desktop_session() -> bool {
+    let var = |k: &str| std::env::var_os(k).is_some_and(|v| !v.is_empty());
+    if var("DETOUR_NO_TRAY") || var("SSH_CONNECTION") || var("SSH_TTY") {
+        return false;
+    }
+    cfg!(any(windows, target_os = "macos")) || var("DISPLAY") || var("WAYLAND_DISPLAY")
+}
+
+/// Starts the app in the tray unless a window joins by itself first.
+fn tray_app(core: Arc<Core>, app: PathBuf) {
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        if core.has_window() {
+            return;
+        }
+        // A vault folder of its own (a test vault, a portable copy) goes with it.
+        let dir = core.data_dir.clone();
+        let envs: Vec<(&str, &std::ffi::OsStr)> = if dir != detour_core::store::Store::default_dir() { vec![("DETOUR_DATA_DIR", dir.as_os_str())] } else { vec![] };
+        let _ = detour_ipc::start_process_with(&app, &["--tray".into()], &envs);
+    });
+}
+
+async fn serve(data_dir: &Path, trust: Trust, tray: bool) -> std::io::Result<()> {
     let listener = detour_ipc::listen(&detour_ipc::socket_name(data_dir)).await?;
+    let app = match &trust {
+        Trust::App(app) => app.clone(),
+        Trust::Everyone => None,
+    };
     let core = Core::new(data_dir.to_path_buf(), trust);
     background::spawn(core.clone());
+    if let Some(app) = app.filter(|a| tray && a.is_file() && desktop_session()) {
+        tray_app(core.clone(), app);
+    }
     loop {
         tokio::select! {
             conn = listener.accept() => {
                 let Ok(conn) = conn else { continue };
-                tokio::spawn(serve(core.clone(), conn));
+                tokio::spawn(serve_conn(core.clone(), conn));
             }
             _ = core.quit.notified() => break,
         }
@@ -209,7 +250,7 @@ pub async fn serve_with(data_dir: &Path, trust: Trust) -> std::io::Result<()> {
     Ok(())
 }
 
-async fn serve(core: Arc<Core>, stream: detour_ipc::Stream) {
+async fn serve_conn(core: Arc<Core>, stream: detour_ipc::Stream) {
     let pid = detour_ipc::peer_pid(&stream);
     let peer = tokio::task::spawn_blocking(move || trust::peer(pid)).await.unwrap_or_default();
     let stream = Arc::new(stream);

@@ -64,6 +64,10 @@ impl Core {
                 }
             }
             let _ = app2.emit("core-event", json!({ "name": "disconnected", "data": null }));
+            // Started in the tray for a core and never opened: it goes with that core.
+            if app2.try_state::<TrayOnly>().is_some_and(|t| t.0.load(Ordering::Relaxed)) {
+                app2.exit(0);
+            }
         });
         let l = Link { client, me };
         *link = Some(l.clone());
@@ -382,6 +386,9 @@ async fn cli_install() -> Result<()> {
 #[derive(Default)]
 struct Keep(AtomicBool);
 
+/// Started with `--tray` (by a core the command line or an agent started) and not opened yet.
+struct TrayOnly(AtomicBool);
+
 /// What the tray says, in the window's language (texts live with the UI's, see `src/i18n`).
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -398,6 +405,9 @@ struct TrayTexts {
 const TRAY: &str = "main";
 
 fn show_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    if let Some(t) = app.try_state::<TrayOnly>() {
+        t.0.store(false, Ordering::Relaxed);
+    }
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
         let _ = w.unminimize();
@@ -506,6 +516,7 @@ pub fn builder<R: tauri::Runtime>(builder: tauri::Builder<R>, data_dir: PathBuf)
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut app = tauri::Builder::default();
+    let tray_only = std::env::args_os().any(|a| a == "--tray");
     // Started again, Detour comes forward instead of opening a second window. A vault folder
     // of its own (tests, a portable copy) is another Detour and may run beside it.
     if std::env::var_os("DETOUR_DATA_DIR").is_none() {
@@ -513,9 +524,14 @@ pub fn run() {
     }
     // The updater reads its key and address from tauri.conf.json, which test builds don't have.
     builder(app.plugin(tauri_plugin_updater::Builder::new().build()), data_dir())
-        .setup(|app| {
+        .manage(TrayOnly(AtomicBool::new(tray_only)))
+        .setup(move |app| {
             // No tray on this system (some Linux desktops): the window just closes, as before.
             let _ = tray(app.handle());
+            // The window starts hidden; in the tray it stays so until it is wanted.
+            if !tray_only {
+                show_window(app.handle());
+            }
             Ok(())
         })
         .on_window_event(|w, e| {

@@ -301,7 +301,7 @@ async fn main() -> ExitCode {
     let cli = help::parse();
     let dir = data_dir(cli.data_dir);
     if let Command::Daemon { app } = cli.command {
-        return match detour_daemon::run(&dir, app.or_else(app_beside)).await {
+        return match detour_daemon::run_with_tray(&dir, app.or_else(app_beside)).await {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("detour daemon: {e}");
