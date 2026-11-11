@@ -587,6 +587,7 @@ impl Store {
             h.own = v.team_own.get(&key).map(OwnLoginView::from);
             h.forward_agent = v.team_forward_agent.contains(&key);
         }
+        view.layout = v.layouts.get(id).cloned();
         if let Some(r) = v.teams.iter().find(|t| t.id == id)
             && let Some(remote) = &r.remote
         {
@@ -759,6 +760,79 @@ impl Store {
     }
 
     /// Sets (or with `None` removes) this person's own login for a team host.
+    /// This person's own grouping of a team's hosts; `None` drops it.
+    pub fn layout_set(&mut self, id: &str, layout: Option<Layout>) -> Result<TeamView> {
+        self.team(id)?;
+        let v = self.vault_mut()?;
+        match layout {
+            Some(l) => v.layouts.insert(id.to_string(), l),
+            None => v.layouts.remove(id),
+        };
+        self.save()?;
+        self.team_view(id)
+    }
+
+    /// This person's own settings of groups, without passwords.
+    pub fn group_prefs(&self) -> Result<Vec<GroupPrefsView>> {
+        Ok(self.unlocked()?.vault.group_prefs.iter().map(|(k, p)| p.view(k)).collect())
+    }
+
+    /// Sets (or with `None` drops) this person's own settings of a group.
+    pub fn group_prefs_set(&mut self, prefs: GroupPrefsView, drop: bool) -> Result<Vec<GroupPrefsView>> {
+        let vault = prefs.key.split('/').next().unwrap_or_default().to_string();
+        if !(prefs.key.contains("/team:") || prefs.key.contains("/mine:")) || (vault != PERSONAL && self.team(&vault).is_err()) {
+            return Err(not_found("group"));
+        }
+        if let Some(Auth::Key { key_id }) = &prefs.auth
+            && !self.unlocked()?.vault.keys.iter().any(|k| &k.id == key_id)
+        {
+            return Err(not_found("key"));
+        }
+        // A proxy of this person's own or of the group's vault.
+        if let Some(r) = &prefs.proxy
+            && r.vault != PERSONAL
+            && r.vault != vault
+        {
+            return Err(Error::Forbidden);
+        }
+        let v = self.vault_mut()?;
+        if drop {
+            v.group_prefs.remove(&prefs.key);
+        } else {
+            let kept = v.group_prefs.get(&prefs.key).and_then(|p| p.password.clone());
+            let password = match prefs.new_password {
+                Some(p) if p.is_empty() => None,
+                Some(p) => Some(p),
+                None => kept,
+            };
+            let password = if prefs.auth == Some(Auth::Password) { password } else { None };
+            let p = GroupPrefs { proxy: prefs.proxy, user: prefs.user.filter(|u| !u.is_empty()), auth: prefs.auth, password };
+            if p.is_empty() {
+                v.group_prefs.remove(&prefs.key);
+            } else {
+                v.group_prefs.insert(prefs.key, p);
+            }
+        }
+        self.save()?;
+        self.group_prefs()
+    }
+
+    /// This person's own settings that hold for a host: those of the group it is in in their
+    /// own grouping, else those of its group (each setting on its own).
+    fn prefs_for(&self, vault: &str, host: &Host) -> Result<GroupPrefs> {
+        let v = &self.unlocked()?.vault;
+        let mine = v.layouts.get(vault).and_then(|l| l.groups.iter().find(|g| g.hosts.contains(&host.id))).and_then(|g| v.group_prefs.get(&format!("{vault}/mine:{}", g.id)));
+        let team = v.group_prefs.get(&format!("{vault}/team:{}", host.group));
+        let pick = |f: &dyn Fn(&GroupPrefs) -> bool| mine.filter(|p| f(p)).or(team.filter(|p| f(p))).cloned();
+        let login = pick(&|p| p.auth.is_some() || p.user.is_some());
+        Ok(GroupPrefs {
+            proxy: pick(&|p| p.proxy.is_some()).and_then(|p| p.proxy),
+            user: login.as_ref().and_then(|p| p.user.clone()),
+            auth: login.as_ref().and_then(|p| p.auth.clone()),
+            password: login.and_then(|p| p.password),
+        })
+    }
+
     pub fn team_own_login_set(&mut self, id: &str, host_id: &str, login: Option<OwnLoginView>) -> Result<TeamView> {
         if self.team(id)?.level(host_id) < Level::View {
             return Err(not_found("host"));
@@ -870,15 +944,36 @@ impl Store {
             return Err(Error::JumpLoop);
         }
         seen.push(host_id.to_string());
-        let (host, key) = if vault == PERSONAL { self.personal_login(host_id)? } else { self.team_login(vault, host_id)? };
+        let (mut host, mut key) = if vault == PERSONAL { self.personal_login(host_id)? } else { self.team_login(vault, host_id)? };
+        // First this person's own settings of the host's group, then the host's, then the group's shared proxy.
+        let prefs = self.prefs_for(vault, &host)?;
+        if let Some(auth) = prefs.auth.clone() {
+            key = match &auth {
+                Auth::Key { key_id } => Some(self.unlocked()?.vault.keys.iter().find(|k| &k.id == key_id).cloned().ok_or_else(|| not_found("key"))?),
+                _ => None,
+            };
+            host.password = prefs.password.clone();
+            host.auth = auth;
+        }
+        if let Some(user) = prefs.user.clone() {
+            host.user = user;
+        }
         let ep = endpoint(&host);
         let known = self.unlocked()?.vault.known_hosts.iter().find(|k| k.endpoint == ep).cloned();
-        let route = match (&host.proxy_id, host.proxy.clone()) {
-            (Some(id), _) => ssh::Route::Proxy(Box::new(self.proxy_for_connect(vault, id)?)),
-            (None, None) => ssh::Route::Direct,
-            (None, Some(Proxy::Jump { host_id: jump })) => ssh::Route::Jump(Box::new(self.request_via(vault, &jump, None, trust_fingerprint.clone(), seen)?)),
+        let shared = || -> Option<String> {
+            let groups = if vault == PERSONAL { self.unlocked().ok()?.vault.groups.clone() } else { self.team(vault).ok()?.data().groups };
+            groups.into_iter().find(|g| g.name == host.group).and_then(|g| g.proxy_id)
+        };
+        let route = match (prefs.proxy.clone(), &host.proxy_id, host.proxy.clone()) {
+            (Some(r), _, _) => ssh::Route::Proxy(Box::new(self.proxy_for_connect(&r.vault, &r.id)?)),
+            (None, Some(id), _) => ssh::Route::Proxy(Box::new(self.proxy_for_connect(vault, id)?)),
+            (None, None, None) => match shared() {
+                Some(id) => ssh::Route::Proxy(Box::new(self.proxy_for_connect(vault, &id)?)),
+                None => ssh::Route::Direct,
+            },
+            (None, None, Some(Proxy::Jump { host_id: jump })) => ssh::Route::Jump(Box::new(self.request_via(vault, &jump, None, trust_fingerprint.clone(), seen)?)),
             // Written into the host by an older version.
-            (None, Some(legacy)) => {
+            (None, None, Some(legacy)) => {
                 let kind = legacy.as_kind().ok_or_else(|| not_found("proxy"))?;
                 ssh::Route::Proxy(Box::new(ProxyEntry { id: String::new(), name: String::new(), kind, password: host.proxy_password.clone(), private_key: None, preshared_key: None, uuid: None }))
             }

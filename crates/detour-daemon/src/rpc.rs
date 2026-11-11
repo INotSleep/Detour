@@ -484,6 +484,17 @@ pub(crate) async fn dispatch(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value
             let r = s!().team_own_login_set(&a.id, &a.host_id, a.login);
             ok(pushed(core, PERSONAL, r))
         }
+        "layout_set" => {
+            let a = args!(method, p, { id: String, layout: Option<detour_core::model::Layout> });
+            let r = s!().layout_set(&a.id, a.layout);
+            ok(pushed(core, PERSONAL, r))
+        }
+        "group_prefs" => Ok(serde_json::to_value(s!().group_prefs().map_err(err)?).unwrap_or_default()),
+        "group_prefs_set" => {
+            let a = args!(method, p, { prefs: detour_core::model::GroupPrefsView, drop: Option<bool> });
+            let r = s!().group_prefs_set(a.prefs, a.drop.unwrap_or(false));
+            ok(pushed(core, PERSONAL, r))
+        }
         "team_resolve_field" => {
             let a = args!(method, p, { id: String, coll: Coll, record: String, field: String, pick: usize });
             let r = s!().team_resolve_field(&a.id, a.coll, &a.record, &a.field, a.pick);

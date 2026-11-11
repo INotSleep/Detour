@@ -30,6 +30,10 @@ pub enum Coll {
     Tunnel,
     Proxy,
     Group,
+    /// A person's own grouping of a team's hosts (personal vaults only).
+    Layout,
+    /// A person's own settings of a group (personal vaults only).
+    GroupPrefs,
     /// A pinned server key (personal vaults only).
     KnownHost,
     /// A member's own login for a team host (personal vaults only).
@@ -40,7 +44,7 @@ pub enum Coll {
 
 impl Coll {
     pub fn has_secret(self) -> bool {
-        matches!(self, Coll::Host | Coll::Key | Coll::OwnLogin | Coll::TeamLink | Coll::Proxy)
+        matches!(self, Coll::Host | Coll::Key | Coll::OwnLogin | Coll::TeamLink | Coll::Proxy | Coll::GroupPrefs)
     }
 
     /// Fields kept under the record's secret key.
@@ -48,7 +52,7 @@ impl Coll {
         match self {
             Coll::Host => &["password", "proxyPassword"],
             Coll::Key => &["privateKey", "passphrase"],
-            Coll::OwnLogin => &["password"],
+            Coll::OwnLogin | Coll::GroupPrefs => &["password"],
             Coll::TeamLink => &["token"],
             Coll::Proxy => &crate::model::PROXY_SECRETS,
             _ => &[],

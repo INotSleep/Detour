@@ -130,6 +130,8 @@ pub struct TeamView {
     pub problems: Vec<ProblemView>,
     /// For a team in a Git repository: how mirroring it goes. Filled in by the store.
     pub remote: Option<RemoteView>,
+    /// This person's own grouping of the team's hosts. Filled in by the store.
+    pub layout: Option<Layout>,
     /// A short digest of every entry this member has read, the same for everyone who read the same:
     /// compared out of band, it shows the storage gave two members one history.
     pub state_fingerprint: String,
@@ -663,6 +665,7 @@ impl TeamVault {
             problems,
             remote: None,
             state_fingerprint: self.state_fingerprint(),
+            layout: None,
         }
     }
 

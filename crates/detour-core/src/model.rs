@@ -58,6 +58,74 @@ pub struct Group {
     pub proxy_id: Option<String>,
 }
 
+/// A person's own grouping of a team's hosts ("Mine"), kept in their personal vault.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Layout {
+    #[serde(default)]
+    pub groups: Vec<MyGroup>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MyGroup {
+    pub id: String,
+    pub name: String,
+    /// Host ids, in order.
+    #[serde(default)]
+    pub hosts: Vec<String>,
+}
+
+/// A saved proxy of some vault: this person's own or a team's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyRef {
+    pub vault: String,
+    pub id: String,
+}
+
+/// This person's own settings for a group (`<vault>/team:<name>` or `<vault>/mine:<id>`),
+/// used before the host's: the way to its hosts and the login to them.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupPrefs {
+    #[serde(default)]
+    pub proxy: Option<ProxyRef>,
+    #[serde(default)]
+    pub user: Option<String>,
+    /// A key here is a personal key.
+    #[serde(default)]
+    pub auth: Option<Auth>,
+    #[serde(default)]
+    pub password: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupPrefsView {
+    pub key: String,
+    #[serde(default)]
+    pub proxy: Option<ProxyRef>,
+    #[serde(default)]
+    pub user: Option<String>,
+    #[serde(default)]
+    pub auth: Option<Auth>,
+    #[serde(default)]
+    pub has_password: bool,
+    /// Incoming only: a password typed in; empty removes the saved one.
+    #[serde(default, skip_serializing)]
+    pub new_password: Option<String>,
+}
+
+impl GroupPrefs {
+    pub fn view(&self, key: &str) -> GroupPrefsView {
+        GroupPrefsView { key: key.to_string(), proxy: self.proxy.clone(), user: self.user.clone(), auth: self.auth.clone(), has_password: self.password.is_some(), new_password: None }
+    }
+    pub fn is_empty(&self) -> bool {
+        self.proxy.is_none() && self.user.is_none() && self.auth.is_none()
+    }
+}
+
 /// A saved proxy that hosts of the same vault reach their server through.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -537,6 +605,12 @@ pub struct VaultData {
     /// Own logins for team hosts (`<team id>/<host id>`).
     #[serde(default)]
     pub team_own: std::collections::BTreeMap<String, OwnLogin>,
+    /// This person's own grouping of each team's hosts, by team id.
+    #[serde(default)]
+    pub layouts: std::collections::BTreeMap<String, Layout>,
+    /// This person's own settings of groups, by `<vault>/team:<name>` or `<vault>/mine:<id>`.
+    #[serde(default)]
+    pub group_prefs: std::collections::BTreeMap<String, GroupPrefs>,
     /// Team hosts this person forwards ssh-agent to (`<team id>/<host id>`). Never shared:
     /// whoever edits a team host must not be able to reach its members' keys.
     #[serde(default)]

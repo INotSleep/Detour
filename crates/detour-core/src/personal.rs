@@ -121,6 +121,16 @@ pub fn records_of(v: &VaultData, me: &Identity) -> BTreeMap<String, SyncRecord> 
         f.insert("key".into(), Value::String(key.clone()));
         put(derived_id(me, "own", key), Coll::OwnLogin, f);
     }
+    for (team, l) in &v.layouts {
+        let mut f = fields_of(l, &[]);
+        f.insert("vault".into(), Value::String(team.clone()));
+        put(derived_id(me, "layout", team), Coll::Layout, f);
+    }
+    for (key, p) in &v.group_prefs {
+        let mut f = fields_of(p, &[]);
+        f.insert("key".into(), Value::String(key.clone()));
+        put(derived_id(me, "group", key), Coll::GroupPrefs, f);
+    }
     for (id, r) in &v.sync_unread {
         out.entry(id.clone()).or_insert_with(|| r.clone());
     }
@@ -184,6 +194,11 @@ pub fn adopt(v: &mut VaultData, records: &BTreeMap<String, SyncRecord>) -> Vec<S
             Some((key, serde_json::from_value(Value::Object(r.fields.clone().into_iter().collect())).ok()?))
         })
         .collect();
+    let keyed = |coll: Coll, field: &str| -> Vec<(String, Value)> {
+        records.values().filter(|r| r.coll == coll).filter_map(|r| Some((r.fields.get(field)?.as_str()?.to_string(), Value::Object(r.fields.clone().into_iter().collect())))).collect()
+    };
+    v.layouts = keyed(Coll::Layout, "vault").into_iter().filter_map(|(k, f)| Some((k, serde_json::from_value(f).ok()?))).collect();
+    v.group_prefs = keyed(Coll::GroupPrefs, "key").into_iter().filter_map(|(k, f)| Some((k, serde_json::from_value(f).ok()?))).collect();
     v.sync_unread = records.iter().filter(|(id, r)| !readable(id, r)).map(|(id, r)| (id.clone(), r.clone())).collect();
     gone
 }
@@ -203,6 +218,8 @@ fn readable(id: &str, r: &SyncRecord) -> bool {
         Coll::KnownHost => is::<KnownHost>(id, r),
         Coll::OwnLogin => r.fields.get("key").is_some_and(Value::is_string) && is::<OwnLogin>(id, r),
         Coll::TeamLink => is::<TeamLink>(id, r),
+        Coll::Layout => r.fields.get("vault").is_some_and(Value::is_string) && is::<Layout>(id, r),
+        Coll::GroupPrefs => r.fields.get("key").is_some_and(Value::is_string) && is::<GroupPrefs>(id, r),
     }
 }
 

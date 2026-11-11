@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use detour_core::Error;
-use detour_core::model::{Auth, Group, HostView, KeyAlgorithm, KnownHost, Snippet};
+use detour_core::model::{Auth, Group, GroupPrefsView, HostView, KeyAlgorithm, KnownHost, Snippet};
 use detour_core::store::{Store, VaultUpdate};
 use detour_core::sync;
 
@@ -125,6 +125,14 @@ async fn edits_and_deletes_travel_both_ways() {
     let v = desktop.lock().unwrap().view().unwrap();
     assert_eq!(v.groups.iter().map(|g| (g.name.as_str(), g.order)).collect::<Vec<_>>(), [("Databases", 1.0)]);
     assert_eq!(v.hosts[0].order, Some(3.5));
+
+    // So do this person's settings of a group, its password included.
+    let prefs = GroupPrefsView { key: "personal/team:Databases".into(), proxy: None, user: Some("dba".into()), auth: Some(Auth::Password), has_password: false, new_password: Some("pw-dba".into()) };
+    laptop.lock().unwrap().group_prefs_set(prefs, false).unwrap();
+    laptop.lock().unwrap().sync_personal().unwrap();
+    desktop.lock().unwrap().sync_personal().unwrap();
+    let got = desktop.lock().unwrap().group_prefs().unwrap();
+    assert_eq!((got[0].key.as_str(), got[0].user.as_deref(), got[0].has_password), ("personal/team:Databases", Some("dba"), true));
 
     // A password set later on one device reaches the other.
     laptop.lock().unwrap().set_host_password("h1", Some("pw-db-2".into())).unwrap();

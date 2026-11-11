@@ -2,8 +2,9 @@
 
 use std::path::PathBuf;
 
-use detour_core::model::{Auth, Group, HostView, KeyAlgorithm, OwnLoginView, ProxyKind, ProxyView};
+use detour_core::model::{Auth, Group, GroupPrefsView, HostView, KeyAlgorithm, Layout, MyGroup, OwnLoginView, ProxyKind, ProxyRef, ProxyView};
 use detour_core::ssh::Route;
+
 use detour_core::store::{Store, VaultUpdate};
 use detour_core::team::AccessChange;
 use detour_core::team::state::{Level, Problem, Role};
@@ -156,6 +157,62 @@ fn shared_groups_and_order_are_the_editors_to_change() {
     // A member who may only view the group can't move it.
     let moved = Group { order: 5.0, ..prod };
     assert!(matches!(bob.team_put(&id, VaultUpdate { hosts: view.data.hosts.clone(), keys: vec![], snippets: vec![], tunnels: vec![], proxies: None, groups: Some(vec![moved]) }), Err(Error::Forbidden)));
+}
+
+fn socks(id: &str, port: u16) -> ProxyView {
+    ProxyView { id: id.into(), name: id.into(), kind: ProxyKind::Socks5 { address: "127.0.0.1".into(), port, user: String::new() }, saved: vec![], new_secrets: Default::default() }
+}
+
+fn proxy_port(r: &Route) -> Option<u16> {
+    match r {
+        Route::Proxy(p) => match p.kind {
+            ProxyKind::Socks5 { port, .. } => Some(port),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+#[test]
+fn a_hosts_way_and_login_come_from_its_groups_by_priority() {
+    let (mut alice, mut bob, id) = team_with_bob(Level::Secret);
+    let mut h1 = alice.team_view(&id).unwrap().data.hosts[0].clone();
+    h1.group = "Prod".into();
+    let prod = Group { id: "g1".into(), name: "Prod".into(), order: 1.0, proxy_id: Some("shared".into()) };
+    alice.team_put(&id, VaultUpdate { hosts: vec![h1.clone()], keys: vec![], snippets: vec![], tunnels: vec![], proxies: Some(vec![socks("shared", 1001), socks("hosts", 1002)]), groups: Some(vec![prod]) }).unwrap();
+    bob.sync_team(&id).unwrap();
+    let route = |s: &Store| proxy_port(&s.connect_request_in(&id, "h1", None, None).unwrap().route);
+
+    // The group's shared proxy, for a host with none of its own.
+    assert_eq!(route(&bob), Some(1001));
+    // The host's own proxy comes before the group's shared one.
+    h1.proxy_id = Some("hosts".into());
+    alice.team_put(&id, VaultUpdate { hosts: vec![h1.clone()], keys: vec![], snippets: vec![], tunnels: vec![], proxies: None, groups: None }).unwrap();
+    bob.sync_team(&id).unwrap();
+    assert_eq!(route(&bob), Some(1002));
+
+    // Bob's own settings of the group come first: his proxy and his login.
+    bob.put(VaultUpdate { hosts: vec![], keys: vec![], snippets: vec![], tunnels: vec![], proxies: Some(vec![socks("bobs", 1003)]), groups: None }).unwrap();
+    let key = bob.generate_key("bob-key", KeyAlgorithm::Ed25519, None, false).unwrap();
+    let prefs = |key_name: &str, port_id: &str| GroupPrefsView { key: key_name.into(), proxy: Some(ProxyRef { vault: "personal".into(), id: port_id.into() }), user: Some("bob".into()), auth: Some(Auth::Key { key_id: key.id.clone() }), has_password: false, new_password: None };
+    bob.group_prefs_set(prefs(&format!("{id}/team:Prod"), "bobs"), false).unwrap();
+    let req = bob.connect_request_in(&id, "h1", None, None).unwrap();
+    assert_eq!((proxy_port(&req.route), req.host.user.as_str(), req.key.map(|k| k.id)), (Some(1003), "bob", Some(key.id.clone())));
+
+    // In his own grouping, the settings of his group come before those of the shared one.
+    let keys = bob.view().unwrap().keys;
+    bob.put(VaultUpdate { hosts: vec![], keys, snippets: vec![], tunnels: vec![], proxies: Some(vec![socks("bobs", 1003), socks("mine", 1004)]), groups: None }).unwrap();
+    bob.layout_set(&id, Some(Layout { groups: vec![MyGroup { id: "m1".into(), name: "Work".into(), hosts: vec!["h1".into()] }] })).unwrap();
+    bob.group_prefs_set(GroupPrefsView { key: format!("{id}/mine:m1"), proxy: Some(ProxyRef { vault: "personal".into(), id: "mine".into() }), user: None, auth: None, has_password: false, new_password: None }, false).unwrap();
+    let req = bob.connect_request_in(&id, "h1", None, None).unwrap();
+    // The proxy from his group; the login still from the shared group's settings.
+    assert_eq!((proxy_port(&req.route), req.host.user.as_str()), (Some(1004), "bob"));
+    assert_eq!(bob.team_view(&id).unwrap().layout.unwrap().groups[0].name, "Work");
+
+    // Without his settings, the host's own proxy again.
+    bob.group_prefs_set(GroupPrefsView { key: format!("{id}/mine:m1"), proxy: None, user: None, auth: None, has_password: false, new_password: None }, true).unwrap();
+    bob.group_prefs_set(GroupPrefsView { key: format!("{id}/team:Prod"), proxy: None, user: None, auth: None, has_password: false, new_password: None }, true).unwrap();
+    assert_eq!(route(&bob), Some(1002));
 }
 
 #[test]
