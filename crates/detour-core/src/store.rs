@@ -725,7 +725,7 @@ impl Store {
                 }
                 let kept = v.team_own.get(&key).and_then(|o| o.password.clone());
                 let password = l.new_password.filter(|p| !p.is_empty()).or(kept);
-                v.team_own.insert(key, OwnLogin { user: l.user, password: if l.auth == Auth::Password { password } else { None }, auth: l.auth });
+                v.team_own.insert(key, OwnLogin { user: l.user, password: if l.auth == Auth::Password { password } else { None }, auth: l.auth, active: l.active });
             }
         }
         self.save()?;
@@ -785,7 +785,7 @@ impl Store {
         let mut host = t.host(host_id).ok_or_else(|| not_found("host"))?;
         let v = &self.unlocked()?.vault;
         host.forward_agent = v.team_forward_agent.contains(&format!("{vault}/{host_id}"));
-        if let Some(own) = v.team_own.get(&format!("{vault}/{host_id}")) {
+        if let Some(own) = v.team_own.get(&format!("{vault}/{host_id}")).filter(|o| o.active) {
             let key = match &own.auth {
                 Auth::Key { key_id } => Some(v.keys.iter().find(|k| &k.id == key_id).ok_or_else(|| not_found("key"))?.clone()),
                 _ => None,
@@ -850,7 +850,8 @@ impl Store {
         }
         let key = format!("{vault}/{host_id}");
         let (host, _) = self.team_login(vault, host_id)?;
-        let own = self.unlocked()?.vault.team_own.get(&key).cloned();
+        // An own login switched off isn't what this login came from.
+        let own = self.unlocked()?.vault.team_own.get(&key).filter(|o| o.active).cloned();
         let level = self.team(vault)?.level(host_id);
         match (kind, own) {
             (SecretKind::Password, Some(mut o)) => {
@@ -866,7 +867,7 @@ impl Store {
             (SecretKind::Password, None) if level >= Level::Edit => self.team_mut(vault)?.set_host_password(host_id, Some(value)),
             // Without the right to change the shared password, a typed one becomes this person's own login.
             (SecretKind::Password, None) => {
-                self.vault_mut()?.team_own.insert(key, OwnLogin { user: host.user, auth: Auth::Password, password: Some(value) });
+                self.vault_mut()?.team_own.insert(key, OwnLogin { user: host.user, auth: Auth::Password, password: Some(value), active: true });
                 self.save()
             }
             (SecretKind::Passphrase, None) if level >= Level::Edit => {

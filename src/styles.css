@@ -848,6 +848,8 @@ select.input { cursor: pointer; padding-right: 28px; appearance: none; backgroun
 .own-line { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 26px; }
 .own-line .saved-password { margin-top: 0; }
 .own-actions { display: flex; gap: 4px; margin-left: -10px; }
+.own-summary.inactive .own-line { opacity: 0.55; }
+.own-summary.inactive .own-actions { margin-left: 0; margin-top: 4px; }
 .banner .grow .banner-sub { display: block; margin-top: 2px; font-size: 11.5px; color: var(--text-2); overflow-wrap: anywhere; }
 
 /* ============ files (SFTP) ============ */

@@ -84,7 +84,7 @@ fn view_access_connects_with_own_login() {
 
     // Or his own key and login name.
     let key = bob.generate_key("bob-key", KeyAlgorithm::Ed25519, None, false).unwrap();
-    let view = bob.team_own_login_set(&id, "h1", Some(OwnLoginView { user: "bob".into(), auth: Auth::Key { key_id: key.id.clone() }, has_password: false, new_password: None })).unwrap();
+    let view = bob.team_own_login_set(&id, "h1", Some(OwnLoginView { user: "bob".into(), auth: Auth::Key { key_id: key.id.clone() }, has_password: false, active: true, new_password: None })).unwrap();
     assert_eq!(view.data.hosts[0].own.as_ref().unwrap().user, "bob");
     let req = bob.connect_request_in(&id, "h1", None, None).unwrap();
     assert_eq!(req.host.user, "bob");
@@ -93,6 +93,29 @@ fn view_access_connects_with_own_login() {
     // Nothing about Bob's own login reaches the team.
     let view = bob.team_own_login_set(&id, "h1", None).unwrap();
     assert!(view.data.hosts[0].own.is_none());
+}
+
+#[test]
+fn the_shared_login_can_be_used_without_losing_the_own_one() {
+    let (_alice, mut bob, id) = team_with_bob(Level::Secret);
+    bob.sync_team(&id).unwrap();
+    let shared = bob.connect_request_in(&id, "h1", None, None).unwrap().host;
+    let key = bob.generate_key("bob-key", KeyAlgorithm::Ed25519, None, false).unwrap();
+    let own = |active| OwnLoginView { user: "bob".into(), auth: Auth::Key { key_id: key.id.clone() }, has_password: false, active, new_password: None };
+    bob.team_own_login_set(&id, "h1", Some(own(true))).unwrap();
+    assert_eq!(bob.connect_request_in(&id, "h1", None, None).unwrap().host.user, "bob");
+
+    // Back to the shared login: the own one stays, switched off.
+    let view = bob.team_own_login_set(&id, "h1", Some(own(false))).unwrap();
+    let kept = view.data.hosts[0].own.as_ref().unwrap();
+    assert_eq!((kept.user.as_str(), kept.active), ("bob", false));
+    let req = bob.connect_request_in(&id, "h1", None, None).unwrap();
+    assert_eq!((req.host.user, req.host.auth), (shared.user, shared.auth));
+
+    // And on again, as it was.
+    bob.team_own_login_set(&id, "h1", Some(own(true))).unwrap();
+    let req = bob.connect_request_in(&id, "h1", None, None).unwrap();
+    assert_eq!((req.host.user.as_str(), req.key.unwrap().id), ("bob", key.id.clone()));
 }
 
 #[test]

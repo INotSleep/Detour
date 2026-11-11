@@ -69,16 +69,16 @@ export function OwnLoginSection({ host }: { host: Host }) {
   const authText = own ? (own.auth.type === "key" ? keyName : own.auth.type === "agent" ? "ssh-agent" : own.hasPassword ? null : l.askOnConnect) : null;
   const keyMissing = authType === "key" && !keyId;
 
-  const set = async (login: { user: string; auth: Auth; newPassword?: string } | null) => {
+  const set = async (login: { user: string; auth: Auth; active: boolean; newPassword?: string } | null, done?: string) => {
     setBusy(true);
     try {
       if (api.real) {
         applyTeamView(await api.teamOwnLoginSet(vault.id, host.id, login));
       } else {
-        const next = login && { user: login.user, auth: login.auth, hasPassword: login.auth.type === "password" && (!!login.newPassword || !!own?.hasPassword) };
+        const next = login && { user: login.user, auth: login.auth, active: login.active, hasPassword: login.auth.type === "password" && (!!login.newPassword || !!own?.hasPassword) };
         update((w) => ({ ...w, hosts: w.hosts.map((h) => (h.id === host.id ? { ...h, own: next ?? undefined } : h)) }));
       }
-      toast({ text: login ? tr().terminal.login.saved : tr().terminal.login.removed, tone: "success" });
+      toast({ text: done ?? (login ? tr().terminal.login.saved : tr().terminal.login.removed), tone: "success" });
       setEditing(false);
       setPassword("");
     } catch (e) {
@@ -90,23 +90,40 @@ export function OwnLoginSection({ host }: { host: Host }) {
   const save = () => {
     if (keyMissing || busy) return;
     const auth: Auth = authType === "key" ? { type: "key", keyId } : { type: authType };
-    void set({ user: user.trim() || host.user, auth, newPassword: authType === "password" && password ? password : undefined });
+    void set({ user: user.trim() || host.user, auth, active: true, newPassword: authType === "password" && password ? password : undefined });
   };
+
+  /** Switches between the own login and the shared one, keeping the own one either way. */
+  const switchTo = (active: boolean) => own && set({ user: own.user, auth: own.auth, active }, active ? l.switchedOwn : l.switchedShared);
 
   if (!editing) {
     return (
       <section className="own-login">
         <h3 className="section-title">{l.title}</h3>
         {own ? (
-          <div className="own-summary">
+          <div className={`own-summary ${own.active ? "" : "inactive"}`}>
             <div className="own-line">
               <span className="mono ellipsis">{own.user}</span>
               {authText && <span className="muted ellipsis">{authText}</span>}
               {own.auth.type === "password" && own.hasPassword && <SavedPassword host={host} own />}
             </div>
+            {!own.active && <div className="muted small">{l.usingShared}</div>}
             <div className="own-actions">
-              <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>{t.common.edit}</Button>
-              <Button size="sm" variant="ghost" loading={busy} onClick={() => set(null)}>{shared ? l.useShared : t.common.remove}</Button>
+              {own.active ? (
+                <>
+                  <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>{t.common.edit}</Button>
+                  {shared ? (
+                    <Button size="sm" variant="ghost" loading={busy} onClick={() => void switchTo(false)}>{l.useShared}</Button>
+                  ) : (
+                    <Button size="sm" variant="ghost" loading={busy} onClick={() => void set(null)}>{t.common.remove}</Button>
+                  )}
+                </>
+              ) : (
+                <>
+                  <Button size="sm" loading={busy} onClick={() => void switchTo(true)}>{l.useOwn}</Button>
+                  <Button size="sm" variant="ghost" disabled={busy} onClick={() => void set(null)}>{t.common.remove}</Button>
+                </>
+              )}
             </div>
           </div>
         ) : (

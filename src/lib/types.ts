@@ -114,6 +114,8 @@ export interface OwnLogin {
   /** A key here is a personal key. */
   auth: Auth;
   hasPassword: boolean;
+  /** Used to log in; off, it is kept while the shared login is used instead. */
+  active: boolean;
   /** Transient: a password just typed in. */
   newPassword?: string;
 }

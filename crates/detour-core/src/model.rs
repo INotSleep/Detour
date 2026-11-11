@@ -113,6 +113,13 @@ pub struct OwnLogin {
     pub auth: Auth,
     #[serde(default)]
     pub password: Option<String>,
+    /// Used to log in; off, it is kept while the shared login is used instead.
+    #[serde(default = "yes")]
+    pub active: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -122,6 +129,8 @@ pub struct OwnLoginView {
     pub auth: Auth,
     #[serde(default)]
     pub has_password: bool,
+    #[serde(default = "yes")]
+    pub active: bool,
     /// Incoming only: a password typed in the UI to save.
     #[serde(default, skip_serializing)]
     pub new_password: Option<String>,
@@ -139,7 +148,7 @@ impl Proxy {
 
 impl From<&OwnLogin> for OwnLoginView {
     fn from(o: &OwnLogin) -> Self {
-        Self { user: o.user.clone(), auth: o.auth.clone(), has_password: o.password.is_some(), new_password: None }
+        Self { user: o.user.clone(), auth: o.auth.clone(), has_password: o.password.is_some(), active: o.active, new_password: None }
     }
 }
 
