@@ -101,9 +101,11 @@ async fn data(ctx: &Ctx) -> Res<Value> {
 
 fn update_of(d: &Value) -> Value {
     let mut u = json!({ "hosts": d["hosts"], "keys": d["keys"], "snippets": d["snippets"], "tunnels": d["tunnels"] });
-    // A core that doesn't know proxies sends none; then they aren't touched.
-    if d.get("proxies").is_some_and(Value::is_array) {
-        u["proxies"] = d["proxies"].clone();
+    // A core that doesn't know proxies or groups sends none; then they aren't touched.
+    for k in ["proxies", "groups"] {
+        if d.get(k).is_some_and(Value::is_array) {
+            u[k] = d[k].clone();
+        }
     }
     u
 }
@@ -199,10 +201,193 @@ pub async fn status(c: &Client, json_out: bool) -> Res<()> {
 
 /* ---------- hosts ---------- */
 
+/* ---------- groups and their order ---------- */
+
+fn group_of(h: &Value) -> String {
+    let g = s(&h["group"]);
+    if g == "Без группы" || g == "No group" { String::new() } else { g }
+}
+
+/// Hosts by their order in a group; those without one after, as they come.
+fn sorted_hosts(mut hosts: Vec<&Value>) -> Vec<&Value> {
+    hosts.sort_by(|a, b| a["order"].as_f64().unwrap_or(f64::INFINITY).total_cmp(&b["order"].as_f64().unwrap_or(f64::INFINITY)));
+    hosts
+}
+
+/// The vault's groups in the app's order: those with a record by their order, then groups
+/// only hosts name, by name, then hosts without a group (named "").
+fn ordered_groups(d: &Value, with_empty: bool) -> Vec<(String, Vec<&Value>)> {
+    let hosts: Vec<&Value> = d["hosts"].as_array().into_iter().flatten().collect();
+    let mut records: Vec<&Value> = d["groups"].as_array().into_iter().flatten().collect();
+    records.sort_by(|a, b| a["order"].as_f64().unwrap_or(0.0).total_cmp(&b["order"].as_f64().unwrap_or(0.0)));
+    let of = |name: &str| sorted_hosts(hosts.iter().copied().filter(|h| group_of(h) == name).collect());
+    let mut out: Vec<(String, Vec<&Value>)> = records.iter().map(|g| (s(&g["name"]), of(&s(&g["name"])))).filter(|(_, h)| with_empty || !h.is_empty()).collect();
+    let mut rest: Vec<String> = hosts.iter().map(|h| group_of(h)).filter(|g| !g.is_empty() && !records.iter().any(|r| s(&r["name"]) == *g)).collect();
+    rest.sort();
+    rest.dedup();
+    for g in rest {
+        let h = of(&g);
+        out.push((g, h));
+    }
+    if hosts.iter().any(|h| group_of(h).is_empty()) {
+        out.push((String::new(), of("")));
+    }
+    out
+}
+
+fn between(a: Option<f64>, b: Option<f64>) -> f64 {
+    match (a, b) {
+        (None, None) => 1.0,
+        (None, Some(b)) => b - 1.0,
+        (Some(a), None) => a + 1.0,
+        (Some(a), Some(b)) => (a + b) / 2.0,
+    }
+}
+
+/// A group named by the person: its name as the vault has it.
+fn find_group(d: &Value, name: &str) -> Res<String> {
+    ordered_groups(d, true).into_iter().map(|(g, _)| g).find(|g| !g.is_empty() && g.eq_ignore_ascii_case(name)).ok_or_else(|| Fail(format!("{}: {name}", t().unknown_group)))
+}
+
+/// Gives every named group a record, so each has a place to keep.
+fn with_records(next: &mut Value) {
+    let names: Vec<String> = ordered_groups(next, true).into_iter().map(|(g, _)| g).filter(|g| !g.is_empty()).collect();
+    if !next["groups"].is_array() {
+        next["groups"] = json!([]);
+    }
+    let last = next["groups"].as_array().unwrap().iter().filter_map(|g| g["order"].as_f64()).fold(0.0, f64::max);
+    let mut n = 0.0;
+    for name in names {
+        let list = next["groups"].as_array_mut().unwrap();
+        if !list.iter().any(|g| s(&g["name"]) == name) {
+            n += 1.0;
+            list.push(json!({ "id": detour_core::new_id(), "name": name, "order": last + n }));
+        }
+    }
+}
+
+pub async fn groups(ctx: &Ctx) -> Res<()> {
+    let d = data(ctx).await?;
+    let list = ordered_groups(&d, true);
+    if ctx.json {
+        let out: Vec<Value> = list.iter().map(|(g, hosts)| json!({ "group": g, "hosts": hosts.iter().map(|h| h["label"].clone()).collect::<Vec<_>>() })).collect();
+        print_json(&json!(out));
+        return Ok(());
+    }
+    let rows = list.iter().map(|(g, hosts)| vec![if g.is_empty() { t().no_group.to_string() } else { g.clone() }, hosts.len().to_string()]).collect();
+    table(&t().headers_groups, rows);
+    Ok(())
+}
+
+pub async fn group_add(ctx: &Ctx, name: &str) -> Res<()> {
+    let base = data(ctx).await?;
+    if find_group(&base, name).is_ok() {
+        return fail(format!("{}: {name}", t().group_exists));
+    }
+    let mut next = base.clone();
+    with_records(&mut next);
+    let last = next["groups"].as_array().unwrap().iter().filter_map(|g| g["order"].as_f64()).fold(0.0, f64::max);
+    next["groups"].as_array_mut().unwrap().push(json!({ "id": detour_core::new_id(), "name": name, "order": last + 1.0 }));
+    put(ctx, &base, &next).await?;
+    eprintln!("{}: {name}", t().group_added);
+    Ok(())
+}
+
+pub async fn group_rename(ctx: &Ctx, name: &str, to: &str) -> Res<()> {
+    let base = data(ctx).await?;
+    let from = find_group(&base, name)?;
+    let mut next = base.clone();
+    for g in next["groups"].as_array_mut().into_iter().flatten() {
+        if s(&g["name"]) == from {
+            g["name"] = json!(to);
+        }
+    }
+    for h in next["hosts"].as_array_mut().unwrap() {
+        if group_of(h) == from {
+            h["group"] = json!(to);
+        }
+    }
+    put(ctx, &base, &next).await?;
+    eprintln!("{}: {to}", t().group_saved);
+    Ok(())
+}
+
+pub async fn group_rm(ctx: &Ctx, name: &str) -> Res<()> {
+    let base = data(ctx).await?;
+    let from = find_group(&base, name)?;
+    let mut next = base.clone();
+    if let Some(list) = next["groups"].as_array_mut() {
+        list.retain(|g| s(&g["name"]) != from);
+    }
+    for h in next["hosts"].as_array_mut().unwrap() {
+        if group_of(h) == from {
+            h["group"] = json!("");
+        }
+    }
+    put(ctx, &base, &next).await?;
+    eprintln!("{}: {from}", t().group_removed);
+    Ok(())
+}
+
+/// Moves a group before another, or last.
+pub async fn group_move(ctx: &Ctx, name: &str, before: Option<&str>) -> Res<()> {
+    let base = data(ctx).await?;
+    let from = find_group(&base, name)?;
+    let before = before.map(|b| find_group(&base, b)).transpose()?;
+    let mut next = base.clone();
+    with_records(&mut next);
+    let mut others: Vec<(String, f64)> = next["groups"].as_array().unwrap().iter().filter(|g| s(&g["name"]) != from).map(|g| (s(&g["name"]), g["order"].as_f64().unwrap_or(0.0))).collect();
+    others.sort_by(|a, b| a.1.total_cmp(&b.1));
+    let i = before.as_ref().and_then(|b| others.iter().position(|(g, _)| g == b)).unwrap_or(others.len());
+    let order = between(i.checked_sub(1).map(|k| others[k].1), others.get(i).map(|x| x.1));
+    for g in next["groups"].as_array_mut().unwrap() {
+        if s(&g["name"]) == from {
+            g["order"] = json!(order);
+        }
+    }
+    put(ctx, &base, &next).await?;
+    eprintln!("{}: {from}", t().group_saved);
+    Ok(())
+}
+
+/// Moves a host into a group (its own if none is given), before another host or last.
+pub async fn host_move(ctx: &Ctx, name: &str, group: Option<&str>, before: Option<&str>) -> Res<()> {
+    let base = data(ctx).await?;
+    let host = find(&base["hosts"], name, "label", t().unknown_host)?.clone();
+    let id = s(&host["id"]);
+    let target = match group {
+        Some(g) if g.is_empty() || g.eq_ignore_ascii_case("none") => String::new(),
+        Some(g) => find_group(&base, g).unwrap_or_else(|_| g.to_string()),
+        None => group_of(&host),
+    };
+    let before_id = before.map(|b| find(&base["hosts"], b, "label", t().unknown_host).map(|h| s(&h["id"]))).transpose()?;
+    let mut next = base.clone();
+    let list = sorted_hosts(base["hosts"].as_array().unwrap().iter().filter(|h| s(&h["id"]) != id && group_of(h) == target).collect());
+    // Hosts of the group without a place get one first, in the order they are listed.
+    let renumber = list.iter().any(|h| h["order"].as_f64().is_none());
+    let place = |k: usize| if renumber { Some(k as f64 + 1.0) } else { list[k]["order"].as_f64() };
+    let i = before_id.as_ref().and_then(|b| list.iter().position(|h| &s(&h["id"]) == b)).unwrap_or(list.len());
+    let order = between(i.checked_sub(1).and_then(place), (i < list.len()).then(|| place(i)).flatten());
+    let ids: Vec<String> = list.iter().map(|h| s(&h["id"])).collect();
+    for h in next["hosts"].as_array_mut().unwrap() {
+        let hid = s(&h["id"]);
+        if hid == id {
+            h["group"] = json!(target);
+            h["order"] = json!(order);
+        } else if renumber && let Some(k) = ids.iter().position(|x| *x == hid) {
+            h["order"] = json!(k as f64 + 1.0);
+        }
+    }
+    put(ctx, &base, &next).await?;
+    eprintln!("{}: {name}", t().host_saved);
+    Ok(())
+}
+
 pub async fn ls(ctx: &Ctx, query: Option<&str>) -> Res<()> {
     let d = data(ctx).await?;
     let q = query.map(str::to_lowercase);
-    let hosts: Vec<&Value> = d["hosts"].as_array().into_iter().flatten().filter(|h| q.as_ref().is_none_or(|q| [&h["label"], &h["address"], &h["user"], &h["group"]].iter().any(|v| s(v).to_lowercase().contains(q.as_str())))).collect();
+    // In the app's order: group by group, host by host.
+    let hosts: Vec<&Value> = ordered_groups(&d, false).into_iter().flat_map(|(_, h)| h).filter(|h| q.as_ref().is_none_or(|q| [&h["label"], &h["address"], &h["user"], &h["group"]].iter().any(|v| s(v).to_lowercase().contains(q.as_str())))).collect();
     if ctx.json {
         print_json(&json!(hosts));
         return Ok(());

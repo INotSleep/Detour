@@ -80,6 +80,7 @@ const emptyWorkspace = (): Workspace => ({
   snippets: [],
   tunnels: [],
   proxies: [],
+  groups: [],
   activity: [],
   access: [],
 });
@@ -230,6 +231,7 @@ export default function App() {
       snippets: [...data.snippets, ...others(base.snippets)],
       tunnels: [...data.tunnels.map((t) => ({ ...t, state: running.get(t.id)?.state ?? t.state, connections: running.get(t.id)?.connections, error: running.get(t.id)?.error })), ...others(base.tunnels)],
       proxies: [...data.proxies, ...others(base.proxies)],
+      groups: [...data.groups, ...others(base.groups)],
     };
     lastSaved.current.set("personal", JSON.stringify(dataOf(next, "personal")));
     wsRef.current = next;

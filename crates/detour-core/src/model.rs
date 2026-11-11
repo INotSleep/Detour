@@ -44,6 +44,20 @@ pub enum Proxy {
     },
 }
 
+/// A group of hosts: its place among the others and the proxy its hosts go through.
+/// Hosts name their group (`Host::group`); a group without a record is listed after those with one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Group {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub order: f64,
+    /// A saved proxy of the same vault for its hosts that have none of their own.
+    #[serde(default)]
+    pub proxy_id: Option<String>,
+}
+
 /// A saved proxy that hosts of the same vault reach their server through.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -262,6 +276,9 @@ pub struct Host {
     /// Lets the server use this person's keys while connected (`ssh -A`).
     #[serde(default)]
     pub forward_agent: bool,
+    /// Its place in its group; hosts without one come after, as they are.
+    #[serde(default)]
+    pub order: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -297,6 +314,8 @@ pub struct HostView {
     pub proxy_id: Option<String>,
     #[serde(default)]
     pub forward_agent: bool,
+    #[serde(default)]
+    pub order: Option<f64>,
 }
 
 /// A member's own login for a team host, kept in their personal vault.
@@ -376,6 +395,7 @@ impl From<&Host> for HostView {
             new_proxy_password: None,
             proxy_id: h.proxy_id.clone(),
             forward_agent: h.forward_agent,
+            order: h.order,
         }
     }
 }
@@ -500,6 +520,8 @@ pub struct VaultData {
     #[serde(default)]
     pub proxies: Vec<ProxyEntry>,
     #[serde(default)]
+    pub groups: Vec<Group>,
+    #[serde(default)]
     pub known_hosts: Vec<KnownHost>,
     /// This person's team identity (Detour ID secret keys).
     #[serde(default)]
@@ -586,6 +608,8 @@ pub struct VaultView {
     pub tunnels: Vec<Tunnel>,
     #[serde(default)]
     pub proxies: Vec<ProxyView>,
+    #[serde(default)]
+    pub groups: Vec<Group>,
 }
 
 #[cfg(test)]
@@ -615,7 +639,7 @@ mod tests {
             proxy: None,
             proxy_password: None,
             proxy_id: None,
-            forward_agent: false,
+            forward_agent: false, order: None,
         };
         let json = serde_json::to_string(&HostView::from(&host)).unwrap();
         assert!(!json.contains("secret"));

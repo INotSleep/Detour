@@ -107,6 +107,9 @@ pub fn records_of(v: &VaultData, me: &Identity) -> BTreeMap<String, SyncRecord> 
     for p in &v.proxies {
         put(p.id.clone(), Coll::Proxy, fields_of(p, &[]));
     }
+    for g in &v.groups {
+        put(g.id.clone(), Coll::Group, fields_of(g, &[]));
+    }
     for k in &v.known_hosts {
         put(derived_id(me, "known", &k.endpoint), Coll::KnownHost, fields_of(k, &[]));
     }
@@ -171,6 +174,7 @@ pub fn adopt(v: &mut VaultData, records: &BTreeMap<String, SyncRecord>) -> Vec<S
     v.snippets = merged(&v.snippets, of(records, Coll::Snippet), |s| s.id.clone());
     v.tunnels = merged(&v.tunnels, of(records, Coll::Tunnel), |t| t.id.clone());
     v.proxies = merged(&v.proxies, of(records, Coll::Proxy), |p| p.id.clone());
+    v.groups = merged(&v.groups, of(records, Coll::Group), |g| g.id.clone());
     v.known_hosts = merged(&v.known_hosts, of(records, Coll::KnownHost), |k| k.endpoint.clone());
     v.team_own = records
         .values()
@@ -195,6 +199,7 @@ fn readable(id: &str, r: &SyncRecord) -> bool {
         Coll::Snippet => is::<Snippet>(id, r),
         Coll::Tunnel => is::<Tunnel>(id, r),
         Coll::Proxy => is::<ProxyEntry>(id, r),
+        Coll::Group => is::<Group>(id, r),
         Coll::KnownHost => is::<KnownHost>(id, r),
         Coll::OwnLogin => r.fields.get("key").is_some_and(Value::is_string) && is::<OwnLogin>(id, r),
         Coll::TeamLink => is::<TeamLink>(id, r),

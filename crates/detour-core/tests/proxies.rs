@@ -84,7 +84,7 @@ fn request(s: &Server, known: bool, route: Route) -> ConnectRequest {
         password: Some("pw".into()),
         proxy: None,
         proxy_password: None, proxy_id: None,
-        forward_agent: false,
+        forward_agent: false, order: None,
     };
     ConnectRequest { host, key: None, secret: None, known: known.then(|| s.known.clone()), trust_fingerprint: None, route }
 }
@@ -248,7 +248,7 @@ fn via(kind: ProxyKind, password: Option<String>) -> Route {
 }
 
 fn view(id: &str, port: u16, proxy: Option<Proxy>) -> HostView {
-    HostView { id: id.into(), group: String::new(), label: id.into(), address: "127.0.0.1".into(), port, user: "u".into(), auth: Auth::Password, tags: vec![], last_connected: None, has_password: false, new_password: Some("pw".into()), own: None, proxy, has_proxy_password: false, new_proxy_password: None, proxy_id: None, forward_agent: false }
+    HostView { id: id.into(), group: String::new(), label: id.into(), address: "127.0.0.1".into(), port, user: "u".into(), auth: Auth::Password, tags: vec![], last_connected: None, has_password: false, new_password: Some("pw".into()), own: None, proxy, has_proxy_password: false, new_proxy_password: None, proxy_id: None, forward_agent: false, order: None }
 }
 
 #[tokio::test]
@@ -265,7 +265,7 @@ async fn a_vault_host_goes_through_another_one() {
         keys,
         snippets: vec![],
         tunnels: vec![],
-        proxies: None,
+        proxies: None, groups: None,
     })
     .unwrap();
     s.record_connection("bastion", vec![jump.known.clone()]).unwrap();
@@ -280,7 +280,7 @@ async fn a_vault_host_goes_through_another_one() {
         keys: vec![],
         snippets: vec![],
         tunnels: vec![],
-        proxies: None,
+        proxies: None, groups: None,
     })
     .unwrap();
     assert!(matches!(s.connect_request("db", None, None), Err(Error::JumpLoop)));
@@ -301,16 +301,16 @@ async fn a_host_goes_through_a_saved_proxy_and_its_secret_is_kept() {
     let mut db = view("db", target.port, None);
     db.proxy_id = Some("office".into());
     let socks = ProxyKind::Socks5 { address: "127.0.0.1".into(), port: locked, user: "p".into() };
-    let v = s.put(VaultUpdate { hosts: vec![db], keys: vec![], snippets: vec![], tunnels: vec![], proxies: Some(vec![saved("office", socks.clone(), &[("password", "pp")])]) }).unwrap();
+    let v = s.put(VaultUpdate { hosts: vec![db], keys: vec![], snippets: vec![], tunnels: vec![], proxies: Some(vec![saved("office", socks.clone(), &[("password", "pp")])]), groups: None }).unwrap();
     assert_eq!(v.proxies[0].saved, ["password"]);
     assert!(!serde_json::to_string(&v).unwrap().contains("\"pp\""), "the view holds no secrets");
 
     // Renamed without its password: the saved one stays.
     let mut p = v.proxies[0].clone();
     p.name = "Office".into();
-    s.put(VaultUpdate { hosts: v.hosts.clone(), keys: vec![], snippets: vec![], tunnels: vec![], proxies: Some(vec![p.clone()]) }).unwrap();
+    s.put(VaultUpdate { hosts: v.hosts.clone(), keys: vec![], snippets: vec![], tunnels: vec![], proxies: Some(vec![p.clone()]), groups: None }).unwrap();
     // A client that doesn't know proxies leaves them alone.
-    let v = s.put(VaultUpdate { hosts: v.hosts.clone(), keys: vec![], snippets: vec![], tunnels: vec![], proxies: None }).unwrap();
+    let v = s.put(VaultUpdate { hosts: v.hosts.clone(), keys: vec![], snippets: vec![], tunnels: vec![], proxies: None, groups: None }).unwrap();
     assert_eq!(v.proxies.len(), 1);
     assert_eq!(v.proxies[0].name, "Office");
 
@@ -321,9 +321,9 @@ async fn a_host_goes_through_a_saved_proxy_and_its_secret_is_kept() {
     assert_eq!(seen.lock().unwrap().as_slice(), [format!("127.0.0.1:{}", target.port)]);
 
     // Deleted, then undone: the password comes back with it.
-    s.put(VaultUpdate { hosts: v.hosts.clone(), keys: vec![], snippets: vec![], tunnels: vec![], proxies: Some(vec![]) }).unwrap();
+    s.put(VaultUpdate { hosts: v.hosts.clone(), keys: vec![], snippets: vec![], tunnels: vec![], proxies: Some(vec![]), groups: None }).unwrap();
     assert!(matches!(s.connect_request("db", None, None), Err(Error::Proxy { reason }) if reason == "missing"));
-    s.put(VaultUpdate { hosts: v.hosts.clone(), keys: vec![], snippets: vec![], tunnels: vec![], proxies: Some(vec![p]) }).unwrap();
+    s.put(VaultUpdate { hosts: v.hosts.clone(), keys: vec![], snippets: vec![], tunnels: vec![], proxies: Some(vec![p]), groups: None }).unwrap();
     assert!(matches!(s.connect_request("db", None, None).unwrap().route, Route::Proxy(p) if p.password.as_deref() == Some("pp")));
 }
 
@@ -339,7 +339,7 @@ fn proxies_written_into_hosts_become_saved_ones() {
     let mut b = view("b", 22, Some(socks.clone()));
     b.new_proxy_password = Some("pw".into());
     let c = view("c", 22, Some(Proxy::Http { address: "10.0.0.2".into(), port: 3128, user: String::new() }));
-    s.put(VaultUpdate { hosts: vec![a, b, c], keys: vec![], snippets: vec![], tunnels: vec![], proxies: None }).unwrap();
+    s.put(VaultUpdate { hosts: vec![a, b, c], keys: vec![], snippets: vec![], tunnels: vec![], proxies: None, groups: None }).unwrap();
     s.lock();
     s.unlock("m").unwrap();
 

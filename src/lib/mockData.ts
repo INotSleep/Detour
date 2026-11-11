@@ -108,6 +108,11 @@ export const mockWorkspace = (): Workspace => {
     { id: "t3", vaultId: "personal", name: "Proxmox", kind: "local", bindPort: 8006, viaHostId: "h1", target: "10.10.0.2:8006", state: "off" },
   ],
 
+  groups: [
+    { id: "g1", vaultId: "acme", name: "Production", order: 1, access: "edit" },
+    { id: "g2", vaultId: "acme", name: "Staging", order: 2, access: "edit" },
+  ],
+
   proxies: [
     {
       id: "p1",

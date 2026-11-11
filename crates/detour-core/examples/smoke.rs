@@ -30,7 +30,7 @@ async fn main() {
     };
 
     let entry = keys::import("smoke", &std::fs::read_to_string(key_path).expect("key file"), None, false).expect("key");
-    let host = Host { id: "smoke".into(), group: String::new(), label: address.clone(), address, port, user: user.into(), auth: Auth::Key { key_id: entry.id.clone() }, tags: vec![], last_connected: None, password: None, proxy: None, proxy_password: None, proxy_id: None, forward_agent };
+    let host = Host { id: "smoke".into(), group: String::new(), label: address.clone(), address, port, user: user.into(), auth: Auth::Key { key_id: entry.id.clone() }, tags: vec![], last_connected: None, password: None, proxy: None, proxy_password: None, proxy_id: None, forward_agent, order: None };
     let mk = |trust: Option<String>| ConnectRequest { host: host.clone(), key: Some(entry.clone()), secret: None, known: None, trust_fingerprint: trust, route: Default::default() };
 
     let fp = match ssh::connect(mk(None), 120, 30).await {

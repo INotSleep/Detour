@@ -3,9 +3,9 @@ import { enForm, ruForm } from "./plural";
 
 export const en = {
   /** A record kind, as a noun at the start of a line. */
-  coll: { host: "Host", key: "Key", snippet: "Snippet", tunnel: "Tunnel", proxy: "Proxy" },
+  coll: { host: "Host", key: "Key", snippet: "Snippet", tunnel: "Tunnel", proxy: "Proxy", group: "Group" },
   /** Record kinds as section titles. */
-  collPlural: { host: "Hosts", key: "Keys", snippet: "Snippets", tunnel: "Tunnels", proxy: "Proxies" },
+  collPlural: { host: "Hosts", key: "Keys", snippet: "Snippets", tunnel: "Tunnels", proxy: "Proxies", group: "Groups" },
   /** What a member can do with a record. */
   level: { none: "None", view: "View", secret: "Secret", edit: "Edit" },
   more: "More",
@@ -242,8 +242,8 @@ export const en = {
 };
 
 export const ru: typeof en = {
-  coll: { host: "Хост", key: "Ключ", snippet: "Сниппет", tunnel: "Туннель", proxy: "Прокси" },
-  collPlural: { host: "Хосты", key: "Ключи", snippet: "Сниппеты", tunnel: "Туннели", proxy: "Прокси" },
+  coll: { host: "Хост", key: "Ключ", snippet: "Сниппет", tunnel: "Туннель", proxy: "Прокси", group: "Группа" },
+  collPlural: { host: "Хосты", key: "Ключи", snippet: "Сниппеты", tunnel: "Туннели", proxy: "Прокси", group: "Группы" },
   level: { none: "Нет", view: "Видит", secret: "Секрет", edit: "Изменяет" },
   more: "Ещё",
   activity: {

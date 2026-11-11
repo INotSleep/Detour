@@ -419,6 +419,25 @@ select.input { cursor: pointer; padding-right: 28px; appearance: none; backgroun
   color: var(--muted); font-size: 12px; font-weight: 600;
 }
 .group-head:hover { color: var(--text-2); }
+.group-bar { display: flex; align-items: center; gap: 2px; }
+.host-row, .group-head { user-select: none; }
+.group-bar .group-menu { opacity: 0; }
+.group-bar:hover .group-menu, .group-bar .group-menu.pressed { opacity: 1; }
+.group-head.draggable { cursor: grab; }
+.group.drop-before { box-shadow: 0 -2px 0 var(--accent); }
+.group.drop-into .group-head { color: var(--accent); background: var(--accent-soft); }
+.group-empty { border: 1px dashed var(--line); border-radius: var(--r); padding: 12px; color: var(--muted); font-size: 12px; text-align: center; }
+.group-empty.over { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.host-row.dragged { opacity: 0.4; }
+.host-row.drop-before { box-shadow: 0 -2px 0 var(--accent); }
+.rows.drop-end { box-shadow: 0 2px 0 var(--accent); }
+.drag-ghost {
+  position: fixed; z-index: 1000; pointer-events: none;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 10px; border-radius: 8px; font-size: 12.5px; font-weight: 600;
+  background: var(--panel, var(--bg)); border: 1px solid var(--accent); color: var(--text);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
 .group-head .count { font-weight: 500; opacity: 0.8; }
 .chev { transition: transform 0.15s var(--ease); }
 .chev.open { transform: rotate(90deg); }

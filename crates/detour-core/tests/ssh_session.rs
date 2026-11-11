@@ -159,7 +159,7 @@ fn host(port: u16, auth: Auth) -> Host {
         password: None,
         proxy: None,
         proxy_password: None, proxy_id: None,
-        forward_agent: false,
+        forward_agent: false, order: None,
     }
 }
 

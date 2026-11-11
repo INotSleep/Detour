@@ -60,7 +60,7 @@ fn request(p: ProxyEntry) -> ConnectRequest {
         proxy: None,
         proxy_password: None,
         proxy_id: None,
-        forward_agent: false,
+        forward_agent: false, order: None,
     };
     ConnectRequest { host, key: None, secret: None, known: None, trust_fingerprint: None, route: Route::Proxy(Box::new(p)) }
 }

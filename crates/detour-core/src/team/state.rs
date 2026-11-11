@@ -29,6 +29,7 @@ pub enum Coll {
     Snippet,
     Tunnel,
     Proxy,
+    Group,
     /// A pinned server key (personal vaults only).
     KnownHost,
     /// A member's own login for a team host (personal vaults only).

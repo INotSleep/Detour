@@ -1,13 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
-import { ChevronRight, CopyPlus, Download, Ellipsis, FolderOpen, Plus, Search, Server, SquareTerminal, Terminal, Trash2, TriangleAlert, Upload, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ChevronRight, CopyPlus, Download, Ellipsis, FolderOpen, FolderPlus, Pencil, Plus, Search, Server, SquareTerminal, Terminal, Trash2, TriangleAlert, Upload, X } from "lucide-react";
 import { api, errorText } from "../lib/api";
 import { copyText, formatAgo, uid, useStore } from "../lib/store";
 import { sshCommand } from "../lib/sshConfig";
 import type { Host } from "../lib/types";
 import { HostIcon, authLabel, groupLabel, isNoGroup } from "./common";
-import { atLeast, writable } from "../lib/teams";
+import { atLeast, canManage, writable } from "../lib/teams";
+import { addGroup, listGroups, moveGroup, moveHost, removeGroup, renameGroup, type ListedGroup } from "../lib/groups";
 import { OwnLoginSection, SavedPassword } from "./HostLogin";
-import { Button, Checkbox, Empty, IconButton, Menu, Modal, PageHeader } from "./ui";
+import { Button, Checkbox, Empty, Field, IconButton, Menu, Modal, PageHeader } from "./ui";
 import { HostFields, applyDraft, draftFromHost, draftInvalid, emptyDraft, useHostDraft } from "./HostForm";
 import { ImportDialog } from "./ImportDialog";
 import { ExportDialog } from "./ExportDialog";
@@ -27,7 +28,12 @@ export function HostsView() {
   const [exporting, setExporting] = useState<string[] | null>(null);
 
   const hosts = ws.hosts.filter((h) => h.vaultId === vault.id);
-  const groupNames = [...new Set(hosts.map((h) => h.group).filter((g) => !isNoGroup(g)))];
+  const vaultGroups = ws.groups.filter((g) => g.vaultId === vault.id);
+  const groupNames = [...new Set([...vaultGroups.map((g) => g.name), ...hosts.map((h) => h.group).filter((g) => !isNoGroup(g))])];
+  // In a team, the shared order and groups are for those who manage it; hosts for their editors.
+  const canEditGroups = vault.kind === "personal" || canManage(vault.myRole);
+  const canMoveHost = (h: Host) => vault.kind === "personal" || atLeast(h.access, "edit");
+  const [naming, setNaming] = useState<{ from: string | null } | null>(null);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -35,14 +41,30 @@ export function HostsView() {
     return hosts.filter((h) => [h.label, h.address, h.user, h.group, ...h.tags].some((s) => s.toLowerCase().includes(q)));
   }, [hosts, query]);
 
-  const groups = useMemo(() => {
-    const map = new Map<string, Host[]>();
-    for (const h of filtered) {
-      const g = isNoGroup(h.group) ? "" : h.group;
-      map.set(g, [...(map.get(g) ?? []), h]);
-    }
-    return [...map.entries()];
-  }, [filtered]);
+  const groups = useMemo(() => listGroups(filtered, vaultGroups, !query.trim()), [filtered, vaultGroups, query]);
+  const drag = useDrag(groups, (d, drop) => {
+    if (d.kind === "host" && drop.kind === "host") update((w) => moveHost(w, vault.id, d.id, drop.group, drop.before));
+    if (d.kind === "group" && drop.kind === "group") update((w) => moveGroup(w, vault.id, d.name, drop.before));
+  });
+
+  const deleteGroup = (name: string) => {
+    const before = ws;
+    const record = ws.groups.find((g) => g.vaultId === vault.id && g.name === name);
+    const members = ws.hosts.filter((h) => h.vaultId === vault.id && h.group === name).map((h) => h.id);
+    update((w) => removeGroup(w, vault.id, name));
+    toast({
+      text: t.hosts.groups.removed(name),
+      action: {
+        label: t.hosts.restore,
+        run: () =>
+          update((w) => ({
+            ...w,
+            groups: record && !w.groups.some((g) => g.id === record.id) ? [...w.groups, record] : w.groups,
+            hosts: w.hosts.map((h) => (members.includes(h.id) ? { ...h, group: before.hosts.find((x) => x.id === h.id)!.group } : h)),
+          })),
+      },
+    });
+  };
 
   const selected = hosts.find((h) => h.id === selectedId) ?? null;
 
@@ -89,12 +111,13 @@ export function HostsView() {
                 {query && <IconButton icon={X} label={t.hosts.clearSearch} size={13} onClick={() => setQuery("")} />}
               </label>
             )}
-            {(vault.kind === "personal" || hosts.length > 0) && (
+            {(vault.kind === "personal" || hosts.length > 0 || (canCreate && canEditGroups)) && (
               <Menu
                 trigger={(open, isOpen) => <IconButton icon={Ellipsis} label={t.hosts.more} className={isOpen ? "pressed" : ""} onClick={open} />}
                 items={[
                   ...(vault.kind === "personal" ? [{ label: t.hosts.importSsh, icon: Download, onSelect: () => setImporting(true) }] : []),
                   ...(hosts.length > 0 ? [{ label: t.hosts.exportSsh, icon: Upload, onSelect: () => setExporting(hosts.map((h) => h.id)) }] : []),
+                  ...(canCreate && canEditGroups ? [{ label: t.hosts.groups.add, icon: FolderPlus, onSelect: () => setNaming({ from: null }) }] : []),
                 ]}
               />
             )}
@@ -117,24 +140,48 @@ export function HostsView() {
           )}
           {hosts.length > 0 && filtered.length === 0 && <Empty icon={Search} title={t.hosts.noMatch(query)} />}
 
-          {groups.map(([group, list]) => {
+          {groups.map(({ name: group, hosts: list }) => {
             const isCollapsed = collapsed.has(group) && !query;
+            const dropHere = drag.drop?.kind === "host" && drag.drop.group === group;
             return (
-              <section className="group" key={group}>
-                <button className="group-head" onClick={() => toggleGroup(group)} aria-expanded={!isCollapsed}>
-                  <ChevronRight size={14} className={`chev ${isCollapsed ? "" : "open"}`} />
-                  {groupLabel(group)}
-                  <span className="count">{list.length}</span>
-                </button>
-                {!isCollapsed && (
-                  <div className="rows">
+              <section
+                className={`group ${drag.drop?.kind === "group" && drag.drop.before === group ? "drop-before" : ""} ${dropHere && (isCollapsed || !list.length) ? "drop-into" : ""}`}
+                key={group || "\0"}
+                data-group={group}
+              >
+                <div className="group-bar">
+                  <button
+                    className={`group-head ${group && canEditGroups ? "draggable" : ""}`}
+                    onClick={() => !drag.justDragged() && toggleGroup(group)}
+                    onPointerDown={(e) => group && canEditGroups && drag.start(e, { kind: "group", name: group, label: group })}
+                    aria-expanded={!isCollapsed}
+                  >
+                    <ChevronRight size={14} className={`chev ${isCollapsed ? "" : "open"}`} />
+                    {groupLabel(group)}
+                    <span className="count">{list.length}</span>
+                  </button>
+                  {group && canEditGroups && (
+                    <Menu
+                      trigger={(open, isOpen) => <IconButton icon={Ellipsis} label={t.hosts.groups.menu} size={13} className={`group-menu ${isOpen ? "pressed" : ""}`} onClick={open} />}
+                      items={[
+                        { label: t.hosts.groups.rename, icon: Pencil, onSelect: () => setNaming({ from: group }) },
+                        { label: t.common.delete, icon: Trash2, danger: true, onSelect: () => deleteGroup(group) },
+                      ]}
+                    />
+                  )}
+                </div>
+                {!isCollapsed && !list.length && <div className={`group-empty ${dropHere ? "over" : ""}`}>{t.hosts.groups.dropHere}</div>}
+                {!isCollapsed && list.length > 0 && (
+                  <div className={`rows ${dropHere && drag.drop?.kind === "host" && drag.drop.before === null ? "drop-end" : ""}`}>
                     {list.map((h) => (
                       <div
                         key={h.id}
                         role="button"
                         tabIndex={0}
-                        className={`host-row ${h.id === selectedId ? "selected" : ""}`}
-                        onClick={() => setSelectedId(h.id === selectedId ? null : h.id)}
+                        data-host={h.id}
+                        className={`host-row ${h.id === selectedId ? "selected" : ""} ${drag.dragging === h.id ? "dragged" : ""} ${dropHere && drag.drop?.kind === "host" && drag.drop.before === h.id ? "drop-before" : ""}`}
+                        onPointerDown={(e) => canMoveHost(h) && !query && drag.start(e, { kind: "host", id: h.id, label: h.label })}
+                        onClick={() => !drag.justDragged() && setSelectedId(h.id === selectedId ? null : h.id)}
                         onDoubleClick={() => connect(h.id)}
                         onKeyDown={(e) => {
                           if (e.key === "Enter") connect(h.id);
@@ -203,9 +250,148 @@ export function HostsView() {
       )}
 
       {creating && <NewHostDialog groups={groupNames} onClose={() => setCreating(false)} onCreated={(h) => setSelectedId(h.id)} />}
+      {naming && (
+        <GroupNameDialog
+          initial={naming.from ?? ""}
+          taken={groupNames.filter((g) => g !== naming.from)}
+          onClose={() => setNaming(null)}
+          onSave={(name) => {
+            if (naming.from === null) update((w) => addGroup(w, vault.id, name));
+            else if (name !== naming.from) update((w) => renameGroup(w, vault.id, naming.from!, name));
+            toast({ text: naming.from === null ? t.hosts.groups.added(name) : t.hosts.groups.renamed(name), tone: "success" });
+            setNaming(null);
+          }}
+        />
+      )}
+      {drag.ghost}
       {importing && <ImportDialog onClose={() => setImporting(false)} />}
       {exporting && <ExportDialog hosts={hosts} initial={exporting} onClose={() => setExporting(null)} />}
     </div>
+  );
+}
+
+/* ---------- dragging hosts and groups ---------- */
+
+type Dragged = { kind: "host"; id: string; label: string } | { kind: "group"; name: string; label: string };
+/** Where a drag lands: before a host of a group (null: last), or before a group (null: last). */
+type Drop = { kind: "host"; group: string; before: string | null } | { kind: "group"; before: string | null };
+
+/**
+ * Dragging with the pointer (the webview's own drag and drop is taken by the window for files).
+ * A press becomes a drag after a few pixels; a drag doesn't count as a click.
+ */
+function useDrag(groups: ListedGroup[], onDrop: (d: Dragged, drop: Drop) => void) {
+  const [state, setState] = useState<{ what: Dragged; x: number; y: number; drop: Drop | null } | null>(null);
+  const press = useRef<{ what: Dragged; x: number; y: number } | null>(null);
+  const dragged = useRef(0);
+  const latest = useRef({ groups, onDrop });
+  latest.current = { groups, onDrop };
+
+  /** Where the pointer is, for what is dragged. */
+  const dropAt = (what: Dragged, x: number, y: number): Drop | null => {
+    const el = document.elementFromPoint(x, y) as HTMLElement | null;
+    const section = el?.closest<HTMLElement>("[data-group]");
+    if (!section) return null;
+    const group = section.dataset.group ?? "";
+    const list = latest.current.groups;
+    if (what.kind === "group") {
+      const rect = section.getBoundingClientRect();
+      const i = list.findIndex((g) => g.name === group);
+      const next = (k: number) => list.slice(k).find((g) => g.name && g.name !== what.name)?.name ?? null;
+      // Hosts without a group stay last.
+      if (!group) return { kind: "group", before: null };
+      return { kind: "group", before: y < rect.top + rect.height / 2 ? next(i) : next(i + 1) };
+    }
+    const row = el?.closest<HTMLElement>("[data-host]");
+    if (row) {
+      const rect = row.getBoundingClientRect();
+      const hosts = list.find((g) => g.name === group)?.hosts ?? [];
+      const i = hosts.findIndex((h) => h.id === row.dataset.host);
+      const after = hosts.slice(i + 1).find((h) => h.id !== what.id)?.id ?? null;
+      const here = row.dataset.host === what.id ? after : row.dataset.host!;
+      return { kind: "host", group, before: y < rect.top + rect.height / 2 ? here : after };
+    }
+    return { kind: "host", group, before: null };
+  };
+
+  useEffect(() => {
+    const move = (e: PointerEvent) => {
+      const p = press.current;
+      if (!p) return;
+      if (!state && Math.hypot(e.clientX - p.x, e.clientY - p.y) < 6) return;
+      e.preventDefault();
+      setState({ what: p.what, x: e.clientX, y: e.clientY, drop: dropAt(p.what, e.clientX, e.clientY) });
+    };
+    const up = () => {
+      const p = press.current;
+      press.current = null;
+      setState((s) => {
+        if (s && p) {
+          dragged.current = Date.now();
+          if (s.drop) latest.current.onDrop(s.what, s.drop);
+        }
+        return null;
+      });
+    };
+    const cancel = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || !press.current) return;
+      press.current = null;
+      setState(null);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("keydown", cancel);
+    return () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("keydown", cancel);
+    };
+  }, [state]);
+
+  return {
+    start: (e: React.PointerEvent, what: Dragged) => {
+      // Buttons and menus in a row are pressed, not dragged.
+      if (e.button !== 0 || (e.target as HTMLElement).closest(".row-actions, .group-menu, input")) return;
+      press.current = { what, x: e.clientX, y: e.clientY };
+    },
+    drop: state?.drop ?? null,
+    dragging: state?.what.kind === "host" ? state.what.id : state?.what.kind === "group" ? `group:${state.what.name}` : null,
+    /** A click right after a drag is the drag's end. */
+    justDragged: () => Date.now() - dragged.current < 250,
+    ghost: state ? (
+      <div className="drag-ghost" style={{ left: state.x + 14, top: state.y + 10 }}>
+        {state.what.kind === "group" ? <FolderOpen size={13} /> : <Server size={13} />}
+        {state.what.label}
+      </div>
+    ) : null,
+  };
+}
+
+function GroupNameDialog({ initial, taken, onClose, onSave }: { initial: string; taken: string[]; onClose: () => void; onSave: (name: string) => void }) {
+  const t = useT();
+  const [name, setName] = useState(initial);
+  const [touched, setTouched] = useState(false);
+  const clean = name.trim();
+  const error = !clean ? t.hosts.groups.nameRequired : taken.some((g) => g.toLowerCase() === clean.toLowerCase()) ? t.hosts.groups.exists : null;
+  return (
+    <Modal
+      title={initial ? t.hosts.groups.rename : t.hosts.groups.add}
+      onClose={onClose}
+      onSubmit={() => {
+        setTouched(true);
+        if (!error) onSave(clean);
+      }}
+      footer={
+        <>
+          <Button type="button" variant="ghost" onClick={onClose}>{t.common.cancel}</Button>
+          <Button type="submit" variant="primary">{initial ? t.common.save : t.common.create}</Button>
+        </>
+      }
+    >
+      <Field label={t.hosts.groups.name} error={touched ? error : null}>
+        <input className={`input ${touched && error ? "invalid" : ""}`} value={name} onChange={(e) => setName(e.target.value)} placeholder="Production" />
+      </Field>
+    </Modal>
   );
 }
 

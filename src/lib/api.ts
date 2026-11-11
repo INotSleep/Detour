@@ -16,7 +16,7 @@ import { fakeKeyMaterial, parsePrivateKey } from "./keys";
 import { mockSecrets } from "./mockData";
 import { mockFiles } from "./mockFiles";
 import { mockLocal } from "./mockLocal";
-import type { ActivityItem, Coll, Conflict, Host, Level, OwnLogin, Problem, ProxyKind, ProxySecret, Role, SavedProxy, Snippet, SshKey, Tunnel } from "./types";
+import type { ActivityItem, Coll, Conflict, Group, Host, Level, OwnLogin, Problem, ProxyKind, ProxySecret, Role, SavedProxy, Snippet, SshKey, Tunnel } from "./types";
 import { demoSync } from "./mockSync";
 
 export interface CoreInfo {
@@ -138,6 +138,7 @@ type KeyView = Omit<SshKey, "vaultId" | "access">;
 type SnippetView = Omit<Snippet, "vaultId" | "access">;
 type TunnelView = Omit<Tunnel, "vaultId" | "state" | "error" | "access">;
 type ProxyView = Omit<SavedProxy, "vaultId" | "access">;
+type GroupView = Omit<Group, "vaultId" | "access">;
 
 /** A proxy read from a link or a config. */
 export interface ParsedProxy {
@@ -152,6 +153,7 @@ export interface VaultView {
   snippets: SnippetView[];
   tunnels: TunnelView[];
   proxies: ProxyView[];
+  groups: GroupView[];
 }
 
 export interface PersonalData {
@@ -160,6 +162,7 @@ export interface PersonalData {
   snippets: Snippet[];
   tunnels: Tunnel[];
   proxies: SavedProxy[];
+  groups: Group[];
 }
 
 const PERSONAL = "personal";
@@ -171,6 +174,7 @@ export function fromView(v: VaultView, vaultId = PERSONAL): PersonalData {
     snippets: v.snippets.map((s) => ({ ...s, vaultId })),
     tunnels: v.tunnels.map((t) => ({ ...t, vaultId, state: "off" })),
     proxies: (v.proxies ?? []).map((p) => ({ ...p, vaultId })),
+    groups: (v.groups ?? []).map((g) => ({ ...g, vaultId })),
   };
 }
 
@@ -181,6 +185,7 @@ export function toView(d: PersonalData): VaultView {
     snippets: d.snippets.map(({ vaultId: _v, access: _a, ...s }) => s),
     tunnels: d.tunnels.map(({ vaultId: _v, state: _s, error: _e, access: _a, connections: _c, ...t }) => t),
     proxies: d.proxies.map(({ vaultId: _v, access: _a, ...p }) => p),
+    groups: d.groups.map(({ vaultId: _v, access: _a, ...g }) => g),
   };
 }
 

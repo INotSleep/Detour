@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use detour_core::model::{Auth, HostView, KeyAlgorithm, OwnLoginView, ProxyKind, ProxyView};
+use detour_core::model::{Auth, Group, HostView, KeyAlgorithm, OwnLoginView, ProxyKind, ProxyView};
 use detour_core::ssh::Route;
 use detour_core::store::{Store, VaultUpdate};
 use detour_core::team::AccessChange;
@@ -19,7 +19,7 @@ fn temp_dir(tag: &str) -> PathBuf {
 }
 
 fn host(id: &str) -> HostView {
-    HostView { id: id.into(), group: "g".into(), label: id.into(), address: "127.0.0.1".into(), port: 22, user: "u".into(), auth: Auth::Password, tags: vec![], last_connected: None, has_password: false, new_password: Some("pw".into()), own: None, proxy: None, has_proxy_password: false, new_proxy_password: None, proxy_id: None, forward_agent: false }
+    HostView { id: id.into(), group: "g".into(), label: id.into(), address: "127.0.0.1".into(), port: 22, user: "u".into(), auth: Auth::Password, tags: vec![], last_connected: None, has_password: false, new_password: Some("pw".into()), own: None, proxy: None, has_proxy_password: false, new_proxy_password: None, proxy_id: None, forward_agent: false, order: None }
 }
 
 /// Alice with a team holding one host with a shared password, and Bob joined with `access`.
@@ -32,7 +32,7 @@ fn team_with_bob(access: Level) -> (Store, Store, String) {
 
     let recovery = Store::new_recovery_key();
     let team = alice.create_team(shared.to_str().unwrap(), "Acme", "Alice", &recovery).unwrap();
-    alice.team_put(&team.id, VaultUpdate { hosts: vec![host("h1")], keys: vec![], snippets: vec![], tunnels: vec![], proxies: None }).unwrap();
+    alice.team_put(&team.id, VaultUpdate { hosts: vec![host("h1")], keys: vec![], snippets: vec![], tunnels: vec![], proxies: None, groups: None }).unwrap();
 
     // Bob joins: he confirms the creator by fingerprint, then waits to be added.
     let info = Store::inspect_team(shared.to_str().unwrap()).unwrap();
@@ -126,7 +126,7 @@ fn a_team_proxy_needs_secret_access_to_connect_through() {
     let proxy = ProxyView { id: "vpn".into(), name: "Office VPN".into(), kind: wg, saved: vec![], new_secrets: [("privateKey".to_string(), "wg-private".to_string())].into() };
     let mut h1 = alice.team_view(&id).unwrap().data.hosts[0].clone();
     h1.proxy_id = Some("vpn".into());
-    alice.team_put(&id, VaultUpdate { hosts: vec![h1], keys: vec![], snippets: vec![], tunnels: vec![], proxies: Some(vec![proxy]) }).unwrap();
+    alice.team_put(&id, VaultUpdate { hosts: vec![h1], keys: vec![], snippets: vec![], tunnels: vec![], proxies: Some(vec![proxy]), groups: None }).unwrap();
 
     // A member sees the proxy, not its key, and can't connect through it.
     let view = bob.sync_team(&id).unwrap();
@@ -139,6 +139,23 @@ fn a_team_proxy_needs_secret_access_to_connect_through() {
     bob.sync_team(&id).unwrap();
     let req = bob.connect_request_in(&id, "h1", None, None).unwrap();
     assert!(matches!(req.route, Route::Proxy(p) if p.private_key.as_deref() == Some("wg-private")));
+}
+
+#[test]
+fn shared_groups_and_order_are_the_editors_to_change() {
+    let (mut alice, mut bob, id) = team_with_bob(Level::Secret);
+    let mut h1 = alice.team_view(&id).unwrap().data.hosts[0].clone();
+    h1.group = "Production".into();
+    h1.order = Some(2.0);
+    let prod = Group { id: "g1".into(), name: "Production".into(), order: 1.0, proxy_id: None };
+    alice.team_put(&id, VaultUpdate { hosts: vec![h1], keys: vec![], snippets: vec![], tunnels: vec![], proxies: None, groups: Some(vec![prod.clone()]) }).unwrap();
+
+    let view = bob.sync_team(&id).unwrap();
+    assert_eq!(view.data.groups, vec![prod.clone()]);
+    assert_eq!(view.data.hosts[0].order, Some(2.0));
+    // A member who may only view the group can't move it.
+    let moved = Group { order: 5.0, ..prod };
+    assert!(matches!(bob.team_put(&id, VaultUpdate { hosts: view.data.hosts.clone(), keys: vec![], snippets: vec![], tunnels: vec![], proxies: None, groups: Some(vec![moved]) }), Err(Error::Forbidden)));
 }
 
 #[test]
@@ -156,7 +173,7 @@ fn access_changes_reach_the_member() {
 #[test]
 fn rollback_is_remembered_across_restarts() {
     let (mut alice, mut bob, id) = team_with_bob(Level::View);
-    alice.team_put(&id, VaultUpdate { hosts: vec![host("h1"), host("h2")], keys: vec![], snippets: vec![], tunnels: vec![], proxies: None }).unwrap();
+    alice.team_put(&id, VaultUpdate { hosts: vec![host("h1"), host("h2")], keys: vec![], snippets: vec![], tunnels: vec![], proxies: None, groups: None }).unwrap();
     bob.sync_team(&id).unwrap();
     let path = alice.teams()[0].path.clone();
     let dir = std::path::Path::new(&path).join("ops");
@@ -195,7 +212,7 @@ fn a_team_opens_from_this_devices_cache_without_checking_everything_again() {
     let path = temp_dir("cache-team").join("t").display().to_string();
     let team = s.create_team(&path, "Acme", "Me", &Store::new_recovery_key()).unwrap();
     for i in 0..10 {
-        s.team_put(&team.id, VaultUpdate { hosts: (0..=i).map(|j| host(&format!("h{j}"))).collect(), keys: vec![], snippets: vec![], tunnels: vec![], proxies: None }).unwrap();
+        s.team_put(&team.id, VaultUpdate { hosts: (0..=i).map(|j| host(&format!("h{j}"))).collect(), keys: vec![], snippets: vec![], tunnels: vec![], proxies: None, groups: None }).unwrap();
     }
     s.lock();
     s.unlock("m").unwrap();
@@ -223,7 +240,7 @@ fn a_team_opens_from_this_devices_cache_without_checking_everything_again() {
 fn agent_forwarding_is_each_members_own_choice() {
     let (mut alice, mut bob, id) = team_with_bob(Level::Secret);
     let forwarded = HostView { forward_agent: true, new_password: None, ..host("h1") };
-    let view = alice.team_put(&id, VaultUpdate { hosts: vec![forwarded], keys: vec![], snippets: vec![], tunnels: vec![], proxies: None }).unwrap();
+    let view = alice.team_put(&id, VaultUpdate { hosts: vec![forwarded], keys: vec![], snippets: vec![], tunnels: vec![], proxies: None, groups: None }).unwrap();
     assert!(view.data.hosts[0].forward_agent);
     assert!(alice.connect_request_in(&id, "h1", None, None).unwrap().host.forward_agent);
 

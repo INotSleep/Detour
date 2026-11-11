@@ -58,7 +58,7 @@ export interface AccessEntry {
   level: Level;
 }
 
-export type Coll = "host" | "key" | "snippet" | "tunnel" | "proxy";
+export type Coll = "host" | "key" | "snippet" | "tunnel" | "proxy" | "group";
 
 /** A team edit that could not be merged automatically (detour_core::team::ConflictView). */
 export type Conflict =
@@ -97,6 +97,8 @@ export interface Host {
   newProxyPassword?: string;
   /** A saved proxy of the same vault the host is reached through; used before `proxy`. */
   proxyId?: string | null;
+  /** Its place in its group; hosts without one come after, as they are. */
+  order?: number | null;
   /** The server may use your keys while you're connected (`ssh -A`). */
   forwardAgent?: boolean;
   /** mock: demo hosts only */
@@ -156,6 +158,19 @@ export interface SavedProxy {
   saved: ProxySecret[];
   /** Transient: secrets just typed in, sent with the next save; empty removes one. */
   newSecrets?: Partial<Record<ProxySecret, string>>;
+  /** Team only: your access. */
+  access?: Level;
+}
+
+/** A group of hosts with its place among the others (detour_core::model::Group).
+ *  Hosts name their group; one without a record comes after those with one. */
+export interface Group {
+  id: string;
+  vaultId: string;
+  name: string;
+  order: number;
+  /** A saved proxy of the same vault for its hosts that have none of their own. */
+  proxyId?: string | null;
   /** Team only: your access. */
   access?: Level;
 }
@@ -251,6 +266,7 @@ export interface Workspace {
   snippets: Snippet[];
   tunnels: Tunnel[];
   proxies: SavedProxy[];
+  groups: Group[];
   activity: ActivityItem[];
   access: AccessEntry[];
 }

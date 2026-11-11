@@ -23,7 +23,7 @@ export function dataOf(ws: Workspace, vaultId: string): PersonalData {
   const mine = <T extends { vaultId: string }>(xs: T[]) => xs.filter((x) => x.vaultId === vaultId);
   // A tunnel's switch, connections and failure live in this session only; they are not vault data.
   const tunnels = mine(ws.tunnels).map(({ error: _e, connections: _c, ...t }) => ({ ...t, state: "off" as const }));
-  return { hosts: mine(ws.hosts), keys: mine(ws.keys), snippets: mine(ws.snippets), tunnels, proxies: mine(ws.proxies) };
+  return { hosts: mine(ws.hosts), keys: mine(ws.keys), snippets: mine(ws.snippets), tunnels, proxies: mine(ws.proxies), groups: mine(ws.groups) };
 }
 
 const folderName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
@@ -81,6 +81,7 @@ export function applyTeamView(ws: Workspace, view: TeamView, withData = true): W
     snippets: [...others(ws.snippets), ...data.snippets.map((s) => ({ ...s, access: level(s.id) }))],
     tunnels: [...others(ws.tunnels), ...data.tunnels.map((t) => ({ ...t, access: level(t.id), state: tunnelState.get(t.id)?.state ?? "off", error: tunnelState.get(t.id)?.error }))],
     proxies: [...others(ws.proxies), ...data.proxies.map((p) => ({ ...p, access: level(p.id) }))],
+    groups: [...others(ws.groups), ...data.groups.map((g) => ({ ...g, access: level(g.id) }))],
   };
 }
 
@@ -109,6 +110,7 @@ export function removeVault(ws: Workspace, id: string): Workspace {
     snippets: others(ws.snippets),
     tunnels: others(ws.tunnels),
     proxies: others(ws.proxies),
+    groups: others(ws.groups),
     activity: others(ws.activity),
     access: others(ws.access),
   };

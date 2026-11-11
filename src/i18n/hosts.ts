@@ -2,6 +2,18 @@ import { enForm, ruForm } from "./plural";
 
 export const en = {
   title: "Hosts",
+  groups: {
+    add: "New group",
+    rename: "Rename group",
+    menu: "Group",
+    name: "Name",
+    nameRequired: "Enter a name",
+    exists: "There is such a group",
+    added: (name: string) => `Group "${name}" added`,
+    renamed: (name: string) => `Renamed to "${name}"`,
+    removed: (name: string) => `Group "${name}" deleted; its hosts are in No group`,
+    dropHere: "Drag hosts here",
+  },
   clearSearch: "Clear",
   more: "More",
   importSsh: "Import from ~/.ssh",
@@ -89,6 +101,18 @@ export const en = {
 
 export const ru: typeof en = {
   title: "Хосты",
+  groups: {
+    add: "Новая группа",
+    rename: "Переименовать группу",
+    menu: "Группа",
+    name: "Название",
+    nameRequired: "Введите название",
+    exists: "Такая группа уже есть",
+    added: (name: string) => `Группа «${name}» добавлена`,
+    renamed: (name: string) => `Переименована в «${name}»`,
+    removed: (name: string) => `Группа «${name}» удалена, её хосты в «Без группы»`,
+    dropHere: "Перетащите сюда хосты",
+  },
   clearSearch: "Очистить",
   more: "Ещё",
   importSsh: "Импорт из ~/.ssh",

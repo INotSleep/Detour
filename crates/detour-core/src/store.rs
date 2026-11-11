@@ -101,6 +101,9 @@ pub struct VaultUpdate {
     /// Absent from older clients: then the proxies stay as they are.
     #[serde(default)]
     pub proxies: Option<Vec<ProxyView>>,
+    /// The same for groups.
+    #[serde(default)]
+    pub groups: Option<Vec<Group>>,
 }
 
 /// Makes the SOCKS5 and HTTP proxies written into hosts saved proxies the hosts refer to.
@@ -278,6 +281,7 @@ impl Store {
             snippets: v.snippets.clone(),
             tunnels: v.tunnels.clone(),
             proxies: v.proxies.iter().map(ProxyView::from).collect(),
+            groups: v.groups.clone(),
         })
     }
 
@@ -303,6 +307,7 @@ impl Store {
                     proxy_password: if v.proxy.as_ref().and_then(Proxy::user).is_some() { kept_proxy } else { None },
                     proxy: v.proxy,
                     proxy_id: v.proxy_id,
+                    order: v.order,
                     forward_agent: v.forward_agent,
                     last_connected,
                     id: v.id,
@@ -336,6 +341,9 @@ impl Store {
 
         vault.snippets = update.snippets;
         vault.tunnels = update.tunnels;
+        if let Some(groups) = update.groups {
+            vault.groups = groups;
+        }
         if let Some(proxies) = update.proxies {
             let mut old: HashMap<String, ProxyEntry> = std::mem::take(&mut trash_proxies);
             old.extend(vault.proxies.drain(..).map(|p| (p.id.clone(), p)));
@@ -1279,7 +1287,7 @@ impl Store {
             password: None,
             proxy: None,
             proxy_password: None, proxy_id: None,
-            forward_agent: false,
+            forward_agent: false, order: None,
         };
         let known = v.known_hosts.iter().find(|k| k.endpoint == endpoint(&host)).cloned();
         Ok(Remote::Ssh { request: ssh::ConnectRequest { host, key, secret: None, known, trust_fingerprint, route: ssh::Route::Direct }, path: url.path })
@@ -1403,11 +1411,11 @@ mod tests {
     }
 
     fn host(id: &str, auth: Auth) -> HostView {
-        HostView { id: id.into(), group: "g".into(), label: id.into(), address: "127.0.0.1".into(), port: 22, user: "u".into(), auth, tags: vec![], last_connected: None, has_password: false, new_password: None, own: None, proxy: None, has_proxy_password: false, new_proxy_password: None, proxy_id: None, forward_agent: false }
+        HostView { id: id.into(), group: "g".into(), label: id.into(), address: "127.0.0.1".into(), port: 22, user: "u".into(), auth, tags: vec![], last_connected: None, has_password: false, new_password: None, own: None, proxy: None, has_proxy_password: false, new_proxy_password: None, proxy_id: None, forward_agent: false, order: None }
     }
 
     fn update(hosts: Vec<HostView>, keys: Vec<KeyView>) -> VaultUpdate {
-        VaultUpdate { hosts, keys, snippets: vec![], tunnels: vec![], proxies: None }
+        VaultUpdate { hosts, keys, snippets: vec![], tunnels: vec![], proxies: None, groups: None }
     }
 
     #[test]
@@ -1631,6 +1639,7 @@ impl Store {
                 proxy: None,
                 proxy_password: None, proxy_id: None,
                 forward_agent: h.forward_agent,
+                order: None,
             });
             result.hosts += 1;
         }
@@ -1651,7 +1660,7 @@ impl Store {
                             Some(id) => id,
                             None => {
                                 let id = crate::new_id();
-                                v.hosts.push(Host { id: id.clone(), group: IMPORT_GROUP.into(), label: hop.clone(), address, port, user, auth: Auth::Agent, tags: vec![], last_connected: None, password: None, proxy: None, proxy_password: None, proxy_id: None, forward_agent: false });
+                                v.hosts.push(Host { id: id.clone(), group: IMPORT_GROUP.into(), label: hop.clone(), address, port, user, auth: Auth::Agent, tags: vec![], last_connected: None, password: None, proxy: None, proxy_password: None, proxy_id: None, forward_agent: false, order: None });
                                 result.hosts += 1;
                                 // A hop written out in full goes through the hop before it.
                                 if let Some(prev) = &previous

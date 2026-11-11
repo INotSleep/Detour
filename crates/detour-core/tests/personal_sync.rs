@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use detour_core::Error;
-use detour_core::model::{Auth, HostView, KeyAlgorithm, KnownHost, Snippet};
+use detour_core::model::{Auth, Group, HostView, KeyAlgorithm, KnownHost, Snippet};
 use detour_core::store::{Store, VaultUpdate};
 use detour_core::sync;
 
@@ -24,14 +24,14 @@ fn device(tag: &str) -> Mutex<Store> {
 }
 
 fn host(id: &str, label: &str, auth: Auth) -> HostView {
-    HostView { id: id.into(), group: String::new(), label: label.into(), address: "10.0.0.7".into(), port: 22, user: "opsuser".into(), auth, tags: vec![], last_connected: None, has_password: false, new_password: None, own: None, proxy: None, has_proxy_password: false, new_proxy_password: None, proxy_id: None, forward_agent: false }
+    HostView { id: id.into(), group: String::new(), label: label.into(), address: "10.0.0.7".into(), port: 22, user: "opsuser".into(), auth, tags: vec![], last_connected: None, has_password: false, new_password: None, own: None, proxy: None, has_proxy_password: false, new_proxy_password: None, proxy_id: None, forward_agent: false, order: None }
 }
 
 /// The UI's edit: the current view with `f` applied.
 fn edit(s: &Mutex<Store>, f: impl FnOnce(&mut VaultUpdate)) {
     let mut st = s.lock().unwrap();
     let v = st.view().unwrap();
-    let mut u = VaultUpdate { hosts: v.hosts, keys: v.keys, snippets: v.snippets, tunnels: v.tunnels, proxies: None };
+    let mut u = VaultUpdate { hosts: v.hosts, keys: v.keys, snippets: v.snippets, tunnels: v.tunnels, proxies: None, groups: Some(v.groups) };
     f(&mut u);
     st.put(u).unwrap();
 }
@@ -114,6 +114,17 @@ async fn edits_and_deletes_travel_both_ways() {
     let v = laptop.lock().unwrap().view().unwrap();
     assert_eq!(v.snippets.len(), 1);
     assert!(v.keys.is_empty());
+
+    // Groups and their order travel too.
+    edit(&laptop, |u| {
+        u.groups.as_mut().unwrap().push(Group { id: "g1".into(), name: "Databases".into(), order: 1.0, proxy_id: None });
+        u.hosts[0].order = Some(3.5);
+    });
+    laptop.lock().unwrap().sync_personal().unwrap();
+    desktop.lock().unwrap().sync_personal().unwrap();
+    let v = desktop.lock().unwrap().view().unwrap();
+    assert_eq!(v.groups.iter().map(|g| (g.name.as_str(), g.order)).collect::<Vec<_>>(), [("Databases", 1.0)]);
+    assert_eq!(v.hosts[0].order, Some(3.5));
 
     // A password set later on one device reaches the other.
     laptop.lock().unwrap().set_host_password("h1", Some("pw-db-2".into())).unwrap();

@@ -566,6 +566,7 @@ impl TeamVault {
             snippets: self.records(Coll::Snippet),
             tunnels: self.records(Coll::Tunnel),
             proxies: self.records::<ProxyEntry>(Coll::Proxy).iter().map(ProxyView::from).collect(),
+            groups: self.records(Coll::Group),
         }
     }
 
@@ -727,6 +728,7 @@ impl TeamVault {
                 proxy_password: if v.proxy.as_ref().and_then(Proxy::user).is_some() { proxy_password } else { None },
                 proxy: v.proxy.clone(),
                 proxy_id: v.proxy_id.clone(),
+                order: v.order,
                 // Each member's own choice, kept in their personal vault.
                 forward_agent: false,
             };
@@ -790,6 +792,15 @@ impl TeamVault {
             self.delete_record(&mut d, id)?;
         }
 
+        if let Some(groups) = &update.groups {
+            let old_groups: BTreeMap<String, Group> = self.records::<Group>(Coll::Group).into_iter().map(|g| (g.id.clone(), g)).collect();
+            for g in groups {
+                self.put_record(&mut d, Coll::Group, &g.id, old_groups.get(&g.id).map(|o| fields_of(o, &[])), fields_of(g, &[]))?;
+            }
+            for id in old_groups.keys().filter(|id| !groups.iter().any(|g| &g.id == *id)) {
+                self.delete_record(&mut d, id)?;
+            }
+        }
         if let Some(proxies) = &update.proxies {
             let old_proxies: BTreeMap<String, ProxyEntry> = self.records::<ProxyEntry>(Coll::Proxy).into_iter().map(|p| (p.id.clone(), p)).collect();
             for v in proxies {
