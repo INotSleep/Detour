@@ -187,6 +187,8 @@ struct AddHost {
     key: Option<String>,
     /// The group in the host list.
     group: Option<String>,
+    /// Reach it through this saved proxy of the vault (its name).
+    proxy: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -198,6 +200,16 @@ struct UpdateHost {
     port: Option<u16>,
     user: Option<String>,
     group: Option<String>,
+    /// A saved proxy of the vault to go through (its name), or "none" for directly.
+    proxy: Option<String>,
+}
+
+/// The id of a saved proxy by name, or null for "none".
+fn proxy_id(vault: &Value, name: &str) -> std::result::Result<Value, String> {
+    if name.eq_ignore_ascii_case("none") {
+        return Ok(Value::Null);
+    }
+    vault["proxies"].as_array().into_iter().flatten().find(|p| s(&p["name"]).eq_ignore_ascii_case(name) || p["id"] == name).map(|p| p["id"].clone()).ok_or_else(|| format!("No proxy called {name}."))
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -784,9 +796,13 @@ impl Detour {
             }
             None => json!({ "type": "agent" }),
         };
+        let proxy = match &a.proxy {
+            Some(p) => proxy_id(&base, p)?,
+            None => Value::Null,
+        };
         let host = json!({
             "id": detour_core::new_id(), "group": a.group.unwrap_or_default(), "label": a.name, "address": a.address, "port": a.port.unwrap_or(22),
-            "user": a.user.unwrap_or_else(|| "root".into()), "auth": auth, "tags": [], "hasPassword": false, "forwardAgent": false,
+            "user": a.user.unwrap_or_else(|| "root".into()), "auth": auth, "tags": [], "hasPassword": false, "forwardAgent": false, "proxyId": proxy,
         });
         next["hosts"].as_array_mut().ok_or("The vault has no host list.")?.push(host);
         self.put(&base, &next).await?;
@@ -813,6 +829,10 @@ impl Detour {
         }
         if let Some(v) = a.group {
             h["group"] = json!(v);
+        }
+        if let Some(p) = &a.proxy {
+            h["proxyId"] = proxy_id(&base, p)?;
+            h["proxy"] = Value::Null;
         }
         self.put(&base, &next).await?;
         Ok("Saved.".into())

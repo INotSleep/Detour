@@ -172,7 +172,7 @@ impl Unpad {
                     input = &input[n..];
                     if *have == 5 {
                         let command = buf[0];
-                        if command == DIRECT || command > DIRECT {
+                        if command >= DIRECT {
                             return Err(io::Error::other("vision: unexpected command"));
                         }
                         let left = u16::from_be_bytes([buf[1], buf[2]]) as usize;

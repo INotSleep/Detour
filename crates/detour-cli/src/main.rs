@@ -54,6 +54,8 @@ enum Command {
     #[command(subcommand)]
     Tunnels(Tunnels),
     #[command(subcommand)]
+    Proxies(Proxies),
+    #[command(subcommand)]
     Keys(Keys),
     #[command(subcommand)]
     Snippets(Snippets),
@@ -130,6 +132,27 @@ enum Tunnels {
     Ls,
     Up { name: String },
     Down { name: String },
+}
+
+#[derive(Subcommand)]
+enum Proxies {
+    Ls,
+    Add {
+        name: String,
+        #[arg(long, value_name = "URL", conflicts_with_all = ["wireguard", "socks5", "http"])]
+        link: Option<String>,
+        #[arg(long, value_name = "FILE", conflicts_with_all = ["socks5", "http"])]
+        wireguard: Option<PathBuf>,
+        #[arg(long, value_name = "HOST:PORT", conflicts_with = "http")]
+        socks5: Option<String>,
+        #[arg(long, value_name = "HOST:PORT")]
+        http: Option<String>,
+        #[arg(long)]
+        user: Option<String>,
+    },
+    Rm { name: String },
+    Check { name: String },
+    Export { name: String },
 }
 
 #[derive(Subcommand)]
@@ -363,6 +386,20 @@ async fn run(command: Command, dir: &std::path::Path, team: Option<String>, json
         Command::Tunnels(Tunnels::Ls) => cmds::tunnels(&ctx).await?,
         Command::Tunnels(Tunnels::Up { name }) => cmds::tunnel_up(&ctx, &name).await?,
         Command::Tunnels(Tunnels::Down { name }) => cmds::tunnel_down(&ctx, &name).await?,
+        Command::Proxies(Proxies::Ls) => cmds::proxies(&ctx).await?,
+        Command::Proxies(Proxies::Add { name, link, wireguard, socks5, http, user }) => {
+            let what = match (link, wireguard, socks5, http) {
+                (Some(l), _, _, _) => cmds::NewProxy::Text(l),
+                (_, Some(f), _, _) => cmds::NewProxy::File(f),
+                (_, _, Some(a), _) => cmds::NewProxy::Plain("socks5", a, user),
+                (_, _, _, Some(a)) => cmds::NewProxy::Plain("http", a, user),
+                _ => return Err(Fail("--link, --wireguard, --socks5 or --http".into())),
+            };
+            cmds::proxy_add(&ctx, &name, what).await?
+        }
+        Command::Proxies(Proxies::Rm { name }) => cmds::proxy_rm(&ctx, &name).await?,
+        Command::Proxies(Proxies::Check { name }) => cmds::proxy_check(&ctx, &name).await?,
+        Command::Proxies(Proxies::Export { name }) => cmds::proxy_export(&ctx, &name).await?,
         Command::Keys(Keys::Ls) => cmds::keys(&ctx).await?,
         Command::Keys(Keys::Gen { name, r#type, passphrase }) => cmds::key_gen(&ctx, &name, &r#type, passphrase).await?,
         Command::Keys(Keys::Import { file, name }) => cmds::key_import(&ctx, &file, name).await?,

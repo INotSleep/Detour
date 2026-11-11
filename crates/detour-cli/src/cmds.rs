@@ -100,7 +100,12 @@ async fn data(ctx: &Ctx) -> Res<Value> {
 }
 
 fn update_of(d: &Value) -> Value {
-    json!({ "hosts": d["hosts"], "keys": d["keys"], "snippets": d["snippets"], "tunnels": d["tunnels"] })
+    let mut u = json!({ "hosts": d["hosts"], "keys": d["keys"], "snippets": d["snippets"], "tunnels": d["tunnels"] });
+    // A core that doesn't know proxies sends none; then they aren't touched.
+    if d.get("proxies").is_some_and(Value::is_array) {
+        u["proxies"] = d["proxies"].clone();
+    }
+    u
 }
 
 /// Saves an edit made on `base`: only what changed goes in, edits elsewhere stay.
@@ -234,8 +239,10 @@ pub struct HostOpts {
     pub agent: bool,
     #[arg(long, short)]
     pub group: Option<String>,
-    #[arg(long, value_name = "HOST")]
+    #[arg(long, value_name = "HOST", conflicts_with = "proxy")]
     pub via: Option<String>,
+    #[arg(long, value_name = "PROXY")]
+    pub proxy: Option<String>,
     #[arg(long)]
     pub forward_agent: Option<bool>,
     #[arg(long)]
@@ -272,6 +279,20 @@ fn apply(d: &Value, h: &mut Value, o: HostOpts) -> Res<()> {
     if let Some(v) = o.via {
         let via = find(&d["hosts"], &v, "label", t().unknown_host)?;
         h["proxy"] = json!({ "type": "jump", "hostId": via["id"] });
+        h["proxyId"] = Value::Null;
+    }
+    if let Some(p) = o.proxy {
+        if p.eq_ignore_ascii_case("none") {
+            h["proxy"] = Value::Null;
+            h["proxyId"] = Value::Null;
+        } else {
+            let proxy = find(&d["proxies"], &p, "name", t().unknown_proxy)?;
+            h["proxyId"] = proxy["id"].clone();
+            // Unless it already went through this one, what older versions read goes too.
+            if s(&h["proxyId"]) != s(&proxy["id"]) || h["proxy"]["type"] == "jump" {
+                h["proxy"] = Value::Null;
+            }
+        }
     }
     if let Some(f) = o.forward_agent {
         h["forwardAgent"] = json!(f);
@@ -589,6 +610,128 @@ pub async fn tunnel_down(ctx: &Ctx, name: &str) -> Res<()> {
     let tu = find(&d["tunnels"], name, "name", t().unknown_tunnel)?;
     ctx.c.call("tunnel_stop", json!({ "vaultId": ctx.vault, "tunnelId": tu["id"] })).await?;
     eprintln!("{}: {name}", t().tunnel_down);
+    Ok(())
+}
+
+/* ---------- proxies ---------- */
+
+fn proxy_summary(k: &Value) -> String {
+    match k["type"].as_str() {
+        Some("wireguard") => s(&k["endpoint"]),
+        Some("vless") => {
+            let mut parts = vec![format!("{}:{}", s(&k["address"]), s(&k["port"]))];
+            match k["security"].as_str() {
+                Some("reality") => parts.push("REALITY".into()),
+                Some("tls") => parts.push("TLS".into()),
+                _ => {}
+            }
+            if k["transport"] == "xhttp" {
+                parts.push("XHTTP".into());
+            }
+            parts.join(" ")
+        }
+        _ => {
+            let user = s(&k["user"]);
+            format!("{}{}:{}", if user.is_empty() { String::new() } else { format!("{user}@") }, s(&k["address"]), s(&k["port"]))
+        }
+    }
+}
+
+pub async fn proxies(ctx: &Ctx) -> Res<()> {
+    let d = data(ctx).await?;
+    if ctx.json {
+        print_json(&d["proxies"]);
+        return Ok(());
+    }
+    let used = |id: &Value| d["hosts"].as_array().into_iter().flatten().filter(|h| &h["proxyId"] == id).count();
+    let rows = d["proxies"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|p| vec![s(&p["name"]), s(&p["kind"]["type"]), proxy_summary(&p["kind"]), used(&p["id"]).to_string()])
+        .collect();
+    table(&t().headers_proxies, rows);
+    Ok(())
+}
+
+/// What a new proxy is made from.
+pub enum NewProxy {
+    /// A `vless://` link or a WireGuard config.
+    Text(String),
+    /// A file holding one (`-`: standard input).
+    File(std::path::PathBuf),
+    /// SOCKS5 or HTTP at `host:port`, with a user whose password is asked.
+    Plain(&'static str, String, Option<String>),
+}
+
+pub async fn proxy_add(ctx: &Ctx, name: &str, what: NewProxy) -> Res<()> {
+    let base = data(ctx).await?;
+    if !base.get("proxies").is_some_and(Value::is_array) {
+        return fail(t().old_core);
+    }
+    let (kind, secrets) = match what {
+        NewProxy::Text(text) => {
+            let p = ctx.c.call("proxy_parse", json!({ "text": text })).await?;
+            (p["kind"].clone(), p["secrets"].clone())
+        }
+        NewProxy::File(path) => {
+            let mut text = String::new();
+            if path.as_os_str() == "-" {
+                std::io::stdin().read_to_string(&mut text).map_err(|e| Fail(e.to_string()))?;
+            } else {
+                text = std::fs::read_to_string(&path).map_err(|e| Fail(format!("{}: {e}", path.display())))?;
+            }
+            let p = ctx.c.call("proxy_parse", json!({ "text": text })).await?;
+            (p["kind"].clone(), p["secrets"].clone())
+        }
+        NewProxy::Plain(kind, at, user) => {
+            let (address, port) = at.rsplit_once(':').and_then(|(a, p)| Some((a.trim_matches(['[', ']']).to_string(), p.parse::<u16>().ok()?))).ok_or_else(|| Fail(format!("{at}: host:port")))?;
+            let user = user.unwrap_or_default();
+            let secrets = if user.is_empty() { json!({}) } else { json!({ "password": secret(t().proxy_password)? }) };
+            (json!({ "type": kind, "address": address, "port": port, "user": user }), secrets)
+        }
+    };
+    let mut next = base.clone();
+    next["proxies"].as_array_mut().unwrap().push(json!({ "id": detour_core::new_id(), "name": name, "kind": kind, "saved": [], "newSecrets": secrets }));
+    put(ctx, &base, &next).await?;
+    eprintln!("{}: {name}", t().proxy_added);
+    Ok(())
+}
+
+pub async fn proxy_rm(ctx: &Ctx, name: &str) -> Res<()> {
+    let base = data(ctx).await?;
+    let id = find(&base["proxies"], name, "name", t().unknown_proxy)?["id"].clone();
+    let mut next = base.clone();
+    next["proxies"].as_array_mut().unwrap().retain(|p| p["id"] != id);
+    // Hosts that went through it connect directly.
+    for h in next["hosts"].as_array_mut().unwrap() {
+        if h["proxyId"] == id {
+            h["proxyId"] = Value::Null;
+            h["proxy"] = Value::Null;
+        }
+    }
+    put(ctx, &base, &next).await?;
+    eprintln!("{}: {name}", t().proxy_removed);
+    Ok(())
+}
+
+pub async fn proxy_check(ctx: &Ctx, name: &str) -> Res<()> {
+    let d = data(ctx).await?;
+    let p = find(&d["proxies"], name, "name", t().unknown_proxy)?;
+    let r = ctx.c.call("proxy_check", json!({ "vaultId": ctx.vault, "proxy": p })).await?;
+    if ctx.json {
+        print_json(&r);
+    } else {
+        println!("{}", (t().proxy_works)(r["ms"].as_u64().unwrap_or(0)));
+    }
+    Ok(())
+}
+
+pub async fn proxy_export(ctx: &Ctx, name: &str) -> Res<()> {
+    let d = data(ctx).await?;
+    let p = find(&d["proxies"], name, "name", t().unknown_proxy)?;
+    let r = ctx.c.call("proxy_export", json!({ "vaultId": ctx.vault, "proxyId": p["id"] })).await?;
+    println!("{}", s(&r["text"]).trim_end());
     Ok(())
 }
 
