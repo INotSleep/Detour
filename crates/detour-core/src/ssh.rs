@@ -518,7 +518,12 @@ async fn authenticate(session: &mut client::Handle<Client>, req: &ConnectRequest
 
 async fn authenticate_with_agent(session: &mut client::Handle<Client>, user: &str) -> Result<()> {
     let mut agent = agent::system().await?;
-    let identities = agent.request_identities().await.map_err(connect_error)?;
+    // With no ssh-agent service on Windows, Pageant is asked; when it isn't running either,
+    // the answer is an empty stream.
+    let identities = agent.request_identities().await.map_err(|e| match e {
+        russh::keys::Error::IO(io) if io.kind() == std::io::ErrorKind::UnexpectedEof => Error::AgentUnavailable,
+        e => connect_error(e),
+    })?;
     let hash = session.best_supported_rsa_hash().await.map_err(connect_error)?.flatten();
     for id in identities {
         let key = match id {

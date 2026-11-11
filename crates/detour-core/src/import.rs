@@ -202,10 +202,15 @@ pub fn read_config(path: &Path, home: &Path) -> Vec<ConfigHost> {
             }
             let address = opts.get("hostname").map(|h| h.replace("%h", &alias)).unwrap_or_else(|| alias.clone());
             let user = opts.get("user").cloned().unwrap_or_else(local_user);
-            let key_file = opts.get("identityfile").filter(|f| !f.eq_ignore_ascii_case("none")).map(|f| {
-                let f = f.replace("%d", &home.display().to_string()).replace("%u", &local_user()).replace("%h", &address).replace("%r", &user);
-                expand_home(&f, home).display().to_string()
-            });
+            let key_file = match opts.get("identityfile") {
+                Some(f) if f.eq_ignore_ascii_case("none") => None,
+                Some(f) => {
+                    let f = f.replace("%d", &home.display().to_string()).replace("%u", &local_user()).replace("%h", &address).replace("%r", &user);
+                    Some(expand_home(&f, home).display().to_string())
+                }
+                // As ssh does: the first of its default keys there is.
+                None => default_key(home),
+            };
             let jumps = opts.get("proxyjump").filter(|j| !j.eq_ignore_ascii_case("none")).map(|j| j.split(',').map(|h| h.trim().trim_start_matches("ssh://").to_string()).filter(|h| !h.is_empty()).collect()).unwrap_or_default();
             ConfigHost {
                 port: opts.get("port").and_then(|p| p.parse().ok()).unwrap_or(22),
@@ -219,6 +224,11 @@ pub fn read_config(path: &Path, home: &Path) -> Vec<ConfigHost> {
             }
         })
         .collect()
+}
+
+/// The key ssh uses for a host whose config names none: the first of its defaults that exists.
+fn default_key(home: &Path) -> Option<String> {
+    ["id_rsa", "id_ecdsa", "id_ed25519"].iter().map(|n| home.join(".ssh").join(n)).find(|p| p.is_file()).map(|p| p.display().to_string())
 }
 
 /// `[user@]host[:port]` of a `ProxyJump` hop.
@@ -276,6 +286,30 @@ impl KnownEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_host_without_identity_file_gets_sshs_default_key() {
+        let home = std::env::temp_dir().join(format!("detour-import-home-{}", std::process::id()));
+        let ssh = home.join(".ssh");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&ssh).unwrap();
+        std::fs::write(ssh.join("config"), "Host plain
+  HostName 10.0.0.1
+Host none
+  IdentityFile none
+Host named
+  IdentityFile ~/.ssh/work
+").unwrap();
+        let hosts = |home: &Path| read_config(&home.join(".ssh").join("config"), home);
+        // No default key: ssh-agent.
+        assert_eq!(hosts(&home)[0].key_file, None);
+        std::fs::write(ssh.join("id_ed25519"), "key").unwrap();
+        let h = hosts(&home);
+        assert_eq!(h[0].key_file.as_deref(), Some(ssh.join("id_ed25519").display().to_string().as_str()));
+        assert_eq!(h[1].key_file, None, "IdentityFile none means ssh-agent");
+        assert_eq!(h[2].key_file.as_deref(), Some(ssh.join("work").display().to_string().as_str()));
+        let _ = std::fs::remove_dir_all(&home);
+    }
 
     #[test]
     fn hops() {
