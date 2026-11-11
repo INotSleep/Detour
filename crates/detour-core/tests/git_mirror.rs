@@ -42,11 +42,11 @@ fn bare_repo() -> (PathBuf, Remote) {
 }
 
 fn host(id: &str, label: &str) -> HostView {
-    HostView { id: id.into(), group: "g".into(), label: label.into(), address: "10.0.0.1".into(), port: 22, user: "root".into(), auth: Auth::Agent, tags: vec![], last_connected: None, has_password: false, new_password: None, own: None, proxy: None, has_proxy_password: false, new_proxy_password: None, forward_agent: false }
+    HostView { id: id.into(), group: "g".into(), label: label.into(), address: "10.0.0.1".into(), port: 22, user: "root".into(), auth: Auth::Agent, tags: vec![], last_connected: None, has_password: false, new_password: None, own: None, proxy: None, has_proxy_password: false, new_proxy_password: None, proxy_id: None, forward_agent: false }
 }
 
 fn put(v: &mut TeamVault, hosts: Vec<HostView>) {
-    v.put(VaultUpdate { hosts, keys: vec![], snippets: vec![], tunnels: vec![] }).unwrap();
+    v.put(VaultUpdate { hosts, keys: vec![], snippets: vec![], tunnels: vec![], proxies: None }).unwrap();
 }
 
 fn labels(v: &TeamVault) -> Vec<String> {
@@ -98,7 +98,7 @@ async fn a_team_travels_through_git_and_stays_valid_git() {
     put(&mut a, vec![host("h1", "api-1"), host("h2", "from-alice")]);
     let mut data = b.view().data;
     data.hosts.push(host("h3", "from-bob"));
-    b.put(VaultUpdate { hosts: data.hosts, keys: vec![], snippets: vec![], tunnels: vec![] }).unwrap();
+    b.put(VaultUpdate { hosts: data.hosts, keys: vec![], snippets: vec![], tunnels: vec![], proxies: None }).unwrap();
     assert!(alice.mirror.push(&remote).await.unwrap().pushed);
     let s = bob.mirror.push(&remote).await.unwrap();
     assert!(s.pushed && s.pulled);
@@ -327,7 +327,7 @@ mod over_ssh {
         let (repo, _) = super::bare_repo();
         let pk = host_key.public_key();
         let known = KnownHost { endpoint: format!("127.0.0.1:{port}"), key: pk.to_openssh().unwrap(), fingerprint: pk.fingerprint(Default::default()).to_string(), added_at: 0 };
-        let host = Host { id: "git".into(), group: String::new(), label: "git".into(), address: "127.0.0.1".into(), port, user: "git".into(), auth: Auth::Password, tags: vec![], last_connected: None, password: Some("pw".into()), proxy: None, proxy_password: None, forward_agent: false };
+        let host = Host { id: "git".into(), group: String::new(), label: "git".into(), address: "127.0.0.1".into(), port, user: "git".into(), auth: Auth::Password, tags: vec![], last_connected: None, password: Some("pw".into()), proxy: None, proxy_password: None, proxy_id: None, forward_agent: false };
         let remote = super::Remote::Ssh { request: ConnectRequest { host, key: None, secret: None, known: Some(known), trust_fingerprint: None, route: Default::default() }, path: repo.display().to_string() };
 
         let alice = super::person();
@@ -515,7 +515,7 @@ mod stores {
     }
 
     fn put(s: &Mutex<Store>, id: &str, hosts: Vec<detour_core::model::HostView>) {
-        s.lock().unwrap().team_put(id, VaultUpdate { hosts, keys: vec![], snippets: vec![], tunnels: vec![] }).unwrap();
+        s.lock().unwrap().team_put(id, VaultUpdate { hosts, keys: vec![], snippets: vec![], tunnels: vec![], proxies: None }).unwrap();
     }
 
     #[tokio::test]
@@ -551,7 +551,7 @@ mod stores {
         let remote = GitRemote { url: format!("http://127.0.0.1:{port}/vault.git"), auth: Auth::Agent, token: Some("tok".into()), github: false };
 
         let (laptop, _) = store("laptop");
-        laptop.lock().unwrap().put(VaultUpdate { hosts: vec![super::host("h1", "in-git")], keys: vec![], snippets: vec![], tunnels: vec![] }).unwrap();
+        laptop.lock().unwrap().put(VaultUpdate { hosts: vec![super::host("h1", "in-git")], keys: vec![], snippets: vec![], tunnels: vec![], proxies: None }).unwrap();
         sync::enable_git_sync(&laptop, remote.clone(), None).await.unwrap();
         let st = laptop.lock().unwrap().sync_status().unwrap();
         assert!(st.enabled && st.git && !st.pending && st.error.is_none(), "{st:?}");
@@ -566,7 +566,7 @@ mod stores {
         // An edit on the desktop goes out after it, and comes in on the laptop's next sync.
         let mut v = desktop.lock().unwrap().view().unwrap();
         v.hosts.push(super::host("h2", "second"));
-        desktop.lock().unwrap().put(VaultUpdate { hosts: v.hosts, keys: v.keys, snippets: v.snippets, tunnels: v.tunnels }).unwrap();
+        desktop.lock().unwrap().put(VaultUpdate { hosts: v.hosts, keys: v.keys, snippets: v.snippets, tunnels: v.tunnels, proxies: None }).unwrap();
         assert!(desktop.lock().unwrap().sync_status().unwrap().pending);
         sync::push_personal(&desktop).await.unwrap();
         assert!(sync::sync_personal(&laptop, None).await.unwrap());

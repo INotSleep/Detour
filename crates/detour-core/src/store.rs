@@ -40,6 +40,7 @@ pub struct Store {
     /// Records deleted during this session, so a UI "undo" can bring their secrets back.
     trash_keys: HashMap<String, KeyEntry>,
     trash_passwords: HashMap<String, String>,
+    trash_proxies: HashMap<String, ProxyEntry>,
     teams: BTreeMap<String, TeamVault>,
     /// Teams that could not be opened (folder unavailable, ...), with the reason as error JSON.
     team_errors: BTreeMap<String, String>,
@@ -97,6 +98,35 @@ pub struct VaultUpdate {
     pub keys: Vec<KeyView>,
     pub snippets: Vec<Snippet>,
     pub tunnels: Vec<Tunnel>,
+    /// Absent from older clients: then the proxies stay as they are.
+    #[serde(default)]
+    pub proxies: Option<Vec<ProxyView>>,
+}
+
+/// Makes the SOCKS5 and HTTP proxies written into hosts saved proxies the hosts refer to.
+/// The hosts keep them written in too, for older versions on other devices.
+/// Returns whether anything changed.
+pub fn migrate_proxies(v: &mut VaultData) -> bool {
+    let mut changed = false;
+    for i in 0..v.hosts.len() {
+        let h = &v.hosts[i];
+        let Some(kind) = h.proxy.as_ref().and_then(Proxy::as_kind).filter(|_| h.proxy_id.is_none()) else { continue };
+        let password = h.proxy_password.clone();
+        let found = v.proxies.iter().find(|p| p.kind == kind && p.password == password).map(|p| p.id.clone());
+        let id = found.unwrap_or_else(|| {
+            let name = match &kind {
+                ProxyKind::Socks5 { address, port, .. } | ProxyKind::Http { address, port, .. } => format!("{address}:{port}"),
+                _ => String::new(),
+            };
+            let id = uuid::Uuid::new_v4().to_string();
+            let password = if kind.secrets().is_empty() { None } else { password };
+            v.proxies.push(ProxyEntry { id: id.clone(), name, kind, password, private_key: None, preshared_key: None, uuid: None });
+            id
+        });
+        v.hosts[i].proxy_id = Some(id);
+        changed = true;
+    }
+    changed
 }
 
 impl Store {
@@ -113,6 +143,7 @@ impl Store {
             state: None,
             trash_keys: HashMap::new(),
             trash_passwords: HashMap::new(),
+            trash_proxies: HashMap::new(),
             teams: BTreeMap::new(),
             team_errors: BTreeMap::new(),
             git_status: BTreeMap::new(),
@@ -161,7 +192,8 @@ impl Store {
             VaultData::default()
         };
         self.state = Some(Unlocked { identity, vault });
-        if self.ensure_member()? {
+        let migrated = migrate_proxies(self.vault_mut()?);
+        if self.ensure_member()? || migrated {
             self.save()?;
         }
         self.open_teams();
@@ -174,6 +206,7 @@ impl Store {
         self.state = None;
         self.trash_keys.clear();
         self.trash_passwords.clear();
+        self.trash_proxies.clear();
         self.teams.clear();
         self.team_errors.clear();
         self.git_status.clear();
@@ -244,6 +277,7 @@ impl Store {
             keys: v.keys.iter().map(KeyView::from).collect(),
             snippets: v.snippets.clone(),
             tunnels: v.tunnels.clone(),
+            proxies: v.proxies.iter().map(ProxyView::from).collect(),
         })
     }
 
@@ -251,6 +285,7 @@ impl Store {
     pub fn put(&mut self, update: VaultUpdate) -> Result<VaultView> {
         let mut trash_keys = std::mem::take(&mut self.trash_keys);
         let mut trash_passwords = std::mem::take(&mut self.trash_passwords);
+        let mut trash_proxies = std::mem::take(&mut self.trash_proxies);
         let vault = self.vault_mut()?;
 
         let mut old_hosts: HashMap<String, Host> = vault.hosts.drain(..).map(|h| (h.id.clone(), h)).collect();
@@ -267,6 +302,7 @@ impl Store {
                     password: if v.auth == Auth::Password { kept } else { None },
                     proxy_password: if v.proxy.as_ref().and_then(Proxy::user).is_some() { kept_proxy } else { None },
                     proxy: v.proxy,
+                    proxy_id: v.proxy_id,
                     forward_agent: v.forward_agent,
                     last_connected,
                     id: v.id,
@@ -300,9 +336,17 @@ impl Store {
 
         vault.snippets = update.snippets;
         vault.tunnels = update.tunnels;
+        if let Some(proxies) = update.proxies {
+            let mut old: HashMap<String, ProxyEntry> = std::mem::take(&mut trash_proxies);
+            old.extend(vault.proxies.drain(..).map(|p| (p.id.clone(), p)));
+            vault.proxies = proxies.into_iter().map(|v| ProxyEntry::from_view(v.clone(), old.get(&v.id))).collect();
+            // Kept so that undoing a delete brings the secrets back.
+            trash_proxies = old.into_iter().filter(|(id, _)| !vault.proxies.iter().any(|n| &n.id == id)).collect();
+        }
 
         self.trash_keys = trash_keys;
         self.trash_passwords = trash_passwords;
+        self.trash_proxies = trash_proxies;
         self.save()?;
         self.view()
     }
@@ -821,13 +865,38 @@ impl Store {
         let (host, key) = if vault == PERSONAL { self.personal_login(host_id)? } else { self.team_login(vault, host_id)? };
         let ep = endpoint(&host);
         let known = self.unlocked()?.vault.known_hosts.iter().find(|k| k.endpoint == ep).cloned();
-        let route = match host.proxy.clone() {
-            None => ssh::Route::Direct,
-            Some(Proxy::Jump { host_id: jump }) => ssh::Route::Jump(Box::new(self.request_via(vault, &jump, None, trust_fingerprint.clone(), seen)?)),
-            Some(Proxy::Socks5 { address, port, user }) => ssh::Route::Socks5 { address, port, user, password: host.proxy_password.clone() },
-            Some(Proxy::Http { address, port, user }) => ssh::Route::Http { address, port, user, password: host.proxy_password.clone() },
+        let route = match (&host.proxy_id, host.proxy.clone()) {
+            (Some(id), _) => ssh::Route::Proxy(Box::new(self.proxy_for_connect(vault, id)?)),
+            (None, None) => ssh::Route::Direct,
+            (None, Some(Proxy::Jump { host_id: jump })) => ssh::Route::Jump(Box::new(self.request_via(vault, &jump, None, trust_fingerprint.clone(), seen)?)),
+            // Written into the host by an older version.
+            (None, Some(legacy)) => {
+                let kind = legacy.as_kind().ok_or_else(|| not_found("proxy"))?;
+                ssh::Route::Proxy(Box::new(ProxyEntry { id: String::new(), name: String::new(), kind, password: host.proxy_password.clone(), private_key: None, preshared_key: None, uuid: None }))
+            }
         };
         Ok(ssh::ConnectRequest { host, key, secret, known, trust_fingerprint, route })
+    }
+
+    /// A saved proxy of a vault with its secrets, to connect through.
+    pub fn proxy_for_connect(&self, vault: &str, id: &str) -> Result<ProxyEntry> {
+        let missing = || Error::Proxy { reason: "missing".into() };
+        if vault == PERSONAL {
+            return self.unlocked()?.vault.proxies.iter().find(|p| p.id == id).cloned().ok_or_else(missing);
+        }
+        let t = self.team(vault)?;
+        let p = t.proxy(id).ok_or_else(missing)?;
+        // Without its secret a member can't use it; a proxy without one needs none.
+        if !p.kind.secrets().is_empty() && t.level(id) < Level::Secret {
+            return Err(Error::Proxy { reason: "noAccess".into() });
+        }
+        Ok(p)
+    }
+
+    /// A proxy as a UI is editing it, with the secrets saved for it filled in.
+    pub fn proxy_draft(&self, vault: &str, view: ProxyView) -> Result<ProxyEntry> {
+        let saved = if vault == PERSONAL { self.unlocked()?.vault.proxies.iter().find(|p| p.id == view.id).cloned() } else { self.team(vault)?.proxy(&view.id) };
+        Ok(ProxyEntry::from_view(view, saved.as_ref()))
     }
 
     pub fn record_connection_in(&mut self, vault: &str, host_id: &str, new_keys: ssh::NewKeys) -> Result<()> {
@@ -1062,6 +1131,7 @@ impl Store {
         let v = self.vault_mut()?;
         v.sync = Some(r);
         v.sync_base.clear();
+        v.sync_unread.clear();
         self.personal = Some(t);
         let merged = self.merge_personal().map(|_| ());
         let reached = merged.is_ok();
@@ -1088,6 +1158,7 @@ impl Store {
         let v = self.vault_mut()?;
         let Some(r) = v.sync.take() else { return Ok(()) };
         v.sync_base.clear();
+        v.sync_unread.clear();
         v.team_heads.remove(&r.id);
         self.personal = None;
         self.sync_state = (None, None);
@@ -1207,7 +1278,7 @@ impl Store {
             last_connected: None,
             password: None,
             proxy: None,
-            proxy_password: None,
+            proxy_password: None, proxy_id: None,
             forward_agent: false,
         };
         let known = v.known_hosts.iter().find(|k| k.endpoint == endpoint(&host)).cloned();
@@ -1332,11 +1403,11 @@ mod tests {
     }
 
     fn host(id: &str, auth: Auth) -> HostView {
-        HostView { id: id.into(), group: "g".into(), label: id.into(), address: "127.0.0.1".into(), port: 22, user: "u".into(), auth, tags: vec![], last_connected: None, has_password: false, new_password: None, own: None, proxy: None, has_proxy_password: false, new_proxy_password: None, forward_agent: false }
+        HostView { id: id.into(), group: "g".into(), label: id.into(), address: "127.0.0.1".into(), port: 22, user: "u".into(), auth, tags: vec![], last_connected: None, has_password: false, new_password: None, own: None, proxy: None, has_proxy_password: false, new_proxy_password: None, proxy_id: None, forward_agent: false }
     }
 
     fn update(hosts: Vec<HostView>, keys: Vec<KeyView>) -> VaultUpdate {
-        VaultUpdate { hosts, keys, snippets: vec![], tunnels: vec![] }
+        VaultUpdate { hosts, keys, snippets: vec![], tunnels: vec![], proxies: None }
     }
 
     #[test]
@@ -1558,7 +1629,7 @@ impl Store {
                 last_connected: None,
                 password: None,
                 proxy: None,
-                proxy_password: None,
+                proxy_password: None, proxy_id: None,
                 forward_agent: h.forward_agent,
             });
             result.hosts += 1;
@@ -1580,7 +1651,7 @@ impl Store {
                             Some(id) => id,
                             None => {
                                 let id = crate::new_id();
-                                v.hosts.push(Host { id: id.clone(), group: IMPORT_GROUP.into(), label: hop.clone(), address, port, user, auth: Auth::Agent, tags: vec![], last_connected: None, password: None, proxy: None, proxy_password: None, forward_agent: false });
+                                v.hosts.push(Host { id: id.clone(), group: IMPORT_GROUP.into(), label: hop.clone(), address, port, user, auth: Auth::Agent, tags: vec![], last_connected: None, password: None, proxy: None, proxy_password: None, proxy_id: None, forward_agent: false });
                                 result.hosts += 1;
                                 // A hop written out in full goes through the hop before it.
                                 if let Some(prev) = &previous

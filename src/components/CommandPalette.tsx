@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ArrowLeftRight, Code, CornerDownLeft, KeyRound, Lock, Search, Settings, Users, type LucideIcon } from "lucide-react";
+import { ArrowLeftRight, Code, CornerDownLeft, KeyRound, Lock, Search, Settings, Shield, Users, type LucideIcon } from "lucide-react";
 import { useT } from "../i18n";
 import { api } from "../lib/api";
 import { useStore, type Section } from "../lib/store";
@@ -16,6 +16,7 @@ const goItems: { icon: LucideIcon; section: Exclude<Section, "hosts"> }[] = [
   { icon: KeyRound, section: "keys" },
   { icon: Code, section: "snippets" },
   { icon: ArrowLeftRight, section: "tunnels" },
+  { icon: Shield, section: "proxies" },
   { icon: Users, section: "team" },
   { icon: Settings, section: "settings" },
 ];

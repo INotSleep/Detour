@@ -95,6 +95,11 @@ export const en = {
       auth: "The proxy didn't accept the login",
       refused: "The proxy couldn't reach the host",
       protocol: "The proxy gave an unexpected answer",
+      handshake: "The WireGuard server is not answering",
+      tls: "The proxy's certificate didn't match",
+      noAccess: "You have no access to this proxy",
+      missing: "The host's proxy was deleted",
+      unsupported: (what: string) => `The proxy uses ${what}, which Detour doesn't support`,
     },
     connectionLost: "Connection to the server lost",
     git: {
@@ -197,6 +202,11 @@ export const ru: typeof en = {
       auth: "Прокси не принял логин",
       refused: "Прокси не смог подключиться к хосту",
       protocol: "Прокси ответил непонятно",
+      handshake: "Сервер WireGuard не отвечает",
+      tls: "Сертификат прокси не подошёл",
+      noAccess: "Нет доступа к прокси",
+      missing: "Прокси хоста удалён",
+      unsupported: (what: string) => `Прокси использует ${what}: Detour это не поддерживает`,
     },
     connectionLost: "Соединение с сервером потеряно",
     git: {

@@ -10,6 +10,7 @@ import * as demo from "./demo";
 import * as files from "./files";
 import * as hosts from "./hosts";
 import * as keys from "./keys";
+import * as proxies from "./proxies";
 import * as settings from "./settings";
 import * as sync from "./sync";
 import * as teams from "./teams";
@@ -32,6 +33,7 @@ const en = {
   hosts: hosts.en,
   keys: keys.en,
   tunnels: tunnels.en,
+  proxies: proxies.en,
   demo: demo.en,
 };
 export type Dict = typeof en;
@@ -47,6 +49,7 @@ const ru: Dict = {
   hosts: hosts.ru,
   keys: keys.ru,
   tunnels: tunnels.ru,
+  proxies: proxies.ru,
   demo: demo.ru,
 };
 const dicts: Record<Lang, Dict> = { en, ru };

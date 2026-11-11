@@ -7,12 +7,12 @@
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::model::{HostView, KeyView, Snippet, Tunnel, VaultView};
+use crate::model::{HostView, KeyView, ProxyView, Snippet, Tunnel, VaultView};
 use crate::store::VaultUpdate;
 
 impl From<VaultView> for VaultUpdate {
     fn from(v: VaultView) -> Self {
-        Self { hosts: v.hosts, keys: v.keys, snippets: v.snippets, tunnels: v.tunnels }
+        Self { hosts: v.hosts, keys: v.keys, snippets: v.snippets, tunnels: v.tunnels, proxies: Some(v.proxies) }
     }
 }
 
@@ -51,6 +51,15 @@ impl Record for Tunnel {
     }
 }
 
+impl Record for ProxyView {
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn touched(&self) -> bool {
+        !self.new_secrets.is_empty()
+    }
+}
+
 fn json<T: Serialize>(t: &T) -> Value {
     serde_json::to_value(t).unwrap_or(Value::Null)
 }
@@ -84,6 +93,8 @@ pub fn merge(base: &VaultUpdate, next: VaultUpdate, current: VaultUpdate) -> Vau
         keys: records(&base.keys, next.keys, current.keys),
         snippets: records(&base.snippets, next.snippets, current.snippets),
         tunnels: records(&base.tunnels, next.tunnels, current.tunnels),
+        // A client that doesn't know proxies leaves them as they are.
+        proxies: next.proxies.map(|n| records(base.proxies.as_deref().unwrap_or_default(), n, current.proxies.unwrap_or_default())),
     }
 }
 
@@ -96,7 +107,7 @@ mod tests {
     }
 
     fn of(snippets: Vec<Snippet>) -> VaultUpdate {
-        VaultUpdate { hosts: vec![], keys: vec![], snippets, tunnels: vec![] }
+        VaultUpdate { hosts: vec![], keys: vec![], snippets, tunnels: vec![], proxies: None }
     }
 
     #[test]

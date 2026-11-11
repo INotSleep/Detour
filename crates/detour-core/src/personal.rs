@@ -104,6 +104,9 @@ pub fn records_of(v: &VaultData, me: &Identity) -> BTreeMap<String, SyncRecord> 
     for t in &v.tunnels {
         put(t.id.clone(), Coll::Tunnel, fields_of(t, &[]));
     }
+    for p in &v.proxies {
+        put(p.id.clone(), Coll::Proxy, fields_of(p, &[]));
+    }
     for k in &v.known_hosts {
         put(derived_id(me, "known", &k.endpoint), Coll::KnownHost, fields_of(k, &[]));
     }
@@ -114,6 +117,9 @@ pub fn records_of(v: &VaultData, me: &Identity) -> BTreeMap<String, SyncRecord> 
         let mut f = fields_of(o, &[]);
         f.insert("key".into(), Value::String(key.clone()));
         put(derived_id(me, "own", key), Coll::OwnLogin, f);
+    }
+    for (id, r) in &v.sync_unread {
+        out.entry(id.clone()).or_insert_with(|| r.clone());
     }
     out
 }
@@ -164,6 +170,7 @@ pub fn adopt(v: &mut VaultData, records: &BTreeMap<String, SyncRecord>) -> Vec<S
     v.keys = merged(&v.keys, of(records, Coll::Key), |k| k.id.clone());
     v.snippets = merged(&v.snippets, of(records, Coll::Snippet), |s| s.id.clone());
     v.tunnels = merged(&v.tunnels, of(records, Coll::Tunnel), |t| t.id.clone());
+    v.proxies = merged(&v.proxies, of(records, Coll::Proxy), |p| p.id.clone());
     v.known_hosts = merged(&v.known_hosts, of(records, Coll::KnownHost), |k| k.endpoint.clone());
     v.team_own = records
         .values()
@@ -173,7 +180,25 @@ pub fn adopt(v: &mut VaultData, records: &BTreeMap<String, SyncRecord>) -> Vec<S
             Some((key, serde_json::from_value(Value::Object(r.fields.clone().into_iter().collect())).ok()?))
         })
         .collect();
+    v.sync_unread = records.iter().filter(|(id, r)| !readable(id, r)).map(|(id, r)| (id.clone(), r.clone())).collect();
     gone
+}
+
+/// Whether this version can read a synced record (a newer one may have written it).
+fn readable(id: &str, r: &SyncRecord) -> bool {
+    fn is<T: serde::de::DeserializeOwned>(id: &str, r: &SyncRecord) -> bool {
+        from_fields::<T>(id, r.fields.clone()).is_some()
+    }
+    match r.coll {
+        Coll::Host => is::<Host>(id, r),
+        Coll::Key => is::<KeyEntry>(id, r),
+        Coll::Snippet => is::<Snippet>(id, r),
+        Coll::Tunnel => is::<Tunnel>(id, r),
+        Coll::Proxy => is::<ProxyEntry>(id, r),
+        Coll::KnownHost => is::<KnownHost>(id, r),
+        Coll::OwnLogin => r.fields.get("key").is_some_and(Value::is_string) && is::<OwnLogin>(id, r),
+        Coll::TeamLink => is::<TeamLink>(id, r),
+    }
 }
 
 /* ---------- pairing ---------- */
@@ -282,5 +307,20 @@ mod tests {
         assert!(matches!(&ch[0], Change::Put { id, fields, .. } if id == "a" && fields.len() == 1 && fields.contains_key("name")));
         assert!(matches!(&ch[1], Change::Put { id, fields, .. } if id == "c" && fields.len() == 2));
         assert!(matches!(&ch[2], Change::Delete { id } if id == "b"));
+    }
+
+    #[test]
+    fn records_a_newer_version_wrote_are_kept_not_deleted() {
+        let me = Identity::generate();
+        let snippet = SyncRecord { coll: Coll::Snippet, fields: BTreeMap::from([("name".into(), Value::from("disk")), ("command".into(), Value::from("df"))]) };
+        // A proxy of a kind this version doesn't know.
+        let future = SyncRecord { coll: Coll::Proxy, fields: BTreeMap::from([("name".into(), Value::from("x")), ("kind".into(), serde_json::json!({ "type": "hysteria9", "address": "a" }))]) };
+        let synced = BTreeMap::from([("s".to_string(), snippet), ("p".to_string(), future)]);
+        let mut v = VaultData::default();
+        adopt(&mut v, &synced);
+        assert_eq!(v.snippets.len(), 1);
+        assert!(v.proxies.is_empty());
+        let local = records_of(&v, &me);
+        assert!(changes(&synced, &local).is_empty(), "nothing changed here: nothing to write");
     }
 }

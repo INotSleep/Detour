@@ -2,7 +2,14 @@ import { useState, type ReactNode } from "react";
 import type { Auth, Host, Proxy, SshKey } from "../lib/types";
 import { Button, Checkbox, Field, PasswordInput, Segmented } from "./ui";
 import { isNoGroup } from "./common";
+import { useStore } from "../lib/store";
+import { ProxyDialog, proxySummary } from "./ProxiesView";
 import { tr, useT } from "../i18n";
+
+/** The proxy written into a host by an older version, shown as a choice of its own. */
+const LEGACY = "legacy";
+/** The choice that makes a new proxy. */
+const NEW = "+new";
 
 export interface HostDraft {
   label: string;
@@ -14,23 +21,28 @@ export interface HostDraft {
   keyId: string;
   tags: string;
   password: string;
-  proxyType: "none" | Proxy["type"];
+  proxyType: "none" | "jump" | "proxy";
   jumpHostId: string;
-  proxyAddress: string;
-  proxyPort: string;
-  proxyUser: string;
-  proxyPassword: string;
+  /** A saved proxy's id, or LEGACY for the one written into the host. */
+  proxyId: string;
+  /** The host's route as it was, kept while it is not changed (older versions read it). */
+  wasProxy: Proxy | null;
+  wasProxyId: string;
   forwardAgent: boolean;
 }
 
-const proxyFields = (p: Proxy | null | undefined) => ({
-  proxyType: p?.type ?? ("none" as const),
-  jumpHostId: p?.type === "jump" ? p.hostId : "",
-  proxyAddress: p && p.type !== "jump" ? p.address : "",
-  proxyPort: p && p.type !== "jump" ? String(p.port) : "",
-  proxyUser: p && p.type !== "jump" ? p.user : "",
-  proxyPassword: "",
-});
+function proxyFields(h: Pick<Host, "proxy" | "proxyId"> | null) {
+  const p = h?.proxy ?? null;
+  const legacy = p && p.type !== "jump" ? p : null;
+  const proxyId = h?.proxyId ?? (legacy ? LEGACY : "");
+  return {
+    proxyType: proxyId ? ("proxy" as const) : p?.type === "jump" ? ("jump" as const) : ("none" as const),
+    jumpHostId: p?.type === "jump" ? p.hostId : "",
+    proxyId,
+    wasProxy: p,
+    wasProxyId: proxyId,
+  };
+}
 
 export function draftFromHost(h: Host): HostDraft {
   return {
@@ -44,7 +56,7 @@ export function draftFromHost(h: Host): HostDraft {
     tags: h.tags.join(", "),
     password: "",
     forwardAgent: !!h.forwardAgent,
-    ...proxyFields(h.proxy),
+    ...proxyFields(h),
   };
 }
 
@@ -54,33 +66,31 @@ export function emptyDraft(keys: SshKey[], group = ""): HostDraft {
 
 export function draftErrors(d: HostDraft) {
   const port = Number(d.port);
-  const proxyPort = Number(d.proxyPort);
-  const viaProxy = d.proxyType === "socks5" || d.proxyType === "http";
   const t = tr().hosts.form.errors;
   return {
     address: d.address.trim() ? null : t.address,
     port: Number.isInteger(port) && port > 0 && port < 65536 ? null : t.portRange,
     jump: d.proxyType === "jump" && !d.jumpHostId ? t.chooseHost : null,
-    proxyAddress: viaProxy && !d.proxyAddress.trim() ? t.address : null,
-    proxyPort: viaProxy && !(Number.isInteger(proxyPort) && proxyPort > 0 && proxyPort < 65536) ? t.portRange : null,
+    proxy: d.proxyType === "proxy" && !d.proxyId ? t.chooseProxy : null,
   };
 }
 
 export const draftInvalid = (d: HostDraft) => Object.values(draftErrors(d)).some(Boolean);
 
-function proxyOf(d: HostDraft): Proxy | null {
-  if (d.proxyType === "jump") return { type: "jump", hostId: d.jumpHostId };
-  if (d.proxyType === "socks5" || d.proxyType === "http") return { type: d.proxyType, address: d.proxyAddress.trim(), port: Number(d.proxyPort), user: d.proxyUser.trim() };
-  return null;
+/** The way to the host: a jump host, a saved proxy, or the proxy it had if that wasn't changed. */
+function routeOf(d: HostDraft): Pick<Host, "proxy" | "proxyId"> {
+  if (d.proxyType === "jump") return { proxy: { type: "jump", hostId: d.jumpHostId }, proxyId: null };
+  if (d.proxyType !== "proxy") return { proxy: null, proxyId: null };
+  if (d.proxyId === LEGACY) return { proxy: d.wasProxy, proxyId: null };
+  // Unchanged: older versions on other devices keep reaching it the way they know.
+  const kept = d.proxyId === d.wasProxyId && d.wasProxy?.type !== "jump" ? d.wasProxy : null;
+  return { proxy: kept, proxyId: d.proxyId };
 }
 
-/** The typed host password is not part of the host; it goes to the vault via api.hostSetPassword. A typed proxy password goes with the host. */
-export function applyDraft(d: HostDraft): Pick<Host, "label" | "address" | "port" | "user" | "group" | "auth" | "tags" | "proxy" | "newProxyPassword" | "hasProxyPassword" | "forwardAgent"> {
-  const proxy = proxyOf(d);
-  const typed = proxy && proxy.type !== "jump" && proxy.user && d.proxyPassword ? d.proxyPassword : undefined;
+/** The typed host password is not part of the host; it goes to the vault via api.hostSetPassword. */
+export function applyDraft(d: HostDraft): Pick<Host, "label" | "address" | "port" | "user" | "group" | "auth" | "tags" | "proxy" | "proxyId" | "forwardAgent"> {
   return {
-    proxy,
-    ...(typed ? { newProxyPassword: typed, hasProxyPassword: true } : {}),
+    ...routeOf(d),
     label: d.label.trim() || d.address.trim(),
     address: d.address.trim(),
     port: Number(d.port),
@@ -112,14 +122,16 @@ interface HostFieldsProps {
   savedPassword?: ReactNode;
   /** Hosts of the same vault this one may go through. */
   jumpHosts: Host[];
-  /** A proxy password is already saved for this host. */
-  proxyPasswordSaved?: boolean;
 }
 
-export function HostFields({ draft, set, keys, groups, showErrors, passwordSaved, onForgetPassword, savedPassword, jumpHosts, proxyPasswordSaved }: HostFieldsProps) {
+export function HostFields({ draft, set, keys, groups, showErrors, passwordSaved, onForgetPassword, savedPassword, jumpHosts }: HostFieldsProps) {
   const t = useT();
+  const { ws, vault } = useStore();
+  const [newProxy, setNewProxy] = useState(false);
+  const proxies = ws.proxies.filter((p) => p.vaultId === vault.id);
   const errors = draftErrors(draft);
   const err = (e: string | null) => (showErrors ? e : null);
+  const legacy = draft.wasProxy && draft.wasProxy.type !== "jump" ? draft.wasProxy : null;
   return (
     <>
       <div className="row">
@@ -172,22 +184,23 @@ export function HostFields({ draft, set, keys, groups, showErrors, passwordSaved
       <Field label={t.hosts.form.connection}>
         <Segmented
           value={draft.proxyType}
-          onChange={(proxyType) =>
+          onChange={(proxyType) => {
+            // With no proxy to choose yet, "via proxy" makes one.
+            if (proxyType === "proxy" && !proxies.length && !legacy) return setNewProxy(true);
             set({
               proxyType,
               jumpHostId: proxyType === "jump" && !draft.jumpHostId ? jumpHosts[0]?.id ?? "" : draft.jumpHostId,
-              // The usual ports of each kind of proxy, until one is typed.
-              proxyPort: proxyType === "socks5" && (!draft.proxyPort || draft.proxyPort === "3128") ? "1080" : proxyType === "http" && (!draft.proxyPort || draft.proxyPort === "1080") ? "3128" : draft.proxyPort,
-            })
-          }
+              proxyId: proxyType === "proxy" && !draft.proxyId ? proxies[0]?.id ?? LEGACY : draft.proxyId,
+            });
+          }}
           options={[
             { value: "none", label: t.hosts.form.direct },
             ...(jumpHosts.length ? [{ value: "jump" as const, label: t.hosts.form.viaHost }] : []),
-            { value: "socks5", label: "SOCKS5" },
-            { value: "http", label: "HTTP" },
+            { value: "proxy", label: t.hosts.form.viaProxy },
           ]}
         />
       </Field>
+      {newProxy && <ProxyDialog proxy={null} onClose={() => setNewProxy(false)} onCreated={(proxyId) => set({ proxyType: "proxy", proxyId })} />}
       {draft.proxyType === "jump" && (
         <Field label={t.hosts.form.jumpHost} error={err(errors.jump)}>
           <select className="input" value={draft.jumpHostId} onChange={(e) => set({ jumpHostId: e.target.value })}>
@@ -197,25 +210,17 @@ export function HostFields({ draft, set, keys, groups, showErrors, passwordSaved
           </select>
         </Field>
       )}
-      {(draft.proxyType === "socks5" || draft.proxyType === "http") && (
-        <>
-          <div className="row">
-            <Field label={t.hosts.form.proxyAddress} error={err(errors.proxyAddress)}>
-              <input className={`input mono ${err(errors.proxyAddress) ? "invalid" : ""}`} value={draft.proxyAddress} onChange={(e) => set({ proxyAddress: e.target.value })} placeholder="proxy.corp.local" autoComplete="off" spellCheck={false} />
-            </Field>
-            <Field label={t.hosts.form.port} error={err(errors.proxyPort)}>
-              <input className={`input mono port ${err(errors.proxyPort) ? "invalid" : ""}`} value={draft.proxyPort} inputMode="numeric" onChange={(e) => set({ proxyPort: e.target.value.replace(/\D/g, "").slice(0, 5) })} />
-            </Field>
-          </div>
-          <div className="row">
-            <Field label={t.hosts.form.proxyUser}>
-              <input className="input mono" value={draft.proxyUser} onChange={(e) => set({ proxyUser: e.target.value })} placeholder={t.hosts.form.noLogin} autoComplete="off" spellCheck={false} />
-            </Field>
-            <Field label={t.hosts.form.proxyPassword}>
-              <PasswordInput value={draft.proxyPassword} onChange={(proxyPassword) => set({ proxyPassword })} placeholder={proxyPasswordSaved ? t.hosts.form.passwordSaved : ""} />
-            </Field>
-          </div>
-        </>
+      {draft.proxyType === "proxy" && (
+        <Field label={t.hosts.form.proxy} error={err(errors.proxy)}>
+          <select className="input" value={draft.proxyId} onChange={(e) => (e.target.value === NEW ? setNewProxy(true) : set({ proxyId: e.target.value }))}>
+            {!draft.proxyId && <option value="" />}
+            {legacy && <option value={LEGACY}>{legacy.type.toUpperCase()} {proxySummary(legacy)}</option>}
+            {proxies.map((p) => (
+              <option key={p.id} value={p.id}>{p.name} ({t.proxies.types[p.kind.type]})</option>
+            ))}
+            <option value={NEW}>{t.hosts.form.newProxy}</option>
+          </select>
+        </Field>
       )}
       <div className="field">
         <Checkbox checked={draft.forwardAgent} onChange={(forwardAgent) => set({ forwardAgent })}>{t.hosts.form.forwardAgent}</Checkbox>

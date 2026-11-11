@@ -58,7 +58,7 @@ export interface AccessEntry {
   level: Level;
 }
 
-export type Coll = "host" | "key" | "snippet" | "tunnel";
+export type Coll = "host" | "key" | "snippet" | "tunnel" | "proxy";
 
 /** A team edit that could not be merged automatically (detour_core::team::ConflictView). */
 export type Conflict =
@@ -95,6 +95,8 @@ export interface Host {
   hasProxyPassword?: boolean;
   /** Transient: a proxy password just typed in, sent with the next save. */
   newProxyPassword?: string;
+  /** A saved proxy of the same vault the host is reached through; used before `proxy`. */
+  proxyId?: string | null;
   /** The server may use your keys while you're connected (`ssh -A`). */
   forwardAgent?: boolean;
   /** mock: demo hosts only */
@@ -107,6 +109,56 @@ export interface Host {
 export type Proxy =
   | { type: "jump"; hostId: string }
   | { type: "socks5" | "http"; address: string; port: number; user: string };
+
+/** detour_core::model::ProxyKind */
+export type ProxyKind =
+  | { type: "socks5" | "http"; address: string; port: number; user: string }
+  | {
+      type: "wireguard";
+      /** The peer's host:port. */
+      endpoint: string;
+      publicKey: string;
+      addresses: string[];
+      dns: string[];
+      mtu?: number | null;
+      allowedIps: string[];
+      keepalive?: number | null;
+    }
+  | {
+      type: "vless";
+      address: string;
+      port: number;
+      security: "none" | "tls" | "reality";
+      sni: string;
+      alpn: string[];
+      publicKey: string;
+      shortId: string;
+      pinnedCert: string;
+      transport: "tcp" | "xhttp";
+      flow: string;
+      path: string;
+      host: string;
+      mode: string;
+      extra: string;
+      params: Record<string, string>;
+    };
+
+export type ProxyType = ProxyKind["type"];
+export type ProxySecret = "password" | "privateKey" | "presharedKey" | "uuid";
+
+/** A saved proxy hosts of the same vault go through (detour_core::model::ProxyView). */
+export interface SavedProxy {
+  id: string;
+  vaultId: string;
+  name: string;
+  kind: ProxyKind;
+  /** Secrets saved in the vault (their values never reach the UI). */
+  saved: ProxySecret[];
+  /** Transient: secrets just typed in, sent with the next save; empty removes one. */
+  newSecrets?: Partial<Record<ProxySecret, string>>;
+  /** Team only: your access. */
+  access?: Level;
+}
 
 /** A person's own login for a team host, kept in their personal vault. */
 export interface OwnLogin {
@@ -198,6 +250,7 @@ export interface Workspace {
   keys: SshKey[];
   snippets: Snippet[];
   tunnels: Tunnel[];
+  proxies: SavedProxy[];
   activity: ActivityItem[];
   access: AccessEntry[];
 }

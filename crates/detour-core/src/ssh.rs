@@ -40,8 +40,8 @@ pub enum Route {
     Direct,
     /// A channel of an SSH connection to another host (`ssh -J`).
     Jump(Box<ConnectRequest>),
-    Socks5 { address: String, port: u16, user: String, password: Option<String> },
-    Http { address: String, port: u16, user: String, password: Option<String> },
+    /// A saved proxy, with its secrets.
+    Proxy(Box<crate::model::ProxyEntry>),
 }
 
 impl Route {
@@ -50,8 +50,12 @@ impl Route {
         match self {
             Route::Direct => String::new(),
             Route::Jump(j) => format!("|via {}", pool_key(j)),
-            Route::Socks5 { address, port, user, .. } => format!("|socks5 {user}@{address}:{port}"),
-            Route::Http { address, port, user, .. } => format!("|http {user}@{address}:{port}"),
+            Route::Proxy(p) => {
+                // The settings too: a proxy changed since is another way.
+                use sha2::Digest;
+                let h = sha2::Sha256::digest(serde_json::to_vec(p).unwrap_or_default());
+                format!("|proxy {} {}", p.id, h.iter().take(8).map(|b| format!("{b:02x}")).collect::<String>())
+            }
         }
     }
 }
@@ -231,17 +235,10 @@ async fn open(req: &ConnectRequest) -> Result<(client::Handle<Client>, NewKeys, 
             keep = Some(via_session);
             tokio::time::timeout(CONNECT_TIMEOUT, client::connect_stream(config, stream, handler)).await.map_err(|_| unreachable())?
         }
-        Route::Socks5 { address, port, user, password } | Route::Http { address, port, user, password } => {
-            let socks = matches!(req.route, Route::Socks5 { .. });
-            let tcp = async {
-                if socks {
-                    crate::proxy::socks5(address, *port, user, password.as_deref(), &host.address, host.port).await
-                } else {
-                    crate::proxy::http_connect(address, *port, user, password.as_deref(), &host.address, host.port).await
-                }
-            };
-            let tcp = tokio::time::timeout(CONNECT_TIMEOUT, tcp).await.map_err(|_| Error::Proxy { reason: "unreachable".into() })??;
-            tokio::time::timeout(CONNECT_TIMEOUT, client::connect_stream(config, tcp, handler)).await.map_err(|_| unreachable())?
+        Route::Proxy(p) => {
+            let stream = crate::proxy::connect(p, &host.address, host.port);
+            let stream = tokio::time::timeout(CONNECT_TIMEOUT, stream).await.map_err(|_| Error::Proxy { reason: "unreachable".into() })??;
+            tokio::time::timeout(CONNECT_TIMEOUT, client::connect_stream(config, stream, handler)).await.map_err(|_| unreachable())?
         }
     };
     let mut session = match connected {

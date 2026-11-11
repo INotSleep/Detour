@@ -60,7 +60,7 @@ pub(crate) const READ_ONLY: &[&str] = &[
     "hello", "core_info", "vault_status", "vault_get", "ssh_import_preview", "sync_status", "teams_pending", "sync_recovery_key", "sync_add_device",
     "host_password", "key_export", "my_id", "id_inspect", "recovery_key_new", "teams_list", "team_inspect", "team_inspect_git",
     "github_user", "github_start", "github_repo_access", "session_input", "session_resize", "session_attach", "session_detach", "sessions_list", "session_runs",
-    "files_open", "files_list", "files_resolve", "files_cancel", "files_close", "tunnels_status", "tunnel_start", "tunnel_stop", "settings_get",
+    "files_open", "files_list", "files_resolve", "files_cancel", "files_close", "tunnels_status", "tunnel_start", "tunnel_stop", "proxy_check", "settings_get",
     "settings_set", "activity", "quit", "trust_request", "trust_answer", "trust_with_password", "hosts_export",
     "agents_pending", "agents_list", "agents_answer", "agents_revoke",
 ];
@@ -615,6 +615,14 @@ pub(crate) async fn dispatch(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value
             Ok(Value::Null)
         }
         "tunnels_status" => Ok(serde_json::to_value(core.tunnels.statuses()).unwrap_or_default()),
+
+        /* ---------- proxies ---------- */
+        "proxy_check" => {
+            let a = args!(method, p, { vault_id: String, proxy: detour_core::model::ProxyView });
+            let proxy = store.lock().map_err(poisoned)?.proxy_draft(&a.vault_id, a.proxy).map_err(err)?;
+            let ms = detour_core::proxy::check(&proxy).await.map_err(err)?;
+            Ok(json!({ "ms": ms }))
+        }
 
         /* ---------- files (SFTP) ---------- */
         "files_open" => {

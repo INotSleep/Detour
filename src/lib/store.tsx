@@ -12,7 +12,7 @@ export type UpdateState =
   | { kind: "installing"; info: UpdateInfo; share: number | null }
   | { kind: "error"; text: string };
 
-export type Section = "hosts" | "keys" | "snippets" | "tunnels" | "team" | "settings";
+export type Section = "hosts" | "keys" | "snippets" | "tunnels" | "proxies" | "team" | "settings";
 
 export interface ToastInput {
   text: string;

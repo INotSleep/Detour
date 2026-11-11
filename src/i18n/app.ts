@@ -3,7 +3,7 @@ import { enForm, ruForm } from "./plural";
 
 export const en = {
   personal: "Personal",
-  section: { hosts: "Hosts", keys: "Keys", snippets: "Snippets", tunnels: "Tunnels", team: "Team", teams: "Teams", settings: "Settings" },
+  section: { hosts: "Hosts", keys: "Keys", snippets: "Snippets", tunnels: "Tunnels", proxies: "Proxies", team: "Team", teams: "Teams", settings: "Settings" },
   quickConnect: "Connect",
   newConnection: "New connection · Ctrl K",
   newSftp: "New SFTP tab",
@@ -61,7 +61,7 @@ export const en = {
 
 export const ru: typeof en = {
   personal: "Личное",
-  section: { hosts: "Хосты", keys: "Ключи", snippets: "Сниппеты", tunnels: "Туннели", team: "Команда", teams: "Команды", settings: "Настройки" },
+  section: { hosts: "Хосты", keys: "Ключи", snippets: "Сниппеты", tunnels: "Туннели", proxies: "Прокси", team: "Команда", teams: "Команды", settings: "Настройки" },
   quickConnect: "Подключиться",
   newConnection: "Новое подключение · Ctrl K",
   newSftp: "Новая вкладка SFTP",

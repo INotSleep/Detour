@@ -24,7 +24,7 @@ fn temp_dir() -> PathBuf {
 }
 
 fn host(id: &str, label: &str) -> HostView {
-    HostView { id: id.into(), group: "g".into(), label: label.into(), address: "10.0.0.1".into(), port: 22, user: "root".into(), auth: Auth::Password, tags: vec![], last_connected: None, has_password: false, new_password: None, own: None, proxy: None, has_proxy_password: false, new_proxy_password: None, forward_agent: false }
+    HostView { id: id.into(), group: "g".into(), label: label.into(), address: "10.0.0.1".into(), port: 22, user: "root".into(), auth: Auth::Password, tags: vec![], last_connected: None, has_password: false, new_password: None, own: None, proxy: None, has_proxy_password: false, new_proxy_password: None, proxy_id: None, forward_agent: false }
 }
 
 fn with_password(mut h: HostView, pw: &str) -> HostView {
@@ -33,11 +33,11 @@ fn with_password(mut h: HostView, pw: &str) -> HostView {
 }
 
 fn hosts(hs: Vec<HostView>) -> VaultUpdate {
-    VaultUpdate { hosts: hs, keys: vec![], snippets: vec![], tunnels: vec![] }
+    VaultUpdate { hosts: hs, keys: vec![], snippets: vec![], tunnels: vec![], proxies: None }
 }
 
 fn update_from(data: &VaultView) -> VaultUpdate {
-    VaultUpdate { hosts: data.hosts.clone(), keys: data.keys.clone(), snippets: data.snippets.clone(), tunnels: data.tunnels.clone() }
+    VaultUpdate { hosts: data.hosts.clone(), keys: data.keys.clone(), snippets: data.snippets.clone(), tunnels: data.tunnels.clone(), proxies: None }
 }
 
 struct Team {
@@ -383,7 +383,7 @@ fn joining_rejects_a_swapped_creator() {
 fn snippets_roundtrip() {
     let (_t, mut a) = new_team();
     let s = Snippet { id: "s1".into(), name: "Disk".into(), command: "df -h".into() };
-    a.put(VaultUpdate { hosts: vec![], keys: vec![], snippets: vec![s], tunnels: vec![] }).unwrap();
+    a.put(VaultUpdate { hosts: vec![], keys: vec![], snippets: vec![s], tunnels: vec![], proxies: None }).unwrap();
     assert_eq!(a.view().data.snippets[0].command, "df -h");
 }
 
@@ -395,7 +395,7 @@ fn view_access_never_hands_over_secrets() {
     let key = a.generate_key("deploy", KeyAlgorithm::Ed25519, None, false).unwrap();
     let mut h2 = host("h2", "key-box");
     h2.auth = Auth::Key { key_id: key.id.clone() };
-    a.put(VaultUpdate { hosts: vec![with_password(host("h1", "pw-box"), "hunter2-password"), h2], keys: vec![key.clone()], snippets: vec![], tunnels: vec![] }).unwrap();
+    a.put(VaultUpdate { hosts: vec![with_password(host("h1", "pw-box"), "hunter2-password"), h2], keys: vec![key.clone()], snippets: vec![], tunnels: vec![], proxies: None }).unwrap();
     let private = a.secret_key(&key.id).unwrap().private_key;
     let (bob, b) = join(&t, &mut a, "Bob", Role::Member, Level::View);
 
@@ -525,7 +525,7 @@ fn a_hosts_secret_brings_its_key_along() {
     let key = a.generate_key("deploy", KeyAlgorithm::Ed25519, None, false).unwrap();
     let mut h = host("h1", "key-box");
     h.auth = Auth::Key { key_id: key.id.clone() };
-    a.put(VaultUpdate { hosts: vec![h], keys: vec![key.clone()], snippets: vec![], tunnels: vec![] }).unwrap();
+    a.put(VaultUpdate { hosts: vec![h], keys: vec![key.clone()], snippets: vec![], tunnels: vec![], proxies: None }).unwrap();
     let (bob, mut b) = join(&t, &mut a, "Bob", Role::Member, Level::None);
 
     set(&mut a, "h1", &bob, Level::Secret);

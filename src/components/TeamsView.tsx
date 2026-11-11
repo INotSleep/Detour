@@ -15,7 +15,7 @@ export function TeamsView() {
 }
 
 /** Levels a record of this kind can have. */
-const levelsFor = (coll: Coll): Level[] => (coll === "host" || coll === "key" ? ["none", "view", "secret", "edit"] : ["none", "view", "edit"]);
+const levelsFor = (coll: Coll): Level[] => (coll === "host" || coll === "key" || coll === "proxy" ? ["none", "view", "secret", "edit"] : ["none", "view", "edit"]);
 
 function activityText(t: Dict, a: ActivityItem): string {
   const x = t.teams.activity;
@@ -26,7 +26,7 @@ function activityText(t: Dict, a: ActivityItem): string {
     case "memberChanged": return x.memberChanged(a.member);
     case "memberRemoved": return x.memberRemoved(a.member);
     case "accessChanged": return x.accessChanged(a.member, t.teams.level[a.level].toLowerCase(), a.name);
-    case "secretChanged": return a.coll === "key" ? x.keyChanged(a.name) : x.passwordChanged(a.name);
+    case "secretChanged": return a.coll === "key" ? x.keyChanged(a.name) : a.coll === "proxy" ? x.proxySecretChanged(a.name) : x.passwordChanged(a.name);
     default: return x[a.kind](t.teams.coll[a.coll], a.name);
   }
 }

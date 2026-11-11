@@ -3,9 +3,9 @@ import { enForm, ruForm } from "./plural";
 
 export const en = {
   /** A record kind, as a noun at the start of a line. */
-  coll: { host: "Host", key: "Key", snippet: "Snippet", tunnel: "Tunnel" },
+  coll: { host: "Host", key: "Key", snippet: "Snippet", tunnel: "Tunnel", proxy: "Proxy" },
   /** Record kinds as section titles. */
-  collPlural: { host: "Hosts", key: "Keys", snippet: "Snippets", tunnel: "Tunnels" },
+  collPlural: { host: "Hosts", key: "Keys", snippet: "Snippets", tunnel: "Tunnels", proxy: "Proxies" },
   /** What a member can do with a record. */
   level: { none: "None", view: "View", secret: "Secret", edit: "Edit" },
   more: "More",
@@ -21,6 +21,7 @@ export const en = {
     accessChanged: (member: string, level: string, name: string) => `${member}: ${level} · "${name}"`,
     keyChanged: (name: string) => `Key "${name}" changed`,
     passwordChanged: (name: string) => `Password for "${name}" changed`,
+    proxySecretChanged: (name: string) => `Proxy "${name}": login changed`,
     added: (what: string, name: string) => `${what} "${name}" added`,
     changed: (what: string, name: string) => `${what} "${name}" changed`,
     deleted: (what: string, name: string) => `${what} "${name}" deleted`,
@@ -241,8 +242,8 @@ export const en = {
 };
 
 export const ru: typeof en = {
-  coll: { host: "Хост", key: "Ключ", snippet: "Сниппет", tunnel: "Туннель" },
-  collPlural: { host: "Хосты", key: "Ключи", snippet: "Сниппеты", tunnel: "Туннели" },
+  coll: { host: "Хост", key: "Ключ", snippet: "Сниппет", tunnel: "Туннель", proxy: "Прокси" },
+  collPlural: { host: "Хосты", key: "Ключи", snippet: "Сниппеты", tunnel: "Туннели", proxy: "Прокси" },
   level: { none: "Нет", view: "Видит", secret: "Секрет", edit: "Изменяет" },
   more: "Ещё",
   activity: {
@@ -256,6 +257,7 @@ export const ru: typeof en = {
     accessChanged: (member: string, level: string, name: string) => `${member}: ${level} · «${name}»`,
     keyChanged: (name: string) => `Ключ «${name}» изменён`,
     passwordChanged: (name: string) => `Пароль «${name}» изменён`,
+    proxySecretChanged: (name: string) => `Прокси «${name}»: вход изменён`,
     added: (what: string, name: string) => `${what} «${name}» добавлен`,
     changed: (what: string, name: string) => `${what} «${name}» изменён`,
     deleted: (what: string, name: string) => `${what} «${name}» удалён`,

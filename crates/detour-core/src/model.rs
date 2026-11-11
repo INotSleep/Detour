@@ -44,6 +44,196 @@ pub enum Proxy {
     },
 }
 
+/// A saved proxy that hosts of the same vault reach their server through.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyEntry {
+    pub id: String,
+    pub name: String,
+    pub kind: ProxyKind,
+    /// SOCKS5 and HTTP: the password of `user`.
+    #[serde(default)]
+    pub password: Option<String>,
+    /// WireGuard: this side's private key, base64.
+    #[serde(default)]
+    pub private_key: Option<String>,
+    /// WireGuard: the peer's preshared key, base64.
+    #[serde(default)]
+    pub preshared_key: Option<String>,
+    /// VLESS: the user id.
+    #[serde(default)]
+    pub uuid: Option<String>,
+}
+
+/// The secret fields of a proxy record.
+pub const PROXY_SECRETS: [&str; 4] = ["password", "privateKey", "presharedKey", "uuid"];
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum ProxyKind {
+    Socks5 {
+        address: String,
+        port: u16,
+        /// Empty for none.
+        #[serde(default)]
+        user: String,
+    },
+    /// An HTTP proxy that tunnels with `CONNECT`.
+    Http {
+        address: String,
+        port: u16,
+        #[serde(default)]
+        user: String,
+    },
+    /// A WireGuard peer; only Detour's own connections go through it.
+    Wireguard {
+        /// The peer's `host:port`.
+        endpoint: String,
+        /// The peer's public key, base64.
+        public_key: String,
+        /// This side's addresses in the tunnel (`10.0.0.2/32`).
+        #[serde(default)]
+        addresses: Vec<String>,
+        /// Name servers reached through the tunnel.
+        #[serde(default)]
+        dns: Vec<String>,
+        #[serde(default)]
+        mtu: Option<u16>,
+        /// Kept for export: only connections to hosts go through the tunnel.
+        #[serde(default)]
+        allowed_ips: Vec<String>,
+        #[serde(default)]
+        keepalive: Option<u16>,
+    },
+    Vless {
+        address: String,
+        port: u16,
+        #[serde(default)]
+        security: VlessSecurity,
+        /// The name sent in TLS (SNI); the address when empty.
+        #[serde(default)]
+        sni: String,
+        #[serde(default)]
+        alpn: Vec<String>,
+        /// REALITY: the server's public key (`pbk`), base64url.
+        #[serde(default)]
+        public_key: String,
+        /// REALITY: the short id (`sid`), hex.
+        #[serde(default)]
+        short_id: String,
+        /// TLS: SHA-256 of the server's certificate to accept instead of a trusted one (`pcs`).
+        #[serde(default)]
+        pinned_cert: String,
+        #[serde(default)]
+        transport: VlessTransport,
+        /// `xtls-rprx-vision` or empty.
+        #[serde(default)]
+        flow: String,
+        /// XHTTP: the path, `Host` and mode (`auto`, `packet-up`, `stream-up`, `stream-one`).
+        #[serde(default)]
+        path: String,
+        #[serde(default)]
+        host: String,
+        #[serde(default)]
+        mode: String,
+        /// XHTTP: further settings, the JSON of a link's `extra`.
+        #[serde(default)]
+        extra: String,
+        /// Link parameters not used here, kept for the link this proxy is copied as.
+        #[serde(default)]
+        params: std::collections::BTreeMap<String, String>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VlessSecurity {
+    #[default]
+    None,
+    Tls,
+    Reality,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VlessTransport {
+    #[default]
+    Tcp,
+    Xhttp,
+}
+
+impl ProxyKind {
+    /// The secret fields this kind uses.
+    pub fn secrets(&self) -> &'static [&'static str] {
+        match self {
+            ProxyKind::Socks5 { user, .. } | ProxyKind::Http { user, .. } if !user.is_empty() => &["password"],
+            ProxyKind::Socks5 { .. } | ProxyKind::Http { .. } => &[],
+            ProxyKind::Wireguard { .. } => &["privateKey", "presharedKey"],
+            ProxyKind::Vless { .. } => &["uuid"],
+        }
+    }
+}
+
+impl ProxyEntry {
+    pub fn secret(&self, field: &str) -> Option<&String> {
+        match field {
+            "password" => self.password.as_ref(),
+            "privateKey" => self.private_key.as_ref(),
+            "presharedKey" => self.preshared_key.as_ref(),
+            "uuid" => self.uuid.as_ref(),
+            _ => None,
+        }
+    }
+
+    fn secret_mut(&mut self, field: &str) -> Option<&mut Option<String>> {
+        match field {
+            "password" => Some(&mut self.password),
+            "privateKey" => Some(&mut self.private_key),
+            "presharedKey" => Some(&mut self.preshared_key),
+            "uuid" => Some(&mut self.uuid),
+            _ => None,
+        }
+    }
+
+    /// A proxy as a UI edited it, with the secrets it typed in or else those kept from `old`.
+    /// Secrets the kind doesn't use are dropped; a typed empty one is removed.
+    pub fn from_view(v: ProxyView, old: Option<&ProxyEntry>) -> ProxyEntry {
+        let mut p = ProxyEntry { id: v.id, name: v.name, kind: v.kind, password: None, private_key: None, preshared_key: None, uuid: None };
+        for field in p.kind.secrets() {
+            let value = match v.new_secrets.get(*field) {
+                Some(typed) => Some(typed.clone()).filter(|s| !s.is_empty()),
+                None => old.and_then(|o| o.secret(field).cloned()),
+            };
+            if let Some(slot) = p.secret_mut(field) {
+                *slot = value;
+            }
+        }
+        p
+    }
+}
+
+/// What a UI sees of a proxy: no secrets, only which are saved.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyView {
+    pub id: String,
+    pub name: String,
+    pub kind: ProxyKind,
+    /// The secret fields that are saved.
+    #[serde(default)]
+    pub saved: Vec<String>,
+    /// Incoming only: secrets typed in the UI, by field; empty removes one.
+    #[serde(default, skip_serializing)]
+    pub new_secrets: std::collections::BTreeMap<String, String>,
+}
+
+impl From<&ProxyEntry> for ProxyView {
+    fn from(p: &ProxyEntry) -> Self {
+        let saved = PROXY_SECRETS.iter().filter(|f| p.secret(f).is_some()).map(|f| f.to_string()).collect();
+        Self { id: p.id.clone(), name: p.name.clone(), kind: p.kind.clone(), saved, new_secrets: Default::default() }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Host {
@@ -66,6 +256,9 @@ pub struct Host {
     /// Password for a SOCKS5 or HTTP proxy with a user.
     #[serde(default)]
     pub proxy_password: Option<String>,
+    /// A saved proxy of the same vault; used before `proxy`, which older versions still read.
+    #[serde(default)]
+    pub proxy_id: Option<String>,
     /// Lets the server use this person's keys while connected (`ssh -A`).
     #[serde(default)]
     pub forward_agent: bool,
@@ -100,6 +293,8 @@ pub struct HostView {
     /// Incoming only: a proxy password typed in the UI to save with this edit.
     #[serde(default, skip_serializing)]
     pub new_proxy_password: Option<String>,
+    #[serde(default)]
+    pub proxy_id: Option<String>,
     #[serde(default)]
     pub forward_agent: bool,
 }
@@ -137,6 +332,15 @@ pub struct OwnLoginView {
 }
 
 impl Proxy {
+    /// A SOCKS5 or HTTP proxy written into a host (before saved proxies) as one.
+    pub fn as_kind(&self) -> Option<ProxyKind> {
+        match self.clone() {
+            Proxy::Socks5 { address, port, user } => Some(ProxyKind::Socks5 { address, port, user }),
+            Proxy::Http { address, port, user } => Some(ProxyKind::Http { address, port, user }),
+            Proxy::Jump { .. } => None,
+        }
+    }
+
     /// The user a SOCKS5 or HTTP proxy is logged in to with, if any.
     pub fn user(&self) -> Option<&str> {
         match self {
@@ -170,6 +374,7 @@ impl From<&Host> for HostView {
             proxy: h.proxy.clone(),
             has_proxy_password: h.proxy_password.is_some(),
             new_proxy_password: None,
+            proxy_id: h.proxy_id.clone(),
             forward_agent: h.forward_agent,
         }
     }
@@ -293,6 +498,8 @@ pub struct VaultData {
     #[serde(default)]
     pub tunnels: Vec<Tunnel>,
     #[serde(default)]
+    pub proxies: Vec<ProxyEntry>,
+    #[serde(default)]
     pub known_hosts: Vec<KnownHost>,
     /// This person's team identity (Detour ID secret keys).
     #[serde(default)]
@@ -321,6 +528,10 @@ pub struct VaultData {
     /// The synced records as of the last sync: what this device changed since is measured against it.
     #[serde(default)]
     pub sync_base: std::collections::BTreeMap<String, crate::personal::SyncRecord>,
+    /// Synced records this version can't read (written by a newer one): kept as they are,
+    /// so they aren't taken for deleted here.
+    #[serde(default)]
+    pub sync_unread: std::collections::BTreeMap<String, crate::personal::SyncRecord>,
     /// Teams on all of this person's devices, joined here or not.
     #[serde(default)]
     pub team_links: Vec<TeamLink>,
@@ -373,6 +584,8 @@ pub struct VaultView {
     pub keys: Vec<KeyView>,
     pub snippets: Vec<Snippet>,
     pub tunnels: Vec<Tunnel>,
+    #[serde(default)]
+    pub proxies: Vec<ProxyView>,
 }
 
 #[cfg(test)]
@@ -401,6 +614,7 @@ mod tests {
             password: Some("secret".into()),
             proxy: None,
             proxy_password: None,
+            proxy_id: None,
             forward_agent: false,
         };
         let json = serde_json::to_string(&HostView::from(&host)).unwrap();

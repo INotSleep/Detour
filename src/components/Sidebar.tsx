@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeftRight, Check, ChevronsUpDown, Code, KeyRound, LogIn, PanelLeftClose, PanelLeftOpen, Plus, Search, Server, Settings, TriangleAlert, Users } from "lucide-react";
+import { ArrowLeftRight, Check, ChevronsUpDown, Code, KeyRound, LogIn, PanelLeftClose, PanelLeftOpen, Plus, Search, Server, Settings, Shield, TriangleAlert, Users } from "lucide-react";
 import { useT } from "../i18n";
 import { formatAgo, useStore, type Section } from "../lib/store";
 import type { Vault } from "../lib/types";
@@ -13,6 +13,7 @@ const nav: { id: Exclude<Section, "settings">; icon: typeof Server }[] = [
   { id: "keys", icon: KeyRound },
   { id: "snippets", icon: Code },
   { id: "tunnels", icon: ArrowLeftRight },
+  { id: "proxies", icon: Shield },
   { id: "team", icon: Users },
 ];
 
@@ -29,6 +30,7 @@ export function Sidebar({ homeActive }: { homeActive: boolean }) {
     keys: ws.keys.filter((k) => k.vaultId === vault.id).length,
     snippets: ws.snippets.filter((s) => s.vaultId === vault.id).length,
     tunnels: ws.tunnels.filter((t) => t.vaultId === vault.id).length,
+    proxies: ws.proxies.filter((p) => p.vaultId === vault.id).length,
     team: vault.kind === "team" ? ws.members.filter((m) => m.vaultId === vault.id).length : undefined,
   };
 

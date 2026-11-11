@@ -527,6 +527,11 @@ impl TeamVault {
         self.records::<Tunnel>(Coll::Tunnel).into_iter().find(|t| t.id == id)
     }
 
+    /// A proxy; its secrets are there only if this member has Secret access to it.
+    pub fn proxy(&self, id: &str) -> Option<ProxyEntry> {
+        self.records::<ProxyEntry>(Coll::Proxy).into_iter().find(|p| p.id == id)
+    }
+
     /// A key; its private part is empty unless this member has Secret access to it.
     pub fn key(&self, id: &str) -> Option<KeyEntry> {
         self.records::<KeyEntry>(Coll::Key).into_iter().find(|k| k.id == id)
@@ -560,6 +565,7 @@ impl TeamVault {
             keys: self.records::<KeyEntry>(Coll::Key).iter().map(KeyView::from).collect(),
             snippets: self.records(Coll::Snippet),
             tunnels: self.records(Coll::Tunnel),
+            proxies: self.records::<ProxyEntry>(Coll::Proxy).iter().map(ProxyView::from).collect(),
         }
     }
 
@@ -720,6 +726,7 @@ impl TeamVault {
                 password: if v.auth == Auth::Password { password } else { None },
                 proxy_password: if v.proxy.as_ref().and_then(Proxy::user).is_some() { proxy_password } else { None },
                 proxy: v.proxy.clone(),
+                proxy_id: v.proxy_id.clone(),
                 // Each member's own choice, kept in their personal vault.
                 forward_agent: false,
             };
@@ -781,6 +788,32 @@ impl TeamVault {
         }
         for id in old_tunnels.keys().filter(|id| !update.tunnels.iter().any(|t| &t.id == *id)) {
             self.delete_record(&mut d, id)?;
+        }
+
+        if let Some(proxies) = &update.proxies {
+            let old_proxies: BTreeMap<String, ProxyEntry> = self.records::<ProxyEntry>(Coll::Proxy).into_iter().map(|p| (p.id.clone(), p)).collect();
+            for v in proxies {
+                // Also look at deleted records, so undoing a delete keeps the secrets.
+                let kept = self.any_record::<ProxyEntry>(&v.id);
+                let p = ProxyEntry::from_view(v.clone(), kept.as_ref());
+                let mut new = fields_of(&p, &[]);
+                // Members without the secret don't know it: never overwrite it blindly.
+                let blind = self.level(&v.id) < Level::Secret && self.state.records.contains_key(&v.id);
+                if blind {
+                    for f in PROXY_SECRETS {
+                        new.remove(f);
+                    }
+                }
+                let old_fields = old_proxies.get(&v.id).map(|o| {
+                    let mut f = fields_of(o, &[]);
+                    f.retain(|k, _| new.contains_key(k));
+                    f
+                });
+                self.put_record(&mut d, Coll::Proxy, &v.id, old_fields, new)?;
+            }
+            for id in old_proxies.keys().filter(|id| !proxies.iter().any(|p| &p.id == *id)) {
+                self.delete_record(&mut d, id)?;
+            }
         }
 
         if d.is_empty() {

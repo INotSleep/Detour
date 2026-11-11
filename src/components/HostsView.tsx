@@ -279,7 +279,7 @@ function HostPanel({ host, groups, onClose, onDelete, onCopy }: { host: Host; gr
         onKeyDown={(e) => e.key === "Escape" && dirty && (e.stopPropagation(), setDraft(initial))}
       >
         {canEdit ? (
-          <HostFields draft={draft} set={set} keys={keys} groups={groups} showErrors={touched} passwordSaved={host.hasPassword} onForgetPassword={forgetPassword} savedPassword={host.hasPassword ? <SavedPassword host={host} /> : null} jumpHosts={jumpHosts} proxyPasswordSaved={host.hasProxyPassword} />
+          <HostFields draft={draft} set={set} keys={keys} groups={groups} showErrors={touched} passwordSaved={host.hasPassword} onForgetPassword={forgetPassword} savedPassword={host.hasPassword ? <SavedPassword host={host} /> : null} jumpHosts={jumpHosts} />
         ) : (
           <HostDetails host={host} shared={shared} keyName={keys.find((k) => host.auth.type === "key" && k.id === host.auth.keyId)?.name} />
         )}
@@ -319,7 +319,14 @@ function HostDetails({ host, shared, keyName }: { host: Host; shared: boolean; k
   // Forwarding is each person's own choice, so it can be changed without edit access.
   const setForward = (forwardAgent: boolean) => update((w) => ({ ...w, hosts: w.hosts.map((h) => (h.id === host.id ? { ...h, forwardAgent } : h)) }));
   const p = host.proxy;
-  const via = p?.type === "jump" ? ws.hosts.find((h) => h.id === p.hostId)?.label ?? "?" : p ? `${p.type === "socks5" ? "SOCKS5" : "HTTP"} ${p.address}:${p.port}` : null;
+  const saved = host.proxyId ? ws.proxies.find((x) => x.id === host.proxyId) : undefined;
+  const via = saved
+    ? `${saved.name} (${t.proxies.types[saved.kind.type]})`
+    : p?.type === "jump"
+      ? ws.hosts.find((h) => h.id === p.hostId)?.label ?? "?"
+      : p
+        ? `${p.type === "socks5" ? "SOCKS5" : "HTTP"} ${p.address}:${p.port}`
+        : null;
   return (
     <>
       <dl className="meta details">

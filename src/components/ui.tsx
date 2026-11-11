@@ -116,15 +116,24 @@ interface ModalProps {
   onSubmit?: () => void;
 }
 
+/** Open dialogs, newest last: Esc closes only the one on top. */
+const openModals: object[] = [];
+
 export function Modal({ title, onClose, children, footer, width = 440, onSubmit }: ModalProps) {
   const t = useT().common;
   const ref = useRef<HTMLFormElement>(null);
+  const [self] = useState(() => ({}));
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    openModals.push(self);
+    return () => void openModals.splice(openModals.indexOf(self), 1);
+  }, [self]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && openModals[openModals.length - 1] === self && onClose();
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, self]);
 
   useEffect(() => {
     ref.current?.querySelector<HTMLElement>("input:not([readonly]), select, textarea, button.btn-primary, button.btn-danger")?.focus();
@@ -140,6 +149,8 @@ export function Modal({ title, onClose, children, footer, width = 440, onSubmit 
         aria-label={title}
         onSubmit={(e) => {
           e.preventDefault();
+          // A dialog opened from another one is inside it in React's tree: don't submit that one too.
+          e.stopPropagation();
           onSubmit?.();
         }}
       >

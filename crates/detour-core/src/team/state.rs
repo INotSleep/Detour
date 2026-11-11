@@ -28,6 +28,7 @@ pub enum Coll {
     Key,
     Snippet,
     Tunnel,
+    Proxy,
     /// A pinned server key (personal vaults only).
     KnownHost,
     /// A member's own login for a team host (personal vaults only).
@@ -38,7 +39,7 @@ pub enum Coll {
 
 impl Coll {
     pub fn has_secret(self) -> bool {
-        matches!(self, Coll::Host | Coll::Key | Coll::OwnLogin | Coll::TeamLink)
+        matches!(self, Coll::Host | Coll::Key | Coll::OwnLogin | Coll::TeamLink | Coll::Proxy)
     }
 
     /// Fields kept under the record's secret key.
@@ -48,6 +49,7 @@ impl Coll {
             Coll::Key => &["privateKey", "passphrase"],
             Coll::OwnLogin => &["password"],
             Coll::TeamLink => &["token"],
+            Coll::Proxy => &crate::model::PROXY_SECRETS,
             _ => &[],
         }
     }

@@ -6,7 +6,7 @@ import { Button, Modal } from "./ui";
 import { tr, useT } from "../i18n";
 
 function recordName(ws: Workspace, coll: Coll, id: string) {
-  const list = coll === "host" ? ws.hosts : coll === "key" ? ws.keys : coll === "snippet" ? ws.snippets : ws.tunnels;
+  const list = coll === "host" ? ws.hosts : coll === "key" ? ws.keys : coll === "snippet" ? ws.snippets : coll === "proxy" ? ws.proxies : ws.tunnels;
   const r = list.find((x) => x.id === id) as { label?: string; name?: string } | undefined;
   return r?.label ?? r?.name ?? id;
 }

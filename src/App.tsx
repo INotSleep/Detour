@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeftRight, Bot, Code, FolderOpen, FolderPlus, KeyRound, Plus, Server, Settings as SettingsIcon, Users, X } from "lucide-react";
+import { ArrowLeftRight, Bot, Code, FolderOpen, FolderPlus, KeyRound, Plus, Server, Settings as SettingsIcon, Shield, Users, X } from "lucide-react";
 import { LangContext, lang as currentLang, resolveLang, setLang, tr, useT } from "./i18n";
 import { api, errorText, fromView, type AgentRequest, type CoreInfo, type SyncInfo, type TeamView, type VaultView } from "./lib/api";
 import { shownSessions } from "./lib/realSession";
@@ -17,6 +17,7 @@ import { TeamsView } from "./components/TeamsView";
 import { SettingsView, SnippetsView } from "./components/OtherViews";
 import { KeysView } from "./components/KeysView";
 import { TunnelsView } from "./components/TunnelsView";
+import { ProxiesView, savedAfter } from "./components/ProxiesView";
 import { FilesView } from "./components/FilesView";
 import { CommandPalette } from "./components/CommandPalette";
 import { ConflictDialog } from "./components/ConflictDialog";
@@ -44,6 +45,7 @@ const sectionIcon: Record<Section, typeof Server> = {
   keys: KeyRound,
   snippets: Code,
   tunnels: ArrowLeftRight,
+  proxies: Shield,
   team: Users,
   settings: SettingsIcon,
 };
@@ -76,6 +78,7 @@ const emptyWorkspace = (): Workspace => ({
   keys: [],
   snippets: [],
   tunnels: [],
+  proxies: [],
   activity: [],
   access: [],
 });
@@ -211,6 +214,7 @@ export default function App() {
       keys: [...data.keys, ...others(base.keys)],
       snippets: [...data.snippets, ...others(base.snippets)],
       tunnels: [...data.tunnels.map((t) => ({ ...t, state: running.get(t.id)?.state ?? t.state, connections: running.get(t.id)?.connections, error: running.get(t.id)?.error })), ...others(base.tunnels)],
+      proxies: [...data.proxies, ...others(base.proxies)],
     };
     lastSaved.current.set("personal", JSON.stringify(dataOf(next, "personal")));
     wsRef.current = next;
@@ -299,8 +303,12 @@ export default function App() {
             if (syncOn) afterPersonalEdit();
             // A typed password is now in the vault: drop it from UI memory without another save.
             const base = wsRef.current;
-            if (!base || !data.hosts.some((h) => h.newPassword || h.newProxyPassword)) return;
-            const next = { ...base, hosts: base.hosts.map(({ newPassword: _p, newProxyPassword: _q, ...h }) => h) };
+            if (!base || !(data.hosts.some((h) => h.newPassword || h.newProxyPassword) || data.proxies.some((p) => p.newSecrets))) return;
+            const next = {
+              ...base,
+              hosts: base.hosts.map(({ newPassword: _p, newProxyPassword: _q, ...h }) => h),
+              proxies: base.proxies.map(({ newSecrets, ...p }) => (newSecrets ? { ...p, saved: savedAfter(p.saved, newSecrets) } : p)),
+            };
             lastSaved.current.set(v.id, JSON.stringify(dataOf(next, v.id)));
             wsRef.current = next;
             setWs((cur) => (cur === base ? next : cur));
@@ -607,6 +615,7 @@ export default function App() {
                 {section === "keys" && <KeysView />}
                 {section === "snippets" && <SnippetsView />}
                 {section === "tunnels" && <TunnelsView />}
+                {section === "proxies" && <ProxiesView />}
                 {section === "team" && <TeamsView />}
                 {section === "settings" && <SettingsView />}
               </div>

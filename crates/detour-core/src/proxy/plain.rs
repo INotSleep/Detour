@@ -5,17 +5,8 @@ use base64::Engine;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-use crate::{Error, Result};
-
-fn failed(reason: &str) -> Error {
-    Error::Proxy { reason: reason.to_string() }
-}
-
-async fn reach(address: &str, port: u16) -> Result<TcpStream> {
-    let tcp = TcpStream::connect((address, port)).await.map_err(|_| failed("unreachable"))?;
-    let _ = tcp.set_nodelay(true);
-    Ok(tcp)
-}
+use super::{failed, reach};
+use crate::Result;
 
 /// SOCKS5 (RFC 1928), with user and password (RFC 1929) when `user` is not empty.
 /// The target's name goes to the proxy to resolve, as `ssh -o ProxyCommand` with `nc -X 5` does.

@@ -497,6 +497,8 @@ select.input { cursor: pointer; padding-right: 28px; appearance: none; backgroun
 .tunnel-row.on .route-node svg { color: var(--ok); }
 
 .kind-cards { display: grid; grid-template-columns: repeat(3, auto); gap: 8px; }
+.kind-cards.proxy-kinds { grid-template-columns: repeat(4, 1fr); }
+.proxy-used { min-width: 64px; text-align: right; }
 .kind-card {
   display: flex; align-items: center; gap: 10px;
   height: 48px; padding: 0 12px; border-radius: var(--r);
@@ -719,6 +721,8 @@ select.input { cursor: pointer; padding-right: 28px; appearance: none; backgroun
 .modal-body { padding: 12px 20px 4px; display: flex; flex-direction: column; gap: 14px; }
 .modal-text { color: var(--text-2); }
 .modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 18px 20px 18px; }
+.modal-foot-left { margin-right: auto; display: flex; align-items: center; gap: 8px; font-size: 12px; min-width: 0; }
+.modal-foot-left .muted { display: inline-flex; align-items: center; gap: 6px; }
 
 /* ============ menu ============ */
 

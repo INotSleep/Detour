@@ -69,9 +69,9 @@ export const mockWorkspace = (): Workspace => {
 
     { id: "h10", vaultId: "acme", group: "Production", label: "api-1", address: "10.0.1.11", port: 22, user: "deploy", auth: { type: "key", keyId: "k2" }, access: "edit", tags: ["api", "prod"], hasPassword: false, os: "ubuntu", online: true, lastConnected: ago(D + 2 * H) },
     { id: "h11", vaultId: "acme", group: "Production", label: "api-2", address: "10.0.1.12", port: 22, user: "deploy", auth: { type: "key", keyId: "k2" }, access: "edit", tags: ["api", "prod"], hasPassword: false, os: "ubuntu", online: true, lastConnected: ago(D + 2 * H) },
-    { id: "h12", vaultId: "acme", group: "Production", label: "db-primary", address: "10.0.2.5", port: 22, user: "dba", auth: { type: "key", keyId: "k2" }, access: "edit", tags: ["postgres", "prod"], hasPassword: false, os: "debian", online: true, lastConnected: ago(2 * D) },
+    { id: "h12", vaultId: "acme", group: "Production", label: "db-primary", address: "10.0.2.5", port: 22, user: "dba", auth: { type: "key", keyId: "k2" }, access: "edit", tags: ["postgres", "prod"], hasPassword: false, proxyId: "p1", os: "debian", online: true, lastConnected: ago(2 * D) },
     { id: "h13", vaultId: "acme", group: "Staging", label: "staging", address: "staging.acme.internal", port: 22, user: "deploy", auth: { type: "agent" }, access: "edit", tags: ["staging"], hasPassword: false, os: "alpine", online: true, lastConnected: ago(3 * H) },
-    { id: "h14", vaultId: "acme", group: "Staging", label: "ci-runner", address: "10.0.9.3", port: 22, user: "runner", auth: { type: "key", keyId: "k2" }, access: "edit", tags: ["ci"], hasPassword: false, os: "fedora", online: false },
+    { id: "h14", vaultId: "acme", group: "Staging", label: "ci-runner", address: "10.0.9.3", port: 22, user: "runner", auth: { type: "key", keyId: "k2" }, access: "edit", tags: ["ci"], hasPassword: false, proxyId: "p1", os: "fedora", online: false },
 
     { id: "h20", vaultId: "homelab", group: "Rack", label: "proxmox", address: "10.10.0.2", port: 22, user: "root", auth: { type: "key", keyId: "k3" }, access: "edit", tags: ["hypervisor"], hasPassword: false, os: "debian", online: true, lastConnected: ago(3 * H) },
     { id: "h21", vaultId: "homelab", group: "Rack", label: "pi-hole", address: "10.10.0.53", port: 22, user: "pi", auth: { type: "password" }, access: "view", tags: ["dns"], hasPassword: false, os: "debian", online: true },
@@ -106,6 +106,26 @@ export const mockWorkspace = (): Workspace => {
     { id: "t4", vaultId: "acme", name: t.tunnels.frontendDemo, kind: "remote", bindPort: 8080, viaHostId: "h13", target: "localhost:3000", state: "off", access: "edit" },
     { id: "t5", vaultId: "acme", name: t.tunnels.ciMetrics, kind: "local", bindPort: 9090, viaHostId: "h14", target: "localhost:9090", state: "off", access: "edit" },
     { id: "t3", vaultId: "personal", name: "Proxmox", kind: "local", bindPort: 8006, viaHostId: "h1", target: "10.10.0.2:8006", state: "off" },
+  ],
+
+  proxies: [
+    {
+      id: "p1",
+      vaultId: "acme",
+      name: t.proxies.office,
+      kind: { type: "wireguard", endpoint: "vpn.acme.io:51820", publicKey: "xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=", addresses: ["10.66.0.12/32"], dns: ["10.66.0.1"], mtu: null, allowedIps: ["10.0.0.0/8"], keepalive: 25 },
+      saved: ["privateKey"],
+      access: "edit",
+    },
+    { id: "p2", vaultId: "acme", name: t.proxies.corporate, kind: { type: "http", address: "proxy.acme.io", port: 3128, user: "deploy" }, saved: ["password"], access: "edit" },
+    {
+      id: "p3",
+      vaultId: "personal",
+      name: "Amsterdam",
+      kind: { type: "vless", address: "nl.example.net", port: 443, security: "reality", sni: "www.microsoft.com", alpn: [], publicKey: "Z84J2IelR9ch3k8VtlVhhs5ycBUlXA7wHBWcBrjqnAw", shortId: "6ba85179e30d4fc2", pinnedCert: "", transport: "xhttp", flow: "", path: "/xh", host: "", mode: "auto", extra: "", params: {} },
+      saved: ["uuid"],
+    },
+    { id: "p4", vaultId: "personal", name: "Home SOCKS", kind: { type: "socks5", address: "192.168.1.2", port: 1080, user: "" }, saved: [] },
   ],
 
   activity: [

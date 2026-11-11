@@ -16,7 +16,7 @@ import { fakeKeyMaterial, parsePrivateKey } from "./keys";
 import { mockSecrets } from "./mockData";
 import { mockFiles } from "./mockFiles";
 import { mockLocal } from "./mockLocal";
-import type { ActivityItem, Coll, Conflict, Host, Level, OwnLogin, Problem, Role, Snippet, SshKey, Tunnel } from "./types";
+import type { ActivityItem, Coll, Conflict, Host, Level, OwnLogin, Problem, Role, SavedProxy, Snippet, SshKey, Tunnel } from "./types";
 import { demoSync } from "./mockSync";
 
 export interface CoreInfo {
@@ -34,7 +34,8 @@ export type CoreError =
   | { kind: "hostKeyUnknown"; fingerprint: string; via?: string }
   | { kind: "hostKeyChanged"; expected: string; actual: string; via?: string }
   | { kind: "jumpNeedsLogin"; via: string }
-  | { kind: "proxy"; reason: "unreachable" | "auth" | "refused" | "protocol" }
+  /** `unsupported:<what>` names what the proxy uses that Detour can't. */
+  | { kind: "proxy"; reason: string }
   | { kind: "jumpLoop" }
   | { kind: "unreachable"; endpoint: string }
   | { kind: "connect" | "io" | "internal"; message: string }
@@ -93,7 +94,7 @@ export function errorText(e: unknown): string {
     case "cancelled": return t.cancelled;
     case "jumpNeedsLogin": return t.jumpNeedsLogin;
     case "jumpLoop": return t.jumpLoop;
-    case "proxy": return t.proxy[e.reason];
+    case "proxy": return proxyReason(e.reason);
     case "connect": return e.message === "connection lost" ? t.connectionLost : e.message;
     default: return e.message;
   }
@@ -117,6 +118,12 @@ function gitReason(message: string) {
   return t.other(message);
 }
 
+function proxyReason(reason: string) {
+  const t = tr().common.errors.proxy;
+  if (reason.startsWith("unsupported:")) return t.unsupported(reason.slice("unsupported:".length));
+  return reason in t ? (t[reason as keyof typeof t] as string) : t.protocol;
+}
+
 function keyReason(reason: string) {
   const t = tr().common.errors.key;
   if (reason.startsWith("this is a public key")) return t.public;
@@ -130,12 +137,14 @@ type HostView = Omit<Host, "vaultId" | "os" | "online" | "access">;
 type KeyView = Omit<SshKey, "vaultId" | "access">;
 type SnippetView = Omit<Snippet, "vaultId" | "access">;
 type TunnelView = Omit<Tunnel, "vaultId" | "state" | "error" | "access">;
+type ProxyView = Omit<SavedProxy, "vaultId" | "access">;
 
 export interface VaultView {
   hosts: HostView[];
   keys: KeyView[];
   snippets: SnippetView[];
   tunnels: TunnelView[];
+  proxies: ProxyView[];
 }
 
 export interface PersonalData {
@@ -143,6 +152,7 @@ export interface PersonalData {
   keys: SshKey[];
   snippets: Snippet[];
   tunnels: Tunnel[];
+  proxies: SavedProxy[];
 }
 
 const PERSONAL = "personal";
@@ -153,6 +163,7 @@ export function fromView(v: VaultView, vaultId = PERSONAL): PersonalData {
     keys: v.keys.map((k) => ({ ...k, vaultId })),
     snippets: v.snippets.map((s) => ({ ...s, vaultId })),
     tunnels: v.tunnels.map((t) => ({ ...t, vaultId, state: "off" })),
+    proxies: (v.proxies ?? []).map((p) => ({ ...p, vaultId })),
   };
 }
 
@@ -162,6 +173,7 @@ export function toView(d: PersonalData): VaultView {
     keys: d.keys.map(({ vaultId: _v, access: _a, ...k }) => k),
     snippets: d.snippets.map(({ vaultId: _v, access: _a, ...s }) => s),
     tunnels: d.tunnels.map(({ vaultId: _v, state: _s, error: _e, access: _a, connections: _c, ...t }) => t),
+    proxies: d.proxies.map(({ vaultId: _v, access: _a, ...p }) => p),
   };
 }
 
@@ -781,6 +793,11 @@ export const api = {
   tunnelStop: (t: Tunnel): Promise<void> => invoke("tunnel_stop", { vaultId: t.vaultId, tunnelId: t.id }),
   /** Running and failed tunnels, keyed `<vault>/<tunnel>`. */
   tunnelsStatus: (): Promise<{ key: string; state: "on" | "error"; connections: number; error: CoreError | null }[]> => invoke("tunnels_status"),
+
+  /* proxies (detour-core only) */
+
+  /** Tries a proxy as edited (typed secrets, else the saved ones): milliseconds to reach something through it. */
+  proxyCheck: ({ vaultId, access: _a, ...proxy }: SavedProxy): Promise<{ ms: number }> => invoke("proxy_check", { vaultId, proxy }),
 
   /* clipboard: the system one in the app, the browser's in the demo */
 
