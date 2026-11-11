@@ -21,7 +21,7 @@ import { ProxiesView, savedAfter } from "./components/ProxiesView";
 import { FilesView } from "./components/FilesView";
 import { CommandPalette } from "./components/CommandPalette";
 import { ConflictDialog } from "./components/ConflictDialog";
-import { Button, IconButton, Modal, useToaster } from "./components/ui";
+import { Button, IconButton, Modal, TipLayer, useToaster } from "./components/ui";
 import { LockScreen } from "./components/LockScreen";
 import { AgentRequestDialog } from "./components/Agents";
 
@@ -589,6 +589,7 @@ export default function App() {
   return (
     <LangContext.Provider value={lang}>
       <StoreContext.Provider value={store}>
+        <TipLayer />
         <div className={`app ${settings.sidebarCollapsed ? "sidebar-mini" : ""}`} inert={phase !== "ready"}>
           <Sidebar homeActive={activeId === "home"} />
 

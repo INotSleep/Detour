@@ -39,6 +39,77 @@ export function IconButton({ icon: Icon, label, tipSide = "bottom", size = 15, c
   );
 }
 
+type TipSide = "bottom" | "top" | "left" | "right";
+
+/**
+ * Shows the tip of the [data-tip] element under the pointer, after a short wait, in a layer above
+ * everything: a tip drawn inside its element would be cut off by any scrolling box around it.
+ */
+export function TipLayer() {
+  const [tip, setTip] = useState<{ text: string; side: TipSide; rect: DOMRect } | null>(null);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    let timer: number | undefined;
+    let over: HTMLElement | null = null;
+    const hide = () => {
+      clearTimeout(timer);
+      over = null;
+      setTip(null);
+    };
+    const onOver = (e: PointerEvent) => {
+      const el = (e.target as Element | null)?.closest?.("[data-tip]") as HTMLElement | null;
+      if (el === over) return;
+      hide();
+      if (!el || e.pointerType === "touch") return;
+      over = el;
+      timer = window.setTimeout(() => {
+        const text = el.dataset.tip;
+        if (!text || !el.isConnected || el.classList.contains("pressed")) return;
+        setTip({ text, side: (el.dataset.tipSide as TipSide) || "bottom", rect: el.getBoundingClientRect() });
+      }, 450);
+    };
+    window.addEventListener("pointerover", onOver, true);
+    window.addEventListener("pointerdown", hide, true);
+    window.addEventListener("wheel", hide, { capture: true, passive: true });
+    window.addEventListener("keydown", hide, true);
+    window.addEventListener("blur", hide);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener("pointerover", onOver, true);
+      window.removeEventListener("pointerdown", hide, true);
+      window.removeEventListener("wheel", hide, true);
+      window.removeEventListener("keydown", hide, true);
+      window.removeEventListener("blur", hide);
+    };
+  }, []);
+  // Placed once its size is known, and kept inside the window.
+  useLayoutEffect(() => {
+    if (!tip || !ref.current) return setPos(null);
+    const { width, height } = ref.current.getBoundingClientRect();
+    const r = tip.rect;
+    const gap = tip.side === "right" ? 10 : 6;
+    let left = r.left + r.width / 2 - width / 2;
+    let top = r.bottom + gap;
+    if (tip.side === "top") top = r.top - gap - height;
+    if (tip.side === "left" || tip.side === "right") {
+      left = tip.side === "left" ? r.left - gap - width : r.right + gap;
+      top = r.top + r.height / 2 - height / 2;
+    }
+    if (tip.side === "bottom" && top + height > window.innerHeight - 4) top = r.top - gap - height;
+    left = Math.max(4, Math.min(left, window.innerWidth - width - 4));
+    top = Math.max(4, Math.min(top, window.innerHeight - height - 4));
+    setPos({ left, top });
+  }, [tip]);
+  if (!tip) return null;
+  return createPortal(
+    <div ref={ref} className="tip" role="tooltip" style={pos ?? { left: -9999, top: -9999 }}>
+      {tip.text}
+    </div>,
+    document.body,
+  );
+}
+
 export function Kbd({ children }: { children: ReactNode }) {
   return <kbd className="kbd">{children}</kbd>;
 }
