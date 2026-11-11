@@ -1,6 +1,6 @@
-import { useState } from "react";
-import { Activity, Ellipsis, Globe, Loader2, Network, Pencil, Plus, Shield, Trash2, Waypoints, type LucideIcon } from "lucide-react";
-import { api, errorText } from "../lib/api";
+import { useRef, useState } from "react";
+import { Activity, ClipboardPaste, Copy, Ellipsis, FileUp, Globe, Loader2, Network, Pencil, Plus, Shield, Trash2, Waypoints, type LucideIcon } from "lucide-react";
+import { api, errorText, isCoreError, type ParsedProxy } from "../lib/api";
 import { sleep, uid, useStore } from "../lib/store";
 import type { ProxyKind, ProxySecret, ProxyType, SavedProxy } from "../lib/types";
 import { atLeast, writable } from "../lib/teams";
@@ -65,7 +65,34 @@ export function ProxiesView() {
   const { ws, vault, update, toast } = useStore();
   const canCreate = writable(vault);
   const [editing, setEditing] = useState<SavedProxy | "new" | null>(null);
+  const [parsed, setParsed] = useState<ParsedProxy | null>(null);
   const [checks, setChecks] = useState<Record<string, Check>>({});
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  /** A link or a config becomes a new proxy to look over and save. */
+  const read = async (text: string) => {
+    try {
+      setParsed(await api.proxyParse(text));
+      setEditing("new");
+    } catch (e) {
+      const unsupported = isCoreError(e) && e.kind === "proxy" && e.reason.startsWith("unsupported:");
+      toast({ text: unsupported ? errorText(e) : tx.proxies.notALink, tone: "error" });
+    }
+  };
+  const paste = async () => read(await api.clipboardRead().catch(() => ""));
+  const readFile = async (f: File | undefined) => {
+    if (f && f.size < 64 * 1024) await read(await f.text());
+    else if (f) toast({ text: tx.proxies.notALink, tone: "error" });
+  };
+
+  const copy = async (p: SavedProxy) => {
+    try {
+      const { text } = await api.proxyExport(p);
+      toast((await api.clipboardWrite(text)) ? { text: tx.proxies.copied, tone: "success" } : { text: tx.common.copyFailed, tone: "error" });
+    } catch (e) {
+      toast({ text: errorText(e), tone: "error" });
+    }
+  };
 
   const proxies = ws.proxies.filter((p) => p.vaultId === vault.id);
 
@@ -88,9 +115,33 @@ export function ProxiesView() {
   };
 
   return (
-    <div className="page">
+    <div
+      className="page"
+      onDragOver={(e) => canCreate && e.dataTransfer.types.includes("Files") && e.preventDefault()}
+      onDrop={(e) => {
+        if (!canCreate || !e.dataTransfer.files.length) return;
+        e.preventDefault();
+        void readFile(e.dataTransfer.files[0]);
+      }}
+    >
       <PageHeader title={tx.proxies.title} count={proxies.length || undefined}>
-        {canCreate && <Button variant="primary" icon={Plus} onClick={() => setEditing("new")}>{tx.proxies.add}</Button>}
+        {canCreate && (
+          <>
+            <Button icon={ClipboardPaste} onClick={() => void paste()}>{tx.proxies.paste}</Button>
+            <Button icon={FileUp} onClick={() => fileRef.current?.click()}>{tx.proxies.fromFile}</Button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".conf,.txt"
+              hidden
+              onChange={(e) => {
+                void readFile(e.target.files?.[0]);
+                e.target.value = "";
+              }}
+            />
+            <Button variant="primary" icon={Plus} onClick={() => setEditing("new")}>{tx.proxies.add}</Button>
+          </>
+        )}
       </PageHeader>
 
       {proxies.length === 0 && <Empty icon={Shield} title={tx.proxies.empty} action={canCreate ? <Button variant="primary" icon={Plus} onClick={() => setEditing("new")}>{tx.proxies.add}</Button> : undefined} />}
@@ -120,6 +171,9 @@ export function ProxiesView() {
                   trigger={(open, isOpen) => <IconButton icon={Ellipsis} label={tx.proxies.more} className={isOpen ? "pressed" : ""} onClick={open} />}
                   items={[
                     { label: tx.common.edit, icon: Pencil, onSelect: () => setEditing(p) },
+                    ...(atLeast(p.access, "secret") && (p.kind.type === "vless" || p.kind.type === "wireguard")
+                      ? [{ label: p.kind.type === "vless" ? tx.proxies.copyLink : tx.proxies.copyConfig, icon: Copy, onSelect: () => void copy(p) }]
+                      : []),
                     { label: tx.common.delete, icon: Trash2, danger: true, onSelect: () => remove(p) },
                   ]}
                 />
@@ -131,7 +185,16 @@ export function ProxiesView() {
         })}
       </div>
 
-      {editing && <ProxyDialog proxy={editing === "new" ? null : editing} onClose={() => setEditing(null)} />}
+      {editing && (
+        <ProxyDialog
+          proxy={editing === "new" ? null : editing}
+          parsed={editing === "new" ? parsed : null}
+          onClose={() => {
+            setEditing(null);
+            setParsed(null);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -254,12 +317,13 @@ function kindOf(d: Draft, old: ProxyKind | undefined): ProxyKind {
 /** The secrets a type of proxy asks for. */
 const secretsOf = (type: ProxyType): ProxySecret[] => (type === "wireguard" ? ["privateKey", "presharedKey"] : type === "vless" ? ["uuid"] : ["password"]);
 
-export function ProxyDialog({ proxy, onClose, onCreated }: { proxy: SavedProxy | null; onClose: () => void; onCreated?: (id: string) => void }) {
+export function ProxyDialog({ proxy, parsed, onClose, onCreated }: { proxy: SavedProxy | null; parsed?: ParsedProxy | null; onClose: () => void; onCreated?: (id: string) => void }) {
   const tx = useT();
   const t = tx.proxies.dialog;
   const e = tx.proxies.errors;
   const { vault, update, toast } = useStore();
-  const [d, setD] = useState(() => draftOf(proxy));
+  // A pasted proxy: its secrets are as if typed in.
+  const [d, setD] = useState(() => (parsed ? { ...draftOf({ id: "", vaultId: "", name: parsed.name, kind: parsed.kind, saved: [] }), secrets: parsed.secrets } : draftOf(proxy)));
   const [showErrors, setShowErrors] = useState(false);
   const [check, setCheck] = useState<Check>();
   const set = (patch: Partial<Draft>) => {
@@ -293,7 +357,7 @@ export function ProxyDialog({ proxy, onClose, onCreated }: { proxy: SavedProxy |
   const err = (k: string) => (showErrors ? errors[k] ?? null : null);
   const cls = (k: string) => (err(k) ? "invalid" : "");
 
-  const kind = kindOf(d, proxy?.kind);
+  const kind = kindOf(d, proxy?.kind ?? parsed?.kind);
   const where = d.type === "wireguard" ? d.endpoint.trim() : d.address.trim();
   const autoName = where ? proxySummary(kind).split(" · ")[0]! : tx.proxies.types[d.type];
 

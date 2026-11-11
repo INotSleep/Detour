@@ -60,7 +60,7 @@ pub(crate) const READ_ONLY: &[&str] = &[
     "hello", "core_info", "vault_status", "vault_get", "ssh_import_preview", "sync_status", "teams_pending", "sync_recovery_key", "sync_add_device",
     "host_password", "key_export", "my_id", "id_inspect", "recovery_key_new", "teams_list", "team_inspect", "team_inspect_git",
     "github_user", "github_start", "github_repo_access", "session_input", "session_resize", "session_attach", "session_detach", "sessions_list", "session_runs",
-    "files_open", "files_list", "files_resolve", "files_cancel", "files_close", "tunnels_status", "tunnel_start", "tunnel_stop", "proxy_check", "settings_get",
+    "files_open", "files_list", "files_resolve", "files_cancel", "files_close", "tunnels_status", "tunnel_start", "tunnel_stop", "proxy_check", "proxy_parse", "proxy_export", "settings_get",
     "settings_set", "activity", "quit", "trust_request", "trust_answer", "trust_with_password", "hosts_export",
     "agents_pending", "agents_list", "agents_answer", "agents_revoke",
 ];
@@ -622,6 +622,18 @@ pub(crate) async fn dispatch(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value
             let proxy = store.lock().map_err(poisoned)?.proxy_draft(&a.vault_id, a.proxy).map_err(err)?;
             let ms = detour_core::proxy::check(&proxy).await.map_err(err)?;
             Ok(json!({ "ms": ms }))
+        }
+        "proxy_parse" => {
+            let a = args!(method, p, { text: String });
+            let proxy = detour_core::proxy::link::parse(&a.text).map_err(err)?;
+            let secrets: serde_json::Map<String, Value> = detour_core::model::PROXY_SECRETS.iter().filter_map(|f| Some((f.to_string(), Value::String(proxy.secret(f)?.clone())))).collect();
+            Ok(json!({ "name": proxy.name, "kind": proxy.kind, "secrets": secrets }))
+        }
+        "proxy_export" => {
+            let a = args!(method, p, { vault_id: String, proxy_id: String });
+            let proxy = store.lock().map_err(poisoned)?.proxy_for_connect(&a.vault_id, &a.proxy_id).map_err(err)?;
+            let text = detour_core::proxy::link::export(&proxy).ok_or_else(|| json!({ "kind": "badArguments", "message": "proxy" }))?;
+            Ok(json!({ "text": text }))
         }
 
         /* ---------- files (SFTP) ---------- */

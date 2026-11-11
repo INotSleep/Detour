@@ -16,7 +16,7 @@ import { fakeKeyMaterial, parsePrivateKey } from "./keys";
 import { mockSecrets } from "./mockData";
 import { mockFiles } from "./mockFiles";
 import { mockLocal } from "./mockLocal";
-import type { ActivityItem, Coll, Conflict, Host, Level, OwnLogin, Problem, Role, SavedProxy, Snippet, SshKey, Tunnel } from "./types";
+import type { ActivityItem, Coll, Conflict, Host, Level, OwnLogin, Problem, ProxyKind, ProxySecret, Role, SavedProxy, Snippet, SshKey, Tunnel } from "./types";
 import { demoSync } from "./mockSync";
 
 export interface CoreInfo {
@@ -138,6 +138,13 @@ type KeyView = Omit<SshKey, "vaultId" | "access">;
 type SnippetView = Omit<Snippet, "vaultId" | "access">;
 type TunnelView = Omit<Tunnel, "vaultId" | "state" | "error" | "access">;
 type ProxyView = Omit<SavedProxy, "vaultId" | "access">;
+
+/** A proxy read from a link or a config. */
+export interface ParsedProxy {
+  name: string;
+  kind: ProxyKind;
+  secrets: Partial<Record<ProxySecret, string>>;
+}
 
 export interface VaultView {
   hosts: HostView[];
@@ -798,6 +805,19 @@ export const api = {
 
   /** Tries a proxy as edited (typed secrets, else the saved ones): milliseconds to reach something through it. */
   proxyCheck: ({ vaultId, access: _a, ...proxy }: SavedProxy): Promise<{ ms: number }> => invoke("proxy_check", { vaultId, proxy }),
+  /** A proxy from a `vless://` link or a WireGuard config, with its secrets. */
+  async proxyParse(text: string): Promise<ParsedProxy> {
+    if (real) return invoke("proxy_parse", { text });
+    // The demo reads one example link.
+    if (!/^\s*vless:\/\//i.test(text) && !/\[Interface\]/i.test(text)) throw { kind: "proxy", reason: "protocol" } satisfies CoreError;
+    return {
+      name: "Frankfurt",
+      kind: { type: "vless", address: "de.example.net", port: 443, security: "reality", sni: "www.microsoft.com", alpn: [], publicKey: "Z84J2IelR9ch3k8VtlVhhs5ycBUlXA7wHBWcBrjqnAw", shortId: "6ba85179e30d4fc2", pinnedCert: "", transport: "tcp", flow: "xtls-rprx-vision", path: "", host: "", mode: "", extra: "", params: { fp: "chrome" } },
+      secrets: { uuid: "b831381d-6324-4d53-ad4f-8cda48b30811" },
+    };
+  },
+  /** A proxy as a `vless://` link or a WireGuard config, secrets included. */
+  proxyExport: (p: SavedProxy): Promise<{ text: string }> => (real ? invoke("proxy_export", { vaultId: p.vaultId, proxyId: p.id }) : Promise.resolve({ text: `${p.kind.type}://demo` })),
 
   /* clipboard: the system one in the app, the browser's in the demo */
 

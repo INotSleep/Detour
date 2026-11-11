@@ -1,5 +1,6 @@
 //! Reaching a host through a saved proxy: a stream to the host that carries the SSH connection.
 
+pub mod link;
 mod plain;
 pub mod wireguard;
 
