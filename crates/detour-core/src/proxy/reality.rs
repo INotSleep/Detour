@@ -195,7 +195,14 @@ fn ext(kind: u16, data: &[u8]) -> Vec<u8> {
 
 /// A ClientHello message like Chrome's, with a zeroed session id at bytes 39..71.
 fn client_hello(sni: &str, random: &[u8; 32], mlkem: &[u8], x25519: &[u8; 32]) -> Vec<u8> {
-    let (g1, g2, g3, g4) = (grease(), grease(), grease(), grease());
+    let (g1, g2, g3) = (grease(), grease(), grease());
+    // Two extensions of one type would make the hello invalid.
+    let g4 = loop {
+        let g = grease();
+        if g != g1 {
+            break g;
+        }
+    };
     let mut rng = rand::rng();
 
     let mut name = vec![0u8];

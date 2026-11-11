@@ -133,9 +133,12 @@ async fn vless_reality_vision() {
 #[tokio::test]
 #[ignore = "needs the test Xray server"]
 async fn xhttp_without_security() {
-    for mode in ["packet-up", "stream-up", "auto"] {
+    for mode in ["packet-up", "auto"] {
         works(xhttp(10004, VlessSecurity::None, mode)).await;
     }
+    // Streaming uploads need HTTP/2.
+    let r = ssh::session(&request(proxy(&xhttp(10004, VlessSecurity::None, "stream-up")))).await;
+    assert!(matches!(r, Err(Error::Proxy { reason }) if reason == "unsupported:stream-up over HTTP/1.1"));
 }
 
 #[tokio::test]
@@ -164,4 +167,17 @@ async fn xhttp_with_obfuscation_settings() {
     let mut v = xhttp(10007, VlessSecurity::None, "packet-up");
     v.extra = r#"{"xPaddingObfsMode":true,"xPaddingPlacement":"header","xPaddingMethod":"tokenish","sessionIDPlacement":"header","seqPlacement":"query"}"#;
     works(v).await;
+}
+
+#[tokio::test]
+#[ignore = "needs the test Xray server"]
+async fn reality_handshakes_many_times() {
+    let v = tcp(10003, "XRAY_ID_REALITY", VlessSecurity::Reality, false);
+    let mut failures = Vec::new();
+    for _ in 0..120 {
+        if let Err(e) = detour_core::proxy::connect(&proxy(&v), "sshd", 22).await {
+            failures.push(format!("{e:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "{} of 120 failed: {failures:?}", failures.len());
 }

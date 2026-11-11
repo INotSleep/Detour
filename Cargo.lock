@@ -1445,12 +1445,17 @@ dependencies = [
  "base64 0.22.1",
  "bech32",
  "boringtun",
+ "bytes",
  "chacha20poly1305",
  "curve25519-dalek 5.0.0",
  "directories",
  "ed25519-dalek",
  "flate2",
  "futures",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "ml-kem",
  "rand 0.10.3",
  "ring",
@@ -2508,6 +2513,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "h2"
+version = "0.4.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d29020232d6aa3fb1daca64c1127cf662cf97f254ae16c18c05b8ab635fc118"
+dependencies = [
+ "atomic-waker",
+ "bytes",
+ "fnv",
+ "futures-core",
+ "futures-sink",
+ "http",
+ "indexmap 2.14.2",
+ "slab",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "half"
 version = "2.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2699,7 +2723,9 @@ checksum = "2c3e324da4c95177d6291d4c8730197c0d1822f8a9766814a4a44fa5ab797c9c"
 dependencies = [
  "atomic-waker",
  "bytes",
+ "futures-channel",
  "futures-core",
+ "h2",
  "http",
  "http-body",
  "httparse",
