@@ -52,6 +52,7 @@ const sectionIcon: Record<Section, typeof Server> = {
 
 const defaultSettings: Settings = { theme: "detour-dark", language: "system", fontSize: 13, scrollback: 5000, autoLockMinutes: 15, clipboard: "ssh", highlight: true, autoUpdate: true, editor: null, sidebarCollapsed: false, terminalTheme: SAME_AS_APP, customThemes: [] };
 const SETTINGS_KEY = "detour.settings";
+const VAULT_KEY = "detour.vault";
 
 /** Settings of this device, kept in the webview's storage. */
 function loadSettings(): Settings {
@@ -97,7 +98,21 @@ export default function App() {
   const lastSaved = useRef(new Map<string, string>());
   const [ws, setWs] = useState<Workspace | null>(null);
   const [coreInfo, setCoreInfo] = useState<CoreInfo | null>(null);
-  const [vaultId, setVaultId] = useState(api.real ? "personal" : "acme");
+  // The vault shown when the window was last closed; the personal one if that team is gone.
+  const [vaultId, setVaultId] = useState(() => {
+    try {
+      return localStorage.getItem(VAULT_KEY) ?? (api.real ? "personal" : "acme");
+    } catch {
+      return api.real ? "personal" : "acme";
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(VAULT_KEY, vaultId);
+    } catch {
+      /* private mode: chosen for this run only */
+    }
+  }, [vaultId]);
   const [section, setSection] = useState<Section>("hosts");
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeId, setActiveId] = useState("home");
