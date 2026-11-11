@@ -266,16 +266,297 @@ fn with_records(next: &mut Value) {
     }
 }
 
-pub async fn groups(ctx: &Ctx) -> Res<()> {
-    let d = data(ctx).await?;
-    let list = ordered_groups(&d, true);
+/// Groups in order with their hosts, and the proxy and login each one gives its hosts:
+/// this person's own settings of it, else (the proxy) the team's.
+pub async fn groups(ctx: &Ctx, mine: bool) -> Res<()> {
+    let (d, layout) = if mine { mine_of(ctx).await? } else { (data(ctx).await?, Value::Null) };
+    let list: Vec<(String, Option<String>, Vec<&Value>)> = if mine { ordered_mine(&d, &layout) } else { ordered_groups(&d, true).into_iter().map(|(g, h)| (g, None, h)).collect() };
+    let prefs = ctx.c.call("group_prefs", json!({})).await.unwrap_or(json!([]));
+    let proxies = all_proxies(ctx, &d).await?;
+    let proxy_name = |vault: &str, id: &str| proxies.iter().find(|(v, p)| v == vault && s(&p["id"]) == id).map(|(_, p)| s(&p["name"])).unwrap_or_else(|| id.to_string());
+    let keys = ctx.c.call("vault_get", json!({})).await.map(|v| v["keys"].clone()).unwrap_or(json!([]));
+    let rows: Vec<(String, usize, Vec<String>, String, String)> = list
+        .iter()
+        .map(|(g, id, hosts)| {
+            let key = match id {
+                Some(id) => format!("{}/mine:{id}", ctx.vault),
+                None => format!("{}/team:{g}", ctx.vault),
+            };
+            let p = prefs.as_array().into_iter().flatten().find(|p| s(&p["key"]) == key);
+            let shared = d["groups"].as_array().into_iter().flatten().find(|r| id.is_none() && s(&r["name"]) == *g).map(|r| s(&r["proxyId"])).filter(|x| !x.is_empty());
+            let proxy = match p.map(|p| &p["proxy"]).filter(|x| x.is_object()) {
+                Some(r) => proxy_name(&s(&r["vault"]), &s(&r["id"])),
+                None => shared.map(|x| proxy_name(&ctx.vault, &x)).unwrap_or_default(),
+            };
+            let login = p.map(|p| login_text(p, &keys)).unwrap_or_default();
+            (g.clone(), hosts.len(), hosts.iter().map(|h| s(&h["label"])).collect(), proxy, login)
+        })
+        .collect();
     if ctx.json {
-        let out: Vec<Value> = list.iter().map(|(g, hosts)| json!({ "group": g, "hosts": hosts.iter().map(|h| h["label"].clone()).collect::<Vec<_>>() })).collect();
+        let out: Vec<Value> = rows.iter().map(|(g, _, hosts, proxy, login)| json!({ "group": g, "hosts": hosts, "proxy": proxy, "login": login })).collect();
         print_json(&json!(out));
         return Ok(());
     }
-    let rows = list.iter().map(|(g, hosts)| vec![if g.is_empty() { t().no_group.to_string() } else { g.clone() }, hosts.len().to_string()]).collect();
+    let rows = rows.into_iter().map(|(g, n, _, proxy, login)| vec![if g.is_empty() { t().no_group.to_string() } else { g }, n.to_string(), proxy, login]).collect();
     table(&t().headers_groups, rows);
+    Ok(())
+}
+
+/// Proxies a group may use: this vault's, then this person's own (for a team), each with its vault.
+async fn all_proxies(ctx: &Ctx, d: &Value) -> Res<Vec<(String, Value)>> {
+    let mut out: Vec<(String, Value)> = d["proxies"].as_array().into_iter().flatten().map(|p| (ctx.vault.clone(), p.clone())).collect();
+    if ctx.vault != PERSONAL {
+        let personal = ctx.c.call("vault_get", json!({})).await?;
+        out.extend(personal["proxies"].as_array().into_iter().flatten().map(|p| (PERSONAL.to_string(), p.clone())));
+    }
+    Ok(out)
+}
+
+/// "user, key" as a group's login gives it.
+fn login_text(p: &Value, keys: &Value) -> String {
+    let auth = match s(&p["auth"]["type"]).as_str() {
+        "key" => keys.as_array().into_iter().flatten().find(|k| k["id"] == p["auth"]["keyId"]).map(|k| s(&k["name"])).unwrap_or_else(|| "key".into()),
+        "password" => t().password_word.to_string(),
+        "agent" => "ssh-agent".into(),
+        _ => String::new(),
+    };
+    [s(&p["user"]), auth].into_iter().filter(|x| !x.is_empty()).collect::<Vec<_>>().join(", ")
+}
+
+/* ---------- this person's own grouping of a team's hosts (--mine) ---------- */
+
+/// The team's data and this person's grouping of its hosts; at first, a copy of the shared one.
+async fn mine_of(ctx: &Ctx) -> Res<(Value, Value)> {
+    if ctx.vault == PERSONAL {
+        return fail(t().mine_team_only);
+    }
+    let teams = ctx.c.call("teams_list", json!({})).await?;
+    let team = teams.as_array().into_iter().flatten().find(|e| s(&e["id"]) == ctx.vault).ok_or_else(|| Fail(t().unknown_vault.into()))?;
+    let d = team["view"]["data"].clone();
+    let layout = match &team["view"]["layout"] {
+        l @ Value::Object(_) => l.clone(),
+        _ => json!({ "groups": ordered_groups(&d, true).into_iter().filter(|(g, _)| !g.is_empty()).map(|(g, hosts)| json!({ "id": detour_core::new_id(), "name": g, "hosts": hosts.iter().map(|h| h["id"].clone()).collect::<Vec<_>>() })).collect::<Vec<_>>() }),
+    };
+    Ok((d, layout))
+}
+
+/// Groups of mine in order (with their ids), then the hosts in none of them under their shared groups.
+fn ordered_mine<'a>(d: &'a Value, layout: &Value) -> Vec<(String, Option<String>, Vec<&'a Value>)> {
+    let hosts: Vec<&Value> = d["hosts"].as_array().into_iter().flatten().collect();
+    let mut placed = std::collections::HashSet::new();
+    let mut out = vec![];
+    for g in layout["groups"].as_array().into_iter().flatten() {
+        let list: Vec<&Value> = g["hosts"].as_array().into_iter().flatten().filter_map(|id| hosts.iter().copied().find(|h| h["id"] == *id)).collect();
+        placed.extend(list.iter().map(|h| s(&h["id"])));
+        out.push((s(&g["name"]), Some(s(&g["id"])), list));
+    }
+    let mut rest = d.clone();
+    if let Some(list) = rest["hosts"].as_array_mut() {
+        list.retain(|h| !placed.contains(&s(&h["id"])));
+    }
+    let rest_names: Vec<(String, Vec<String>)> = ordered_groups(&rest, false).into_iter().map(|(g, h)| (g, h.iter().map(|h| s(&h["id"])).collect())).collect();
+    for (g, ids) in rest_names {
+        out.push((g, None, ids.iter().filter_map(|id| hosts.iter().copied().find(|h| s(&h["id"]) == *id)).collect()));
+    }
+    out
+}
+
+/// A group of mine by name or id: its place in the layout.
+fn find_mine(layout: &Value, name: &str) -> Option<usize> {
+    layout["groups"].as_array()?.iter().position(|g| s(&g["id"]) == name || s(&g["name"]).eq_ignore_ascii_case(name))
+}
+
+/// Shared groups shown below mine become mine, so they can be ordered among them.
+fn materialize(d: &Value, layout: &mut Value) {
+    let extra: Vec<Value> = ordered_mine(d, layout)
+        .into_iter()
+        .filter(|(g, id, _)| id.is_none() && !g.is_empty())
+        .map(|(g, _, hosts)| json!({ "id": detour_core::new_id(), "name": g, "hosts": hosts.iter().map(|h| h["id"].clone()).collect::<Vec<_>>() }))
+        .collect();
+    layout["groups"].as_array_mut().unwrap().extend(extra);
+}
+
+async fn layout_put(ctx: &Ctx, layout: &Value) -> Res<()> {
+    ctx.c.call("layout_set", json!({ "id": ctx.vault, "layout": layout })).await?;
+    Ok(())
+}
+
+pub async fn mine_group_add(ctx: &Ctx, name: &str) -> Res<()> {
+    let (_, mut layout) = mine_of(ctx).await?;
+    if find_mine(&layout, name).is_some() {
+        return fail(format!("{}: {name}", t().group_exists));
+    }
+    layout["groups"].as_array_mut().unwrap().push(json!({ "id": detour_core::new_id(), "name": name, "hosts": [] }));
+    layout_put(ctx, &layout).await?;
+    eprintln!("{}: {name}", t().group_added);
+    Ok(())
+}
+
+pub async fn mine_group_rename(ctx: &Ctx, name: &str, to: &str) -> Res<()> {
+    let (d, mut layout) = mine_of(ctx).await?;
+    if find_mine(&layout, name).is_none() {
+        materialize(&d, &mut layout);
+    }
+    let i = find_mine(&layout, name).ok_or_else(|| Fail(format!("{}: {name}", t().unknown_group)))?;
+    layout["groups"][i]["name"] = json!(to);
+    layout_put(ctx, &layout).await?;
+    eprintln!("{}: {to}", t().group_saved);
+    Ok(())
+}
+
+pub async fn mine_group_rm(ctx: &Ctx, name: &str) -> Res<()> {
+    let (_, mut layout) = mine_of(ctx).await?;
+    let i = find_mine(&layout, name).ok_or_else(|| Fail(format!("{}: {name}", t().unknown_group)))?;
+    let removed = layout["groups"].as_array_mut().unwrap().remove(i);
+    layout_put(ctx, &layout).await?;
+    eprintln!("{}: {}", t().mine_group_removed, s(&removed["name"]));
+    Ok(())
+}
+
+pub async fn mine_group_move(ctx: &Ctx, name: &str, before: Option<&str>) -> Res<()> {
+    let (d, mut layout) = mine_of(ctx).await?;
+    materialize(&d, &mut layout);
+    let i = find_mine(&layout, name).ok_or_else(|| Fail(format!("{}: {name}", t().unknown_group)))?;
+    let moving = layout["groups"].as_array_mut().unwrap().remove(i);
+    let at = match before {
+        Some(b) => find_mine(&layout, b).ok_or_else(|| Fail(format!("{}: {b}", t().unknown_group)))?,
+        None => layout["groups"].as_array().unwrap().len(),
+    };
+    layout["groups"].as_array_mut().unwrap().insert(at, moving.clone());
+    layout_put(ctx, &layout).await?;
+    eprintln!("{}: {}", t().group_saved, s(&moving["name"]));
+    Ok(())
+}
+
+/// Moves a host into a group of mine (a new one if there is none of that name; `none`: out of
+/// mine, under its shared group), before another host or last.
+pub async fn mine_host_move(ctx: &Ctx, name: &str, group: Option<&str>, before: Option<&str>) -> Res<()> {
+    let (d, mut layout) = mine_of(ctx).await?;
+    let host = find(&d["hosts"], name, "label", t().unknown_host)?.clone();
+    let id = host["id"].clone();
+    let before_id = before.map(|b| find(&d["hosts"], b, "label", t().unknown_host).map(|h| h["id"].clone())).transpose()?;
+    let shown = ordered_mine(&d, &layout);
+    let current = shown.iter().find(|(_, _, hosts)| hosts.iter().any(|h| h["id"] == id)).map(|(g, _, _)| g.clone()).unwrap_or_default();
+    let target = match group {
+        Some(g) if g.is_empty() || g.eq_ignore_ascii_case("none") => None,
+        Some(g) => Some(g.to_string()),
+        None => Some(current).filter(|g| !g.is_empty()),
+    };
+    for g in layout["groups"].as_array_mut().unwrap() {
+        if let Some(list) = g["hosts"].as_array_mut() {
+            list.retain(|h| *h != id);
+        }
+    }
+    if let Some(target) = target {
+        let i = match find_mine(&layout, &target) {
+            Some(i) => i,
+            None => {
+                // A shared group shown below becomes mine with its hosts; else a new group.
+                let hosts: Vec<Value> = shown.iter().find(|(g, gid, _)| gid.is_none() && g.eq_ignore_ascii_case(&target)).map(|(_, _, hs)| hs.iter().map(|h| h["id"].clone()).filter(|h| *h != id).collect()).unwrap_or_default();
+                let name = shown.iter().find(|(g, _, _)| g.eq_ignore_ascii_case(&target)).map(|(g, _, _)| g.clone()).unwrap_or(target);
+                layout["groups"].as_array_mut().unwrap().push(json!({ "id": detour_core::new_id(), "name": name, "hosts": hosts }));
+                layout["groups"].as_array().unwrap().len() - 1
+            }
+        };
+        let list = layout["groups"][i]["hosts"].as_array_mut().unwrap();
+        let at = before_id.and_then(|b| list.iter().position(|h| *h == b)).unwrap_or(list.len());
+        list.insert(at, id);
+    }
+    layout_put(ctx, &layout).await?;
+    eprintln!("{}: {name}", t().host_saved);
+    Ok(())
+}
+
+/* ---------- a group's settings ---------- */
+
+/// A group's proxy and login, as given on the command line.
+#[derive(clap::Args, Default)]
+pub struct GroupOpts {
+    #[arg(long)]
+    pub mine: bool,
+    #[arg(long, value_name = "PROXY")]
+    pub proxy: Option<String>,
+    #[arg(long, value_name = "PROXY", conflicts_with = "mine")]
+    pub team_proxy: Option<String>,
+    #[arg(long, short)]
+    pub user: Option<String>,
+    #[arg(long, short, conflicts_with_all = ["password", "agent", "no_login"])]
+    pub key: Option<String>,
+    #[arg(long, conflicts_with_all = ["agent", "no_login"])]
+    pub password: bool,
+    #[arg(long, conflicts_with = "no_login")]
+    pub agent: bool,
+    #[arg(long, conflicts_with = "user")]
+    pub no_login: bool,
+}
+
+/// Sets this person's own proxy and login of a group, and (for those who manage the vault) the
+/// proxy of the group for everyone.
+pub async fn group_set(ctx: &Ctx, name: &str, o: GroupOpts) -> Res<()> {
+    let (d, layout) = if o.mine { mine_of(ctx).await? } else { (data(ctx).await?, Value::Null) };
+    let (key, group) = if o.mine {
+        let i = find_mine(&layout, name).ok_or_else(|| Fail(format!("{}: {name}", t().unknown_group)))?;
+        (format!("{}/mine:{}", ctx.vault, s(&layout["groups"][i]["id"])), s(&layout["groups"][i]["name"]))
+    } else {
+        let g = find_group(&d, name)?;
+        (format!("{}/team:{g}", ctx.vault), g)
+    };
+    let proxies = all_proxies(ctx, &d).await?;
+    let find_proxy = |n: &str, own_vault_only: bool| -> Res<Option<(String, String)>> {
+        if n.eq_ignore_ascii_case("none") || n.is_empty() {
+            return Ok(None);
+        }
+        proxies
+            .iter()
+            .filter(|(v, _)| !own_vault_only || *v == ctx.vault)
+            .find(|(_, p)| s(&p["id"]) == n || s(&p["name"]).eq_ignore_ascii_case(n))
+            .map(|(v, p)| Some((v.clone(), s(&p["id"]))))
+            .ok_or_else(|| Fail(format!("{}: {n}", t().unknown_proxy)))
+    };
+
+    let personal = o.proxy.is_some() || o.user.is_some() || o.key.is_some() || o.password || o.agent || o.no_login;
+    if personal {
+        let all = ctx.c.call("group_prefs", json!({})).await?;
+        let mut p = all.as_array().into_iter().flatten().find(|p| s(&p["key"]) == key).cloned().unwrap_or_else(|| json!({ "key": key, "hasPassword": false }));
+        if let Some(n) = &o.proxy {
+            p["proxy"] = match find_proxy(n, false)? {
+                Some((vault, id)) => json!({ "vault": vault, "id": id }),
+                None => Value::Null,
+            };
+        }
+        if let Some(u) = &o.user {
+            p["user"] = if u.is_empty() { Value::Null } else { json!(u) };
+        }
+        if o.no_login {
+            p["user"] = Value::Null;
+            p["auth"] = Value::Null;
+        }
+        if let Some(k) = &o.key {
+            let keys = ctx.c.call("vault_get", json!({})).await?["keys"].clone();
+            let key = find(&keys, k, "name", t().unknown_key)?;
+            p["auth"] = json!({ "type": "key", "keyId": key["id"] });
+        }
+        if o.agent {
+            p["auth"] = json!({ "type": "agent" });
+        }
+        if o.password {
+            p["auth"] = json!({ "type": "password" });
+            p["newPassword"] = json!(secret(t().host_password)?);
+        }
+        ctx.c.call("group_prefs_set", json!({ "prefs": p, "drop": false })).await?;
+    }
+    if let Some(n) = &o.team_proxy {
+        let proxy = find_proxy(n, true)?;
+        let mut next = d.clone();
+        with_records(&mut next);
+        for g in next["groups"].as_array_mut().unwrap() {
+            if s(&g["name"]) == group {
+                g["proxyId"] = proxy.as_ref().map(|(_, id)| json!(id)).unwrap_or(Value::Null);
+            }
+        }
+        put(ctx, &d, &next).await?;
+    }
+    eprintln!("{}: {group}", t().group_saved);
     Ok(())
 }
 

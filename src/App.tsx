@@ -81,6 +81,8 @@ const emptyWorkspace = (): Workspace => ({
   tunnels: [],
   proxies: [],
   groups: [],
+  layouts: {},
+  groupPrefs: [],
   activity: [],
   access: [],
 });
@@ -89,7 +91,7 @@ const emptyWorkspace = (): Workspace => ({
 async function loadWorkspace(view: VaultView | null): Promise<Workspace> {
   if (!api.real) return mockWorkspace();
   const personal = fromView(view ?? (await api.vaultGet()));
-  const ws = { ...emptyWorkspace(), ...personal };
+  const ws = { ...emptyWorkspace(), ...personal, groupPrefs: await api.groupPrefs().catch(() => []) };
   return applyTeamEntries(ws, await api.teamsList());
 }
 
@@ -215,7 +217,7 @@ export default function App() {
 
   /** Takes the personal vault from the core again, unless local edits are still on their way. */
   const refreshPersonal = useCallback(async () => {
-    const view = await api.vaultGet();
+    const [view, groupPrefs] = await Promise.all([api.vaultGet(), api.groupPrefs().catch(() => null)]);
     const base = wsRef.current;
     if (!base) return;
     const saved = lastSaved.current.get("personal");
@@ -232,6 +234,7 @@ export default function App() {
       tunnels: [...data.tunnels.map((t) => ({ ...t, state: running.get(t.id)?.state ?? t.state, connections: running.get(t.id)?.connections, error: running.get(t.id)?.error })), ...others(base.tunnels)],
       proxies: [...data.proxies, ...others(base.proxies)],
       groups: [...data.groups, ...others(base.groups)],
+      groupPrefs: groupPrefs ?? base.groupPrefs,
     };
     lastSaved.current.set("personal", JSON.stringify(dataOf(next, "personal")));
     wsRef.current = next;

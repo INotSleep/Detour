@@ -413,6 +413,7 @@ select.input { cursor: pointer; padding-right: 28px; appearance: none; backgroun
 .group-head:hover { color: var(--text-2); }
 .group-bar { display: flex; align-items: center; gap: 2px; }
 .host-row, .group-head { user-select: none; }
+.group-badge { display: inline-flex; align-items: center; gap: 3px; font-weight: 500; font-size: 11px; color: var(--muted); padding: 1px 6px; border: 1px solid var(--line); border-radius: 999px; margin-left: 4px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .group-bar .group-menu { opacity: 0; }
 .group-bar:hover .group-menu, .group-bar .group-menu.pressed { opacity: 1; }
 .group-head.draggable { cursor: grab; }
@@ -858,6 +859,8 @@ select.input { cursor: pointer; padding-right: 28px; appearance: none; backgroun
 .meta.details dd .saved-password { margin-top: 0; }
 .meta.details { font-size: 12.5px; gap: 8px 16px; }
 .meta.details dd { overflow-wrap: anywhere; }
+.from-groups { border-top: 1px solid var(--line); padding-top: 14px; }
+.from-group { display: block; color: var(--muted); font-size: 11.5px; }
 .own-login { border-top: 1px solid var(--line); padding-top: 14px; }
 .own-summary { display: flex; flex-direction: column; gap: 4px; min-width: 0; font-size: 12.5px; }
 .own-line { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 26px; }

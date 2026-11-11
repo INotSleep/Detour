@@ -114,6 +114,8 @@ enum Hosts {
         before: Option<String>,
         #[arg(long)]
         last: bool,
+        #[arg(long)]
+        mine: bool,
     },
     Import {
         aliases: Vec<String>,
@@ -147,16 +149,39 @@ enum Tunnels {
 
 #[derive(Subcommand)]
 enum Groups {
-    Ls,
-    Add { name: String },
-    Rename { group: String, name: String },
-    Rm { group: String },
+    Ls {
+        #[arg(long)]
+        mine: bool,
+    },
+    Add {
+        name: String,
+        #[arg(long)]
+        mine: bool,
+    },
+    Rename {
+        group: String,
+        name: String,
+        #[arg(long)]
+        mine: bool,
+    },
+    Rm {
+        group: String,
+        #[arg(long)]
+        mine: bool,
+    },
     Move {
         group: String,
         #[arg(long, value_name = "GROUP", conflicts_with = "last")]
         before: Option<String>,
         #[arg(long)]
         last: bool,
+        #[arg(long)]
+        mine: bool,
+    },
+    Set {
+        group: String,
+        #[command(flatten)]
+        opts: cmds::GroupOpts,
     },
 }
 
@@ -394,12 +419,18 @@ async fn run(command: Command, dir: &std::path::Path, team: Option<String>, json
         Command::Hosts(Hosts::Add { name, opts }) => cmds::host_add(&ctx, &name, opts).await?,
         Command::Hosts(Hosts::Edit { host, name, opts }) => cmds::host_edit(&ctx, &host, name, opts).await?,
         Command::Hosts(Hosts::Rm { host }) => cmds::host_rm(&ctx, &host).await?,
-        Command::Hosts(Hosts::Move { host, group, before, last: _ }) => cmds::host_move(&ctx, &host, group.as_deref(), before.as_deref()).await?,
-        Command::Groups(Groups::Ls) => cmds::groups(&ctx).await?,
-        Command::Groups(Groups::Add { name }) => cmds::group_add(&ctx, &name).await?,
-        Command::Groups(Groups::Rename { group, name }) => cmds::group_rename(&ctx, &group, &name).await?,
-        Command::Groups(Groups::Rm { group }) => cmds::group_rm(&ctx, &group).await?,
-        Command::Groups(Groups::Move { group, before, last: _ }) => cmds::group_move(&ctx, &group, before.as_deref()).await?,
+        Command::Hosts(Hosts::Move { host, group, before, last: _, mine: true }) => cmds::mine_host_move(&ctx, &host, group.as_deref(), before.as_deref()).await?,
+        Command::Hosts(Hosts::Move { host, group, before, last: _, mine: false }) => cmds::host_move(&ctx, &host, group.as_deref(), before.as_deref()).await?,
+        Command::Groups(Groups::Ls { mine }) => cmds::groups(&ctx, mine).await?,
+        Command::Groups(Groups::Add { name, mine: true }) => cmds::mine_group_add(&ctx, &name).await?,
+        Command::Groups(Groups::Add { name, mine: false }) => cmds::group_add(&ctx, &name).await?,
+        Command::Groups(Groups::Rename { group, name, mine: true }) => cmds::mine_group_rename(&ctx, &group, &name).await?,
+        Command::Groups(Groups::Rename { group, name, mine: false }) => cmds::group_rename(&ctx, &group, &name).await?,
+        Command::Groups(Groups::Rm { group, mine: true }) => cmds::mine_group_rm(&ctx, &group).await?,
+        Command::Groups(Groups::Rm { group, mine: false }) => cmds::group_rm(&ctx, &group).await?,
+        Command::Groups(Groups::Move { group, before, last: _, mine: true }) => cmds::mine_group_move(&ctx, &group, before.as_deref()).await?,
+        Command::Groups(Groups::Move { group, before, last: _, mine: false }) => cmds::group_move(&ctx, &group, before.as_deref()).await?,
+        Command::Groups(Groups::Set { group, opts }) => cmds::group_set(&ctx, &group, opts).await?,
         Command::Hosts(Hosts::Import { aliases, known_hosts }) => cmds::host_import(&ctx, aliases, known_hosts).await?,
         Command::Hosts(Hosts::Export { hosts, output, keys }) => cmds::host_export(&ctx, hosts, output, keys).await?,
         Command::Ssh { host } => return term::ssh(&ctx, &host).await,

@@ -175,6 +175,35 @@ export interface Group {
   access?: Level;
 }
 
+/** A person's own grouping of a team's hosts ("Mine"), kept in their personal vault. */
+export interface MyGroup {
+  id: string;
+  name: string;
+  /** Host ids, in order. */
+  hosts: string[];
+}
+export interface Layout {
+  groups: MyGroup[];
+}
+
+/** A saved proxy of some vault: this person's own or a team's. */
+export interface ProxyRef {
+  vault: string;
+  id: string;
+}
+
+/** This person's own settings of a group (`<vault>/team:<name>` or `<vault>/mine:<id>`), used before the host's. */
+export interface GroupPrefs {
+  key: string;
+  proxy?: ProxyRef | null;
+  user?: string | null;
+  /** A key here is a personal key. */
+  auth?: Auth | null;
+  hasPassword: boolean;
+  /** Transient: a password just typed in; empty removes the saved one. */
+  newPassword?: string;
+}
+
 /** A person's own login for a team host, kept in their personal vault. */
 export interface OwnLogin {
   user: string;
@@ -267,6 +296,9 @@ export interface Workspace {
   tunnels: Tunnel[];
   proxies: SavedProxy[];
   groups: Group[];
+  /** This person's own grouping of each team's hosts, by team id. */
+  layouts: Record<string, Layout>;
+  groupPrefs: GroupPrefs[];
   activity: ActivityItem[];
   access: AccessEntry[];
 }

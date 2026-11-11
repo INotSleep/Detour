@@ -16,7 +16,7 @@ import { fakeKeyMaterial, parsePrivateKey } from "./keys";
 import { mockSecrets } from "./mockData";
 import { mockFiles } from "./mockFiles";
 import { mockLocal } from "./mockLocal";
-import type { ActivityItem, Coll, Conflict, Group, Host, Level, OwnLogin, Problem, ProxyKind, ProxySecret, Role, SavedProxy, Snippet, SshKey, Tunnel } from "./types";
+import type { ActivityItem, Coll, Conflict, Group, GroupPrefs, Host, Layout, Level, OwnLogin, Problem, ProxyKind, ProxySecret, Role, SavedProxy, Snippet, SshKey, Tunnel } from "./types";
 import { demoSync } from "./mockSync";
 
 export interface CoreInfo {
@@ -206,6 +206,8 @@ export interface TeamView {
   conflicts: Conflict[];
   activity: Omit<ActivityItem, "vaultId">[];
   problems: Problem[];
+  /** This person's own grouping of the team's hosts. */
+  layout?: Layout | null;
   /** Team kept in Git: how mirroring it goes. */
   remote: { url: string; pending: boolean; error: CoreError | null; syncedAt: number | null } | null;
   /** The same for every member who read the same entries. */
@@ -807,6 +809,13 @@ export const api = {
   tunnelsStatus: (): Promise<{ key: string; state: "on" | "error"; connections: number; error: CoreError | null }[]> => invoke("tunnels_status"),
 
   /* proxies (detour-core only) */
+
+  /** This person's own grouping of a team's hosts; null drops it. */
+  layoutSet: (teamId: string, layout: Layout | null): Promise<TeamView> => invoke("layout_set", { id: teamId, layout }),
+  /** This person's own settings of groups. */
+  groupPrefs: (): Promise<GroupPrefs[]> => (real ? invoke("group_prefs") : Promise.resolve([])),
+  /** Sets (or with `drop` removes) this person's settings of a group; all of them back. */
+  groupPrefsSet: (prefs: GroupPrefs, drop = false): Promise<GroupPrefs[]> => invoke("group_prefs_set", { prefs, drop }),
 
   /** Tries a proxy as edited (typed secrets, else the saved ones): milliseconds to reach something through it. */
   proxyCheck: ({ vaultId, access: _a, ...proxy }: SavedProxy): Promise<{ ms: number }> => invoke("proxy_check", { vaultId, proxy }),

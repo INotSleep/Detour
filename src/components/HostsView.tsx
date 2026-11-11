@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronRight, CopyPlus, Download, Ellipsis, FolderOpen, FolderPlus, Pencil, Plus, Search, Server, SquareTerminal, Terminal, Trash2, TriangleAlert, Upload, X } from "lucide-react";
+import { ChevronRight, CopyPlus, Download, Ellipsis, FolderOpen, FolderPlus, KeyRound, Pencil, Plus, Search, Server, Settings2, Shield, SquareTerminal, Terminal, Trash2, TriangleAlert, Upload, X } from "lucide-react";
 import { api, errorText } from "../lib/api";
 import { copyText, formatAgo, uid, useStore } from "../lib/store";
 import { sshCommand } from "../lib/sshConfig";
 import type { Host } from "../lib/types";
 import { HostIcon, authLabel, groupLabel, isNoGroup } from "./common";
 import { atLeast, canManage, writable } from "../lib/teams";
-import { addGroup, listGroups, moveGroup, moveHost, removeGroup, renameGroup, type ListedGroup } from "../lib/groups";
+import { addGroup, fromGroups, layoutFrom, listGroups, listMine, mineAdd, mineMoveGroup, mineMoveHost, mineRemove, mineRename, moveGroup, moveHost, removeGroup, renameGroup, type ListedGroup } from "../lib/groups";
+import { GroupSettingsDialog, groupPrefsKey } from "./GroupSettings";
+import type { Layout } from "../lib/types";
 import { OwnLoginSection, SavedPassword } from "./HostLogin";
-import { Button, Checkbox, Empty, Field, IconButton, Menu, Modal, PageHeader } from "./ui";
+import { Button, Checkbox, Empty, Field, IconButton, Menu, Modal, PageHeader, Segmented } from "./ui";
 import { HostFields, applyDraft, draftFromHost, draftInvalid, emptyDraft, useHostDraft } from "./HostForm";
 import { ImportDialog } from "./ImportDialog";
 import { ExportDialog } from "./ExportDialog";
@@ -16,7 +18,7 @@ import { useT } from "../i18n";
 
 export function HostsView() {
   const t = useT();
-  const { ws, vault, update, toast, connect, openFiles, resolveConflicts } = useStore();
+  const { ws, vault, update, toast, connect, openFiles, resolveConflicts, applyTeamView } = useStore();
   const conflicted = new Set(vault.conflicts.filter((c) => c.coll === "host").map((c) => c.record));
   const canCreate = writable(vault);
   const [query, setQuery] = useState("");
@@ -33,7 +35,44 @@ export function HostsView() {
   // In a team, the shared order and groups are for those who manage it; hosts for their editors.
   const canEditGroups = vault.kind === "personal" || canManage(vault.myRole);
   const canMoveHost = (h: Host) => vault.kind === "personal" || atLeast(h.access, "edit");
-  const [naming, setNaming] = useState<{ from: string | null } | null>(null);
+  /** A group being named: a new one (`from` null), or one renamed; `mine` for a group of mine. */
+  const [naming, setNaming] = useState<{ from: string | null; mine?: string } | null>(null);
+  const [settingsOf, setSettingsOf] = useState<ListedGroup | null>(null);
+
+  // A team's hosts in its shared groups or in this person's own ones, as this device last showed.
+  const viewKey = `detour.groups.${vault.id}`;
+  const [mineView, setMineViewState] = useState(() => {
+    try {
+      return localStorage.getItem(viewKey) === "mine";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      setMineViewState(localStorage.getItem(viewKey) === "mine");
+    } catch {
+      /* private mode */
+    }
+  }, [viewKey]);
+  const mine = vault.kind === "team" && mineView;
+  const layout = ws.layouts[vault.id];
+
+  /** Saves this person's own grouping of the team's hosts. */
+  const saveLayout = (next: Layout) => {
+    update((w) => ({ ...w, layouts: { ...w.layouts, [vault.id]: next } }));
+    if (api.real) void api.layoutSet(vault.id, next).then(applyTeamView).catch((e) => toast({ text: t.common.saveFailed(errorText(e)), tone: "error" }));
+  };
+  const setMineView = (on: boolean) => {
+    setMineViewState(on);
+    try {
+      localStorage.setItem(viewKey, on ? "mine" : "shared");
+    } catch {
+      /* private mode: for this run */
+    }
+    // The first time, mine starts as the shared grouping.
+    if (on && !layout) saveLayout(layoutFrom(hosts, vaultGroups));
+  };
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -41,11 +80,22 @@ export function HostsView() {
     return hosts.filter((h) => [h.label, h.address, h.user, h.group, ...h.tags].some((s) => s.toLowerCase().includes(q)));
   }, [hosts, query]);
 
-  const groups = useMemo(() => listGroups(filtered, vaultGroups, !query.trim()), [filtered, vaultGroups, query]);
+  const groups = useMemo(
+    () => (mine && layout ? listMine(filtered, layout, vaultGroups, !query.trim()) : listGroups(filtered, vaultGroups, !query.trim())),
+    [filtered, vaultGroups, query, mine, layout],
+  );
+  const nameOfKey = (key: string | null) => (key === null ? null : groups.find((g) => g.key === key)?.name ?? key.slice(2));
   const drag = useDrag(groups, (d, drop) => {
-    if (d.kind === "host" && drop.kind === "host") update((w) => moveHost(w, vault.id, d.id, drop.group, drop.before));
-    if (d.kind === "group" && drop.kind === "group") update((w) => moveGroup(w, vault.id, d.name, drop.before));
+    if (mine && layout) {
+      if (d.kind === "host" && drop.kind === "host") saveLayout(mineMoveHost(layout, groups, d.id, drop.group, drop.before));
+      if (d.kind === "group" && drop.kind === "group") saveLayout(mineMoveGroup(layout, groups, d.key, drop.before));
+      return;
+    }
+    if (d.kind === "host" && drop.kind === "host") update((w) => moveHost(w, vault.id, d.id, nameOfKey(drop.group)!, drop.before));
+    if (d.kind === "group" && drop.kind === "group") update((w) => moveGroup(w, vault.id, d.name, nameOfKey(drop.before)));
   });
+  // Everyone arranges their own grouping; the shared one is for those who manage it.
+  const canArrange = mine || canEditGroups;
 
   const deleteGroup = (name: string) => {
     const before = ws;
@@ -104,6 +154,16 @@ export function HostsView() {
       <div className="split-main">
         <div className="page">
           <PageHeader title={t.hosts.title} count={hosts.length || undefined}>
+            {vault.kind === "team" && hosts.length > 0 && (
+              <Segmented
+                value={mine ? "mine" : "shared"}
+                onChange={(v) => setMineView(v === "mine")}
+                options={[
+                  { value: "shared", label: t.hosts.groups.shared },
+                  { value: "mine", label: t.hosts.groups.mine },
+                ]}
+              />
+            )}
             {hosts.length > 0 && (
               <label className="search">
                 <Search size={14} />
@@ -117,7 +177,7 @@ export function HostsView() {
                 items={[
                   ...(vault.kind === "personal" ? [{ label: t.hosts.importSsh, icon: Download, onSelect: () => setImporting(true) }] : []),
                   ...(hosts.length > 0 ? [{ label: t.hosts.exportSsh, icon: Upload, onSelect: () => setExporting(hosts.map((h) => h.id)) }] : []),
-                  ...(canCreate && canEditGroups ? [{ label: t.hosts.groups.add, icon: FolderPlus, onSelect: () => setNaming({ from: null }) }] : []),
+                  ...((canCreate && canEditGroups) || mine ? [{ label: t.hosts.groups.add, icon: FolderPlus, onSelect: () => setNaming({ from: null }) }] : []),
                 ]}
               />
             )}
@@ -140,32 +200,63 @@ export function HostsView() {
           )}
           {hosts.length > 0 && filtered.length === 0 && <Empty icon={Search} title={t.hosts.noMatch(query)} />}
 
-          {groups.map(({ name: group, hosts: list }) => {
-            const isCollapsed = collapsed.has(group) && !query;
-            const dropHere = drag.drop?.kind === "host" && drag.drop.group === group;
+          {groups.map((listed) => {
+            const { key, name: group, hosts: list } = listed;
+            const isCollapsed = collapsed.has(key) && !query;
+            const dropHere = drag.drop?.kind === "host" && drag.drop.group === key;
+            const prefs = group ? ws.groupPrefs.find((p) => p.key === groupPrefsKey(vault, listed)) : undefined;
+            const sharedProxy = !listed.mine && listed.record?.proxyId ? ws.proxies.find((p) => p.id === listed.record!.proxyId) : undefined;
+            const proxyName = prefs?.proxy ? ws.proxies.find((p) => p.id === prefs.proxy!.id && p.vaultId === prefs.proxy!.vault)?.name : sharedProxy?.name;
+            // Groups of mine are this person's to change; shared ones, a manager's.
+            const editable = !!group && (listed.mine ? true : !mine && canEditGroups);
             return (
               <section
-                className={`group ${drag.drop?.kind === "group" && drag.drop.before === group ? "drop-before" : ""} ${dropHere && (isCollapsed || !list.length) ? "drop-into" : ""}`}
-                key={group || "\0"}
-                data-group={group}
+                className={`group ${drag.drop?.kind === "group" && drag.drop.before === key ? "drop-before" : ""} ${dropHere && (isCollapsed || !list.length) ? "drop-into" : ""}`}
+                key={key}
+                data-group={key}
               >
                 <div className="group-bar">
                   <button
-                    className={`group-head ${group && canEditGroups ? "draggable" : ""}`}
-                    onClick={() => !drag.justDragged() && toggleGroup(group)}
-                    onPointerDown={(e) => group && canEditGroups && drag.start(e, { kind: "group", name: group, label: group })}
+                    className={`group-head ${group && canArrange ? "draggable" : ""}`}
+                    onClick={() => !drag.justDragged() && toggleGroup(key)}
+                    onPointerDown={(e) => group && canArrange && drag.start(e, { kind: "group", name: group, key, label: group })}
                     aria-expanded={!isCollapsed}
                   >
                     <ChevronRight size={14} className={`chev ${isCollapsed ? "" : "open"}`} />
                     {groupLabel(group)}
                     <span className="count">{list.length}</span>
+                    {proxyName && (
+                      <span className="group-badge" title={proxyName}>
+                        <Shield size={11} /> {proxyName}
+                      </span>
+                    )}
+                    {(prefs?.auth || prefs?.user) && (
+                      <span className="group-badge">
+                        <KeyRound size={11} /> {prefs.user ?? ""}
+                      </span>
+                    )}
                   </button>
-                  {group && canEditGroups && (
+                  {group && (
                     <Menu
                       trigger={(open, isOpen) => <IconButton icon={Ellipsis} label={t.hosts.groups.menu} size={13} className={`group-menu ${isOpen ? "pressed" : ""}`} onClick={open} />}
                       items={[
-                        { label: t.hosts.groups.rename, icon: Pencil, onSelect: () => setNaming({ from: group }) },
-                        { label: t.common.delete, icon: Trash2, danger: true, onSelect: () => deleteGroup(group) },
+                        { label: t.hosts.groups.settings, icon: Settings2, onSelect: () => setSettingsOf(listed) },
+                        ...(editable
+                          ? [
+                              { label: t.hosts.groups.rename, icon: Pencil, onSelect: () => setNaming({ from: group, mine: listed.mine?.id }) },
+                              {
+                                label: t.common.delete,
+                                icon: Trash2,
+                                danger: true,
+                                onSelect: () => {
+                                  if (!listed.mine || !layout) return deleteGroup(group);
+                                  const before = layout;
+                                  saveLayout(mineRemove(layout, listed.mine.id));
+                                  toast({ text: t.hosts.groups.removedMine(group), action: { label: t.hosts.restore, run: () => saveLayout(before) } });
+                                },
+                              },
+                            ]
+                          : []),
                       ]}
                     />
                   )}
@@ -180,7 +271,7 @@ export function HostsView() {
                         tabIndex={0}
                         data-host={h.id}
                         className={`host-row ${h.id === selectedId ? "selected" : ""} ${drag.dragging === h.id ? "dragged" : ""} ${dropHere && drag.drop?.kind === "host" && drag.drop.before === h.id ? "drop-before" : ""}`}
-                        onPointerDown={(e) => canMoveHost(h) && !query && drag.start(e, { kind: "host", id: h.id, label: h.label })}
+                        onPointerDown={(e) => (mine || canMoveHost(h)) && !query && drag.start(e, { kind: "host", id: h.id, label: h.label })}
                         onClick={() => !drag.justDragged() && setSelectedId(h.id === selectedId ? null : h.id)}
                         onDoubleClick={() => connect(h.id)}
                         onKeyDown={(e) => {
@@ -250,13 +341,15 @@ export function HostsView() {
       )}
 
       {creating && <NewHostDialog groups={groupNames} onClose={() => setCreating(false)} onCreated={(h) => setSelectedId(h.id)} />}
+      {settingsOf && <GroupSettingsDialog group={settingsOf} mine={mine} onClose={() => setSettingsOf(null)} />}
       {naming && (
         <GroupNameDialog
           initial={naming.from ?? ""}
-          taken={groupNames.filter((g) => g !== naming.from)}
+          taken={(mine && layout ? layout.groups.map((g) => g.name) : groupNames).filter((g) => g !== naming.from)}
           onClose={() => setNaming(null)}
           onSave={(name) => {
-            if (naming.from === null) update((w) => addGroup(w, vault.id, name));
+            if (mine && layout) saveLayout(naming.mine ? mineRename(layout, naming.mine, name) : mineAdd(layout, name));
+            else if (naming.from === null) update((w) => addGroup(w, vault.id, name));
             else if (name !== naming.from) update((w) => renameGroup(w, vault.id, naming.from!, name));
             toast({ text: naming.from === null ? t.hosts.groups.added(name) : t.hosts.groups.renamed(name), tone: "success" });
             setNaming(null);
@@ -272,8 +365,8 @@ export function HostsView() {
 
 /* ---------- dragging hosts and groups ---------- */
 
-type Dragged = { kind: "host"; id: string; label: string } | { kind: "group"; name: string; label: string };
-/** Where a drag lands: before a host of a group (null: last), or before a group (null: last). */
+type Dragged = { kind: "host"; id: string; label: string } | { kind: "group"; name: string; key: string; label: string };
+/** Where a drag lands: before a host of a group (by key; null: last), or before a group (by key; null: last). */
 type Drop = { kind: "host"; group: string; before: string | null } | { kind: "group"; before: string | null };
 
 /**
@@ -296,16 +389,16 @@ function useDrag(groups: ListedGroup[], onDrop: (d: Dragged, drop: Drop) => void
     const list = latest.current.groups;
     if (what.kind === "group") {
       const rect = section.getBoundingClientRect();
-      const i = list.findIndex((g) => g.name === group);
-      const next = (k: number) => list.slice(k).find((g) => g.name && g.name !== what.name)?.name ?? null;
+      const i = list.findIndex((g) => g.key === group);
+      const next = (k: number) => list.slice(k).find((g) => g.name && g.key !== what.key)?.key ?? null;
       // Hosts without a group stay last.
-      if (!group) return { kind: "group", before: null };
+      if (!list[i]?.name) return { kind: "group", before: null };
       return { kind: "group", before: y < rect.top + rect.height / 2 ? next(i) : next(i + 1) };
     }
     const row = el?.closest<HTMLElement>("[data-host]");
     if (row) {
       const rect = row.getBoundingClientRect();
-      const hosts = list.find((g) => g.name === group)?.hosts ?? [];
+      const hosts = list.find((g) => g.key === group)?.hosts ?? [];
       const i = hosts.findIndex((h) => h.id === row.dataset.host);
       const after = hosts.slice(i + 1).find((h) => h.id !== what.id)?.id ?? null;
       const here = row.dataset.host === what.id ? after : row.dataset.host!;
@@ -355,7 +448,7 @@ function useDrag(groups: ListedGroup[], onDrop: (d: Dragged, drop: Drop) => void
       press.current = { what, x: e.clientX, y: e.clientY };
     },
     drop: state?.drop ?? null,
-    dragging: state?.what.kind === "host" ? state.what.id : state?.what.kind === "group" ? `group:${state.what.name}` : null,
+    dragging: state?.what.kind === "host" ? state.what.id : state?.what.kind === "group" ? state.what.key : null,
     /** A click right after a drag is the drag's end. */
     justDragged: () => Date.now() - dragged.current < 250,
     ghost: state ? (
@@ -477,6 +570,7 @@ function HostPanel({ host, groups, onClose, onDelete, onCopy }: { host: Host; gr
         )}
       </form>
 
+      {canEdit && <FromGroupsSection host={host} />}
       {team && <OwnLoginSection host={host} />}
 
       <div className="grow" />
@@ -499,34 +593,100 @@ function HostPanel({ host, groups, onClose, onDelete, onCopy }: { host: Host; gr
 }
 
 /** What a member who may not edit the host sees of it. */
+/** What a host takes from its groups when connecting, as text. */
+function useFromGroups(host: Host) {
+  const t = useT();
+  const { ws } = useStore();
+  const from = fromGroups(ws, host);
+  const proxy = from.proxy && ws.proxies.find((x) => x.id === from.proxy!.id && x.vaultId === from.proxy!.vault);
+  const login = from.login?.prefs;
+  const auth = login?.auth;
+  return {
+    from,
+    proxyText: proxy ? `${proxy.name} (${t.proxies.types[proxy.kind.type]})` : from.proxy ? "?" : null,
+    user: login?.user ?? null,
+    authText: auth ? (auth.type === "key" ? ws.keys.find((k) => k.id === auth.keyId)?.name ?? t.common.key : auth.type === "agent" ? "ssh-agent" : t.common.password) : null,
+    note: (group: string) => <span className="from-group">{t.hosts.details.fromGroup(group)}</span>,
+  };
+}
+
+/** Under the form of a host: what its groups put over it when connecting. */
+function FromGroupsSection({ host }: { host: Host }) {
+  const t = useT();
+  const { from, proxyText, user, authText, note } = useFromGroups(host);
+  if (!proxyText && !user && !authText) return null;
+  return (
+    <section className="from-groups">
+      <h3 className="section-title">{t.hosts.details.fromGroups}</h3>
+      <dl className="meta details">
+        {proxyText && (
+          <>
+            <dt>{t.hosts.details.via}</dt>
+            <dd>{proxyText}{note(from.proxy!.group)}</dd>
+          </>
+        )}
+        {user && (
+          <>
+            <dt>{t.hosts.form.user}</dt>
+            <dd><span className="mono">{user}</span>{note(from.login!.group)}</dd>
+          </>
+        )}
+        {authText && (
+          <>
+            <dt>{t.hosts.form.auth}</dt>
+            <dd>{authText}{note(from.login!.group)}</dd>
+          </>
+        )}
+      </dl>
+    </section>
+  );
+}
+
 function HostDetails({ host, shared, keyName }: { host: Host; shared: boolean; keyName?: string }) {
   const t = useT();
   const { ws, update } = useStore();
   // Forwarding is each person's own choice, so it can be changed without edit access.
   const setForward = (forwardAgent: boolean) => update((w) => ({ ...w, hosts: w.hosts.map((h) => (h.id === host.id ? { ...h, forwardAgent } : h)) }));
   const p = host.proxy;
+  const { from, proxyText, user: groupUser, authText: loginAuth, note: fromNote } = useFromGroups(host);
+  const login = groupUser ? { user: groupUser } : null;
   const saved = host.proxyId ? ws.proxies.find((x) => x.id === host.proxyId) : undefined;
-  const via = saved
-    ? `${saved.name} (${t.proxies.types[saved.kind.type]})`
-    : p?.type === "jump"
-      ? ws.hosts.find((h) => h.id === p.hostId)?.label ?? "?"
-      : p
-        ? `${p.type === "socks5" ? "SOCKS5" : "HTTP"} ${p.address}:${p.port}`
-        : null;
+  const via =
+    proxyText ??
+    (saved
+      ? `${saved.name} (${t.proxies.types[saved.kind.type]})`
+      : p?.type === "jump"
+        ? ws.hosts.find((h) => h.id === p.hostId)?.label ?? "?"
+        : p
+          ? `${p.type === "socks5" ? "SOCKS5" : "HTTP"} ${p.address}:${p.port}`
+          : null);
   return (
     <>
       <dl className="meta details">
         <dt>{t.hosts.form.address}</dt>
         <dd className="mono">{host.address}{host.port !== 22 && `:${host.port}`}</dd>
         <dt>{t.hosts.form.user}</dt>
-        <dd className="mono">{host.user}</dd>
-        {shared && (
+        <dd>
+          <span className="mono">{login?.user ?? host.user}</span>
+          {login?.user && fromNote(from.login!.group)}
+        </dd>
+        {loginAuth ? (
           <>
             <dt>{t.hosts.form.auth}</dt>
-            <dd>{authLabel(host, keyName)}</dd>
+            <dd>
+              {loginAuth}
+              {fromNote(from.login!.group)}
+            </dd>
           </>
+        ) : (
+          shared && (
+            <>
+              <dt>{t.hosts.form.auth}</dt>
+              <dd>{authLabel(host, keyName)}</dd>
+            </>
+          )
         )}
-        {shared && host.auth.type === "password" && host.hasPassword && (
+        {!loginAuth && shared && host.auth.type === "password" && host.hasPassword && (
           <>
             <dt>{t.common.password}</dt>
             <dd><SavedPassword host={host} /></dd>
@@ -535,7 +695,10 @@ function HostDetails({ host, shared, keyName }: { host: Host; shared: boolean; k
         {via && (
           <>
             <dt>{t.hosts.details.via}</dt>
-            <dd className="mono">{via}</dd>
+            <dd>
+              <span className="mono">{via}</span>
+              {from.proxy && fromNote(from.proxy.group)}
+            </dd>
           </>
         )}
         <dt>{t.hosts.form.group}</dt>

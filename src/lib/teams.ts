@@ -63,8 +63,10 @@ export function applyTeamView(ws: Workspace, view: TeamView, withData = true): W
   const vaults = exists ? ws.vaults.map((v) => (v.id === id ? teamVault(view) : v)) : [...ws.vaults, teamVault(view)];
   const me = view.members.find((m) => m.isYou)?.id;
   const mine = new Map(view.access.filter((a) => a.member === me).map((a) => [a.record, a.level]));
+  const { [id]: _old, ...layouts } = ws.layouts;
   const next: Workspace = {
     ...ws,
+    layouts: view.layout ? { ...layouts, [id]: view.layout } : layouts,
     vaults,
     members: [...others(ws.members), ...view.members.map((m) => ({ ...m, vaultId: id }))],
     activity: [...others(ws.activity), ...view.activity.map((a) => ({ ...a, vaultId: id }) as Workspace["activity"][number])],
@@ -111,6 +113,8 @@ export function removeVault(ws: Workspace, id: string): Workspace {
     tunnels: others(ws.tunnels),
     proxies: others(ws.proxies),
     groups: others(ws.groups),
+    layouts: Object.fromEntries(Object.entries(ws.layouts).filter(([k]) => k !== id)),
+    groupPrefs: ws.groupPrefs.filter((p) => !p.key.startsWith(`${id}/`)),
     activity: others(ws.activity),
     access: others(ws.access),
   };
