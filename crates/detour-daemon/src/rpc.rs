@@ -579,9 +579,9 @@ pub(crate) async fn dispatch(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value
             let a = args!(method, p, { vault_id: String, host_ids: Option<Vec<String>>, key_dir: Option<String> });
             let s = s!();
             let personal = s.view().map_err(err)?;
-            let (hosts, mut keys) = if a.vault_id == PERSONAL { (personal.hosts, personal.keys.clone()) } else {
+            let (hosts, mut keys, proxies) = if a.vault_id == PERSONAL { (personal.hosts, personal.keys.clone(), personal.proxies) } else {
                 let team = s.team_view(&a.vault_id).map_err(err)?;
-                (team.data.hosts, team.data.keys)
+                (team.data.hosts, team.data.keys, team.data.proxies)
             };
             // An own login for a team host uses a personal key.
             if a.vault_id != PERSONAL {
@@ -600,7 +600,7 @@ pub(crate) async fn dispatch(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value
                     paths.insert(k.id.clone(), path.display().to_string());
                 }
             }
-            let config = detour_core::export::ssh_config(&picked, &hosts, &keys, &paths);
+            let config = detour_core::export::ssh_config(&picked, &hosts, &keys, &proxies, &paths);
             Ok(json!({ "config": config, "keyFiles": paths.values().collect::<Vec<_>>() }))
         }
 

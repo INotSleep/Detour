@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use crate::model::{Auth, HostView, KeyView, Proxy};
+use crate::model::{Auth, HostView, KeyView, Proxy, ProxyKind, ProxyView};
 
 /// A name ssh takes after `Host`: no spaces, commas or patterns.
 fn alias(label: &str) -> String {
@@ -83,7 +83,7 @@ pub fn with_jumps(hosts: &[HostView], all: &[HostView]) -> Vec<HostView> {
 
 /// The hosts as `~/.ssh/config` entries. A key file is where `key_paths` says (by key id),
 /// otherwise `~/.ssh/<key name>`. Passwords can't go into an ssh config.
-pub fn ssh_config(hosts: &[HostView], all: &[HostView], keys: &[KeyView], key_paths: &HashMap<String, String>) -> String {
+pub fn ssh_config(hosts: &[HostView], all: &[HostView], keys: &[KeyView], proxies: &[ProxyView], key_paths: &HashMap<String, String>) -> String {
     let mut list = with_jumps(hosts, all);
     // Hosts without a group first, then group by group, so a group's comment heads only its hosts.
     list.sort_by(|a, b| match (a.group.is_empty(), b.group.is_empty()) {
@@ -128,7 +128,21 @@ pub fn ssh_config(hosts: &[HostView], all: &[HostView], keys: &[KeyView], key_pa
             lines.push(format!("  IdentityFile {}", arg(&path)));
             lines.push("  IdentitiesOnly yes".into());
         }
-        match &h.proxy {
+        let saved = h.proxy_id.as_ref().and_then(|id| proxies.iter().find(|p| &p.id == id));
+        let route = match saved {
+            Some(p) => match &p.kind {
+                ProxyKind::Socks5 { address, port, user } => Some(Proxy::Socks5 { address: address.clone(), port: *port, user: user.clone() }),
+                ProxyKind::Http { address, port, user } => Some(Proxy::Http { address: address.clone(), port: *port, user: user.clone() }),
+                // OpenSSH has no way through these.
+                ProxyKind::Wireguard { .. } | ProxyKind::Vless { .. } => {
+                    let kind = if matches!(p.kind, ProxyKind::Wireguard { .. }) { "WireGuard" } else { "VLESS" };
+                    lines.push(format!("  # Detour reaches it through {kind} proxy \"{}\"", p.name));
+                    None
+                }
+            },
+            None => h.proxy.clone(),
+        };
+        match &route {
             Some(Proxy::Jump { host_id }) => {
                 if let Some(n) = names.get(host_id) {
                     lines.push(format!("  ProxyJump {n}"));
@@ -194,11 +208,25 @@ mod tests {
         d.port = 2222;
         let w = host("www", "web", "", Auth::Password, Some(Proxy::Http { address: "proxy".into(), port: 3128, user: "me".into() }));
         let all = vec![b.clone(), d.clone(), w.clone()];
-        let text = ssh_config(&[d.clone(), w], &all, &[key], &HashMap::new());
+        let text = ssh_config(&[d.clone(), w], &all, &[key], &[], &HashMap::new());
         assert_eq!(
             text,
             "Host web\n  HostName 10.0.0.3\n  User u\n  ProxyCommand nc -X connect -x proxy:3128 -P me %h %p\n\n# Data\nHost db-internal\n  HostName 10.0.0.2\n  User u\n  Port 2222\n  IdentityFile ~/.ssh/Work-key\n  IdentitiesOnly yes\n  ProxyJump bastion\n  ForwardAgent yes\n\n# Edge\nHost bastion\n  HostName 10.0.0.1\n  User u\n"
         );
         assert_eq!(ssh_command(&d, &all), "ssh -A -J u@10.0.0.1 -p 2222 u@10.0.0.2");
+    }
+
+    #[test]
+    fn saved_proxies_go_out_as_openssh_can_use_them() {
+        let proxy = |id: &str, kind: serde_json::Value| -> ProxyView { serde_json::from_value(serde_json::json!({ "id": id, "name": id, "kind": kind })).unwrap() };
+        let socks = proxy("office", serde_json::json!({ "type": "socks5", "address": "10.9.9.9", "port": 1080 }));
+        let wg = proxy("vpn", serde_json::json!({ "type": "wireguard", "endpoint": "vpn.example:51820", "publicKey": "k" }));
+        let mut a = host("a", "a", "", Auth::Agent, None);
+        a.proxy_id = Some("office".into());
+        let mut b = host("bb", "b", "", Auth::Agent, None);
+        b.proxy_id = Some("vpn".into());
+        let text = ssh_config(&[a.clone(), b.clone()], &[a, b], &[], &[socks, wg], &HashMap::new());
+        assert!(text.contains("Host a\n  HostName 10.0.0.1\n  User u\n  ProxyCommand nc -X 5 -x 10.9.9.9:1080 %h %p"), "{text}");
+        assert!(text.contains("Host b\n  HostName 10.0.0.2\n  User u\n  # Detour reaches it through WireGuard proxy \"vpn\""), "{text}");
     }
 }

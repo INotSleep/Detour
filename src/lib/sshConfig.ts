@@ -1,4 +1,4 @@
-import type { Auth, Host, SshKey } from "./types";
+import type { Auth, Host, SavedProxy, SshKey } from "./types";
 
 /** A name ssh takes after `Host`: no spaces, commas or patterns. */
 const alias = (label: string) => label.trim().replace(/[\s,*?!"]+/g, "-") || "host";
@@ -34,7 +34,7 @@ export function withJumps(hosts: Host[], all: Host[]): Host[] {
  * The hosts as `~/.ssh/config` entries. A key file is where `keyPaths` says (by key id),
  * otherwise `~/.ssh/<key name>`. Passwords can't go into an ssh config.
  */
-export function sshConfig(hosts: Host[], all: Host[], keys: SshKey[], keyPaths: Record<string, string> = {}): string {
+export function sshConfig(hosts: Host[], all: Host[], keys: SshKey[], proxies: SavedProxy[] = [], keyPaths: Record<string, string> = {}): string {
   // Hosts without a group first, then group by group, so a group's comment heads only its hosts.
   const list = withJumps(hosts, all).sort((a, b) => (a.group === b.group ? 0 : !a.group ? -1 : !b.group ? 1 : a.group.localeCompare(b.group)));
   const names = new Map<string, string>();
@@ -60,7 +60,10 @@ export function sshConfig(hosts: Host[], all: Host[], keys: SshKey[], keyPaths: 
       const key = keys.find((k) => k.id === auth.keyId);
       if (key) lines.push(`  IdentityFile ${arg(keyPaths[key.id] ?? `~/.ssh/${keyFileName(key.name)}`)}`, "  IdentitiesOnly yes");
     }
-    const p = h.proxy;
+    const saved = h.proxyId ? proxies.find((x) => x.id === h.proxyId) : undefined;
+    // OpenSSH has no way through WireGuard or VLESS.
+    if (saved && (saved.kind.type === "wireguard" || saved.kind.type === "vless")) lines.push(`  # Detour reaches it through ${saved.kind.type === "wireguard" ? "WireGuard" : "VLESS"} proxy "${saved.name}"`);
+    const p = saved ? (saved.kind.type === "socks5" || saved.kind.type === "http" ? saved.kind : null) : h.proxy;
     if (p?.type === "jump") lines.push(`  ProxyJump ${names.get(p.hostId)}`);
     if (p?.type === "socks5") lines.push(`  ProxyCommand nc -X 5 -x ${p.address}:${p.port} %h %p`);
     if (p?.type === "http") lines.push(`  ProxyCommand nc -X connect -x ${p.address}:${p.port}${p.user ? ` -P ${p.user}` : ""} %h %p`);
