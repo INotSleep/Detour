@@ -2,7 +2,11 @@
 
 pub mod link;
 mod plain;
+mod reality;
+mod tls;
+pub mod vless;
 pub mod wireguard;
+mod xhttp;
 
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
@@ -36,7 +40,7 @@ pub async fn connect(p: &ProxyEntry, target: &str, port: u16) -> Result<Stream> 
         ProxyKind::Socks5 { address, port: pp, user } => Ok(Box::new(socks5(address, *pp, user, p.password.as_deref(), target, port).await?)),
         ProxyKind::Http { address, port: pp, user } => Ok(Box::new(http_connect(address, *pp, user, p.password.as_deref(), target, port).await?)),
         ProxyKind::Wireguard { .. } => wireguard::connect(p, target, port).await,
-        ProxyKind::Vless { .. } => Err(failed("unsupported:vless")),
+        ProxyKind::Vless { .. } => vless::connect(p, target, port).await,
     }
 }
 
