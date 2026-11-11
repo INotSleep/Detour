@@ -24,7 +24,7 @@ encrypted end to end and signed on every change.
 - **Terminal.** Tabs, split panes, search, themes. Output that comes without colours gets them: the prompt, paths, addresses, sizes and status words. Copy and paste like your system terminal, or like Termius.
 - **SFTP.** Files and whole folders with progress and cancel, permissions, a terminal in the current folder. A failed transfer never leaves a half-written file.
 - **Tunnels.** Local (`-L`), remote (`-R`) and SOCKS (`-D`) forwarding.
-- **Proxies.** Chains of jump hosts (`-J`), SOCKS5 and HTTP proxies, with logins.
+- **Proxies.** Chains of jump hosts (`-J`), and saved proxies hosts go through: SOCKS5, HTTP, WireGuard (only for Detour, no system VPN) and VLESS over TCP or XHTTP with TLS, REALITY and Vision. From a `vless://` link or a `.conf` file.
 - **Import.** `~/.ssh/config` with `Include`, patterns and `ProxyJump`, keys and `known_hosts`.
 - **All your devices.** Your vault syncs between them. A new device joins with a one-time code.
 - **Teams.** Access per host, key and snippet, per person.
