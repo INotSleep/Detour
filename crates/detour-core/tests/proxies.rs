@@ -352,3 +352,279 @@ fn proxies_written_into_hosts_become_saved_ones() {
     assert_eq!(v.hosts[0].proxy, Some(socks));
     assert!(matches!(s.connect_request("a", None, None).unwrap().route, Route::Proxy(p) if p.id == socks_id && p.password.as_deref() == Some("pw")));
 }
+
+/* ---------- WireGuard ---------- */
+
+/// A WireGuard peer for tests: boringtun and smoltcp listening on 10.7.0.1:22 inside the
+/// tunnel, every connection there forwarded to `to` on this computer.
+mod wg {
+    use std::collections::VecDeque;
+    use std::net::SocketAddr;
+
+    use base64::Engine;
+    use boringtun::noise::{Tunn, TunnResult};
+    use boringtun::x25519::{PublicKey, StaticSecret};
+    use smoltcp::iface::{Config, Interface, SocketHandle, SocketSet};
+    use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
+    use smoltcp::socket::tcp;
+    use smoltcp::time::Instant;
+    use smoltcp::wire::{HardwareAddress, IpAddress, IpCidr, Ipv4Address};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpStream, UdpSocket};
+    use tokio::sync::mpsc;
+
+    #[derive(Default)]
+    struct Packets {
+        rx: VecDeque<Vec<u8>>,
+        tx: VecDeque<Vec<u8>>,
+    }
+    struct Rx(Vec<u8>);
+    struct Tx<'a>(&'a mut VecDeque<Vec<u8>>);
+    impl RxToken for Rx {
+        fn consume<R, F: FnOnce(&[u8]) -> R>(self, f: F) -> R {
+            f(&self.0)
+        }
+    }
+    impl TxToken for Tx<'_> {
+        fn consume<R, F: FnOnce(&mut [u8]) -> R>(self, len: usize, f: F) -> R {
+            let mut p = vec![0; len];
+            let r = f(&mut p);
+            self.0.push_back(p);
+            r
+        }
+    }
+    impl Device for Packets {
+        type RxToken<'a> = Rx;
+        type TxToken<'a> = Tx<'a>;
+        fn receive(&mut self, _: Instant) -> Option<(Rx, Tx<'_>)> {
+            let p = self.rx.pop_front()?;
+            Some((Rx(p), Tx(&mut self.tx)))
+        }
+        fn transmit(&mut self, _: Instant) -> Option<Tx<'_>> {
+            Some(Tx(&mut self.tx))
+        }
+        fn capabilities(&self) -> DeviceCapabilities {
+            let mut c = DeviceCapabilities::default();
+            c.medium = Medium::Ip;
+            c.max_transmission_unit = 1420;
+            c
+        }
+    }
+
+    pub struct Peer {
+        pub endpoint: String,
+        pub server_public: String,
+        pub client_private: String,
+    }
+
+    pub fn b64(k: &[u8]) -> String {
+        base64::engine::general_purpose::STANDARD.encode(k)
+    }
+
+    pub fn secret() -> StaticSecret {
+        StaticSecret::from(rand::random::<[u8; 32]>())
+    }
+
+    struct Fwd {
+        socket: SocketHandle,
+        to_tcp: Option<mpsc::UnboundedSender<Vec<u8>>>,
+        from_tcp: Option<mpsc::UnboundedReceiver<Vec<u8>>>,
+        pending: VecDeque<u8>,
+    }
+
+    pub async fn peer(to: SocketAddr) -> Peer {
+        let server = secret();
+        let client = secret();
+        let server_public = b64(PublicKey::from(&server).as_bytes());
+        let client_private = b64(&client.to_bytes());
+        let udp = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = udp.local_addr().unwrap().to_string();
+        let mut tunn = Tunn::new(server, PublicKey::from(&client), None, None, 7, None);
+        tokio::spawn(async move {
+            let mut dev = Packets::default();
+            let mut iface = Interface::new(Config::new(HardwareAddress::Ip), &mut dev, Instant::now());
+            iface.update_ip_addrs(|a| a.push(IpCidr::new(IpAddress::v4(10, 7, 0, 1), 24)).unwrap());
+            let _ = iface.routes_mut().add_default_ipv4_route(Ipv4Address::new(10, 7, 0, 1));
+            let mut sockets = SocketSet::new(vec![]);
+            let mut fwds: Vec<Fwd> = vec![];
+            let mut buf = vec![0u8; 65600];
+            let mut dg = vec![0u8; 65600];
+            let mut client: Option<SocketAddr> = None;
+            loop {
+                // Always one socket listening for the next connection.
+                if !fwds.iter().any(|f| sockets.get::<tcp::Socket>(f.socket).state() == tcp::State::Listen) {
+                    let mut s = tcp::Socket::new(tcp::SocketBuffer::new(vec![0; 65536]), tcp::SocketBuffer::new(vec![0; 65536]));
+                    s.listen(22).unwrap();
+                    fwds.push(Fwd { socket: sockets.add(s), to_tcp: None, from_tcp: None, pending: VecDeque::new() });
+                }
+                let first = tokio::select! {
+                    r = udp.recv_from(&mut dg) => r.ok(),
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(5)) => None,
+                };
+                let mut next = first;
+                while let Some((n, from)) = next {
+                    client = Some(from);
+                    match tunn.decapsulate(Some(from.ip()), &dg[..n], &mut buf) {
+                        TunnResult::WriteToNetwork(p) => {
+                            let _ = udp.send_to(p, from).await;
+                            while let TunnResult::WriteToNetwork(p) = tunn.decapsulate(None, &[], &mut buf) {
+                                let _ = udp.send_to(p, from).await;
+                            }
+                        }
+                        TunnResult::WriteToTunnelV4(p, _) | TunnResult::WriteToTunnelV6(p, _) => dev.rx.push_back(p.to_vec()),
+                        _ => {}
+                    }
+                    next = udp.try_recv_from(&mut dg).ok();
+                }
+                iface.poll(Instant::now(), &mut dev, &mut sockets);
+                for f in &mut fwds {
+                    let s = sockets.get_mut::<tcp::Socket>(f.socket);
+                    if f.to_tcp.is_none() && s.state() == tcp::State::Established {
+                        let tcp = TcpStream::connect(to).await.unwrap();
+                        let (mut r, mut w) = tcp.into_split();
+                        let (to_tx, mut to_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+                        let (from_tx, from_rx) = mpsc::unbounded_channel();
+                        tokio::spawn(async move {
+                            while let Some(d) = to_rx.recv().await {
+                                if w.write_all(&d).await.is_err() {
+                                    break;
+                                }
+                            }
+                        });
+                        tokio::spawn(async move {
+                            let mut b = vec![0u8; 16384];
+                            while let Ok(n) = r.read(&mut b).await {
+                                if n == 0 || from_tx.send(b[..n].to_vec()).is_err() {
+                                    break;
+                                }
+                            }
+                        });
+                        f.to_tcp = Some(to_tx);
+                        f.from_tcp = Some(from_rx);
+                    }
+                    if let Some(to_tcp) = &f.to_tcp {
+                        let mut chunk = [0u8; 16384];
+                        while s.can_recv() {
+                            let n = s.recv_slice(&mut chunk).unwrap_or(0);
+                            if n == 0 {
+                                break;
+                            }
+                            let _ = to_tcp.send(chunk[..n].to_vec());
+                        }
+                    }
+                    if let Some(rx) = &mut f.from_tcp {
+                        while let Ok(d) = rx.try_recv() {
+                            f.pending.extend(d);
+                        }
+                    }
+                    while s.can_send() && !f.pending.is_empty() {
+                        let (a, _) = f.pending.as_slices();
+                        let n = s.send_slice(a).unwrap_or(0);
+                        if n == 0 {
+                            break;
+                        }
+                        f.pending.drain(..n);
+                    }
+                }
+                iface.poll(Instant::now(), &mut dev, &mut sockets);
+                while let Some(p) = dev.tx.pop_front() {
+                    if let (TunnResult::WriteToNetwork(w), Some(c)) = (tunn.encapsulate(&p, &mut buf), client) {
+                        let _ = udp.send_to(w, c).await;
+                    }
+                }
+                if let (TunnResult::WriteToNetwork(p), Some(c)) = (tunn.update_timers(&mut buf), client) {
+                    let _ = udp.send_to(p, c).await;
+                }
+            }
+        });
+        Peer { endpoint, server_public, client_private }
+    }
+}
+
+fn wireguard(p: &wg::Peer, private: &str) -> ProxyEntry {
+    let kind = ProxyKind::Wireguard { endpoint: p.endpoint.clone(), public_key: p.server_public.clone(), addresses: vec!["10.7.0.2/32".into()], dns: vec![], mtu: None, allowed_ips: vec![], keepalive: None };
+    ProxyEntry { id: "wg".into(), name: "wg".into(), kind, password: None, private_key: Some(private.into()), preshared_key: None, uuid: None }
+}
+
+#[tokio::test]
+async fn through_wireguard() {
+    let target = sshd().await;
+    let peer = wg::peer(([127, 0, 0, 1], target.port).into()).await;
+    let proxy = wireguard(&peer, &peer.client_private);
+    let ms = detour_core::proxy::check(&proxy).await.unwrap();
+    assert!(ms < 5000, "{ms}");
+
+    // The host's address is the server's in the tunnel; it forwards to the SSH server.
+    let mut req = request(&target, true, Route::Proxy(Box::new(proxy.clone())));
+    req.host.address = "10.7.0.1".into();
+    req.host.port = 22;
+    req.known = Some(KnownHost { endpoint: "10.7.0.1:22".into(), ..target.known.clone() });
+    works(&req).await.unwrap();
+
+    // Megabytes both ways, through SSH through the tunnel, to an echo server.
+    let echo = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let echo_port = echo.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((c, _)) = echo.accept().await {
+            tokio::spawn(async move {
+                let (mut r, mut w) = c.into_split();
+                let _ = tokio::io::copy(&mut r, &mut w).await;
+            });
+        }
+    });
+    let (session, _) = ssh::session(&req).await.unwrap();
+    let ch = session.connect_tcp("127.0.0.1", echo_port, "127.0.0.1:0".parse().unwrap()).await.unwrap();
+    let (mut r, mut w) = tokio::io::split(ch);
+    let data: Vec<u8> = (0..3_000_000u32).map(|i| (i * 7 % 251) as u8).collect();
+    let sent = data.clone();
+    let started = std::time::Instant::now();
+    let writer = tokio::spawn(async move { w.write_all(&sent).await.unwrap() });
+    let mut back = vec![0u8; data.len()];
+    tokio::time::timeout(std::time::Duration::from_secs(60), r.read_exact(&mut back)).await.unwrap().unwrap();
+    writer.await.unwrap();
+    assert!(back == data, "the bytes came back changed");
+    eprintln!("3 MB each way through WireGuard in {:?}", started.elapsed());
+
+    // Someone else's key: the server never answers.
+    let wrong = wireguard(&peer, &wg::b64(&wg::secret().to_bytes()));
+    assert!(matches!(detour_core::proxy::check(&wrong).await, Err(Error::Proxy { reason }) if reason == "handshake"));
+}
+
+/// Against a real WireGuard server (the Linux kernel's), with sshd at 10.9.0.1 inside it:
+/// `DETOUR_WG_ENDPOINT`, `DETOUR_WG_SERVER` (its public key), `DETOUR_WG_CLIENT` (this side's private key).
+#[tokio::test]
+#[ignore = "needs a WireGuard server"]
+async fn through_a_kernel_wireguard_server() {
+    let env = |k: &str| std::env::var(k).unwrap_or_else(|_| panic!("{k} is not set"));
+    let peer = wg::Peer { endpoint: env("DETOUR_WG_ENDPOINT"), server_public: env("DETOUR_WG_SERVER"), client_private: env("DETOUR_WG_CLIENT") };
+    let mut proxy = wireguard(&peer, &peer.client_private);
+    if let ProxyKind::Wireguard { addresses, .. } = &mut proxy.kind {
+        *addresses = vec!["10.9.0.2/32".into()];
+    }
+    detour_core::proxy::check(&proxy).await.unwrap();
+    let mut req = request(&Server { port: 22, known: KnownHost { endpoint: String::new(), key: String::new(), fingerprint: String::new(), added_at: 0 }, forwarded: Default::default() }, false, Route::Proxy(Box::new(proxy)));
+    req.host.address = "10.9.0.1".into();
+    let fingerprint = match works(&req).await {
+        Err(Error::HostKeyUnknown { fingerprint, .. }) => fingerprint,
+        other => panic!("{other:?}"),
+    };
+    req.trust_fingerprint = Some(fingerprint);
+    let (session, _) = ssh::session(&req).await.unwrap();
+    // A command's output, larger than a few windows.
+    let mut out = Vec::new();
+    let (code, _) = ssh::run_command(&req, "head -c 2000000 /dev/zero | tr '\\0' x", &[], |b| out.extend_from_slice(b), |_| {}).await.unwrap();
+    assert_eq!(code, Some(0));
+    assert_eq!(out.len(), 2_000_000);
+    assert!(!session.is_closed());
+
+    // A name, resolved by the name server in the tunnel (`DETOUR_WG_NAME`, if it has one).
+    if let Ok(name) = std::env::var("DETOUR_WG_NAME") {
+        if let Route::Proxy(p) = &mut req.route
+            && let ProxyKind::Wireguard { dns, .. } = &mut p.kind
+        {
+            *dns = vec!["10.9.0.1".into()];
+        }
+        req.host.address = name;
+        ssh::session(&req).await.unwrap();
+    }
+}

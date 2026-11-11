@@ -1,6 +1,7 @@
 //! Reaching a host through a saved proxy: a stream to the host that carries the SSH connection.
 
 mod plain;
+pub mod wireguard;
 
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
@@ -33,15 +34,20 @@ pub async fn connect(p: &ProxyEntry, target: &str, port: u16) -> Result<Stream> 
     match &p.kind {
         ProxyKind::Socks5 { address, port: pp, user } => Ok(Box::new(socks5(address, *pp, user, p.password.as_deref(), target, port).await?)),
         ProxyKind::Http { address, port: pp, user } => Ok(Box::new(http_connect(address, *pp, user, p.password.as_deref(), target, port).await?)),
-        ProxyKind::Wireguard { .. } => Err(failed("unsupported:wireguard")),
+        ProxyKind::Wireguard { .. } => wireguard::connect(p, target, port).await,
         ProxyKind::Vless { .. } => Err(failed("unsupported:vless")),
     }
 }
 
 /// Tries a proxy: how long reaching something through it takes, in milliseconds.
+/// A WireGuard proxy is tried by its handshake: what it routes to is up to its server.
 pub async fn check(p: &ProxyEntry) -> Result<u64> {
     let started = std::time::Instant::now();
-    let stream = connect(p, "1.1.1.1", 443);
-    tokio::time::timeout(std::time::Duration::from_secs(15), stream).await.map_err(|_| failed("unreachable"))??;
+    let limit = std::time::Duration::from_secs(15);
+    if matches!(p.kind, ProxyKind::Wireguard { .. }) {
+        tokio::time::timeout(limit, wireguard::handshake(p)).await.map_err(|_| failed("handshake"))??;
+    } else {
+        tokio::time::timeout(limit, connect(p, "1.1.1.1", 443)).await.map_err(|_| failed("unreachable"))??;
+    }
     Ok(started.elapsed().as_millis() as u64)
 }

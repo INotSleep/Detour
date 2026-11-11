@@ -25,6 +25,9 @@ serde.workspace = true
 thiserror.workspace = true
 russh-sftp = "3.0.1"
 futures = "0.3.34"
+boringtun = { version = "0.7.1", default-features = false }
+smoltcp = { version = "0.14.0", default-features = false, features = ["std", "medium-ip", "proto-ipv4", "proto-ipv6", "proto-dns", "socket-tcp", "socket-tcp-cubic", "socket-udp", "socket-dns"] }
+socket2 = "0.6.5"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Threading"] }
