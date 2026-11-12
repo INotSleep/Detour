@@ -339,26 +339,27 @@ impl Detour {
         c.call(method, params).await
     }
 
-    /// The tokens this server holds, with what each reaches (asked again when not known yet).
+    /// The tokens this server holds, with what each reaches. Asked of the core every time:
+    /// hosts are found by name, and a host renamed (or another given its old name) must not
+    /// lead to the host the name used to mean.
     async fn grants(&self) -> Vec<Grant> {
         let all = self.grants.lock().unwrap().clone();
         let mut out = Vec::new();
         for mut g in all {
-            if g.hosts.is_empty() {
-                match self.core("agent_whoami", json!({ "token": g.secret })).await {
-                    Ok(who) => {
-                        g.hosts = who["hosts"].as_array().into_iter().flatten().map(|h| (s(&h["vaultId"]), s(&h["hostId"]), host_label(h))).collect();
-                        let mut list = self.grants.lock().unwrap();
-                        if let Some(x) = list.iter_mut().find(|x| x.secret == g.secret) {
-                            x.hosts = g.hosts.clone();
-                        }
+            match self.core("agent_whoami", json!({ "token": g.secret })).await {
+                Ok(who) => {
+                    g.hosts = who["hosts"].as_array().into_iter().flatten().map(|h| (s(&h["vaultId"]), s(&h["hostId"]), host_label(h))).collect();
+                    let mut list = self.grants.lock().unwrap();
+                    if let Some(x) = list.iter_mut().find(|x| x.secret == g.secret) {
+                        x.hosts = g.hosts.clone();
                     }
-                    Err(e) if e["kind"] == "tokenInvalid" => {
-                        self.grants.lock().unwrap().retain(|x| x.secret != g.secret);
-                        continue;
-                    }
-                    Err(_) => {}
                 }
+                Err(e) if e["kind"] == "tokenInvalid" => {
+                    self.grants.lock().unwrap().retain(|x| x.secret != g.secret);
+                    continue;
+                }
+                // The core is away for a moment: what was known last.
+                Err(_) => {}
             }
             out.push(g);
         }
