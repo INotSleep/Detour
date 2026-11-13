@@ -21,7 +21,7 @@ import { ProxiesView, savedAfter } from "./components/ProxiesView";
 import { FilesView } from "./components/FilesView";
 import { CommandPalette } from "./components/CommandPalette";
 import { ConflictDialog } from "./components/ConflictDialog";
-import { Button, IconButton, Modal, TipLayer, useToaster } from "./components/ui";
+import { Button, ContextMenu, IconButton, Modal, TipLayer, useToaster, type MenuItem } from "./components/ui";
 import { LockScreen } from "./components/LockScreen";
 import { AgentRequestDialog } from "./components/Agents";
 
@@ -543,6 +543,25 @@ export default function App() {
     if (activeId === id) setActiveId(next[Math.min(idx, next.length - 1)]?.id ?? "home");
   };
 
+  /** Closes the tabs `pick` chooses by their place; `keep` comes forward if the open one went. */
+  const closeSessions = (pick: (i: number) => boolean, keep?: string) => {
+    const next = sessions.filter((_, i) => !pick(i));
+    setSessions(next);
+    if (!next.some((s) => s.id === activeId) && activeId !== "home") setActiveId(keep && next.some((s) => s.id === keep) ? keep : next.at(-1)?.id ?? "home");
+  };
+  const [tabMenu, setTabMenu] = useState<{ x: number; y: number; id: string } | null>(null);
+  const tabMenuItems = (id: string): MenuItem[] => {
+    const at = sessions.findIndex((s) => s.id === id);
+    const t = tr().app.tabs;
+    return [
+      { label: t.close, onSelect: () => closeSession(id) },
+      ...(sessions.length > 1 ? [{ label: t.closeOthers, onSelect: () => closeSessions((i) => i !== at, id) }] : []),
+      ...(at > 0 ? [{ label: t.closeLeft, onSelect: () => closeSessions((i) => i < at, id) }] : []),
+      ...(at < sessions.length - 1 ? [{ label: t.closeRight, onSelect: () => closeSessions((i) => i > at, id) }] : []),
+      ...(sessions.length > 1 ? [{ label: t.closeAll, danger: true, onSelect: () => closeSessions(() => true) }] : []),
+    ];
+  };
+
   const setStatus = (id: string, status: SessionStatus) => setSessions((list) => list.map((s) => (s.id === id ? { ...s, status } : s)));
 
   const store = useMemo<Store | null>(() => {
@@ -597,7 +616,13 @@ export default function App() {
           <Sidebar homeActive={activeId === "home"} />
 
           <main className="main">
-            <div className="tabbar">
+            <div
+              className="tabbar"
+              onWheel={(e) => {
+                // A plain wheel scrolls the tabs sideways, as Shift with it does.
+                if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) e.currentTarget.scrollLeft += e.deltaY;
+              }}
+            >
                 <HomeTab section={section} personal={store.vault.kind === "personal"} active={activeId === "home"} onClick={() => setActiveId("home")} />
                 {sessions.map((s) => (
                   <div
@@ -609,6 +634,10 @@ export default function App() {
                     title={s.agent && tr().agents.tab(s.agent)}
                     onClick={() => setActiveId(s.id)}
                     onAuxClick={(e) => e.button === 1 && closeSession(s.id)}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      setTabMenu({ x: e.clientX, y: e.clientY, id: s.id });
+                    }}
                   >
                     <span className={`session-dot ${s.status}`} />
                     {s.kind === "files" && <FolderOpen size={13} className="tab-kind" />}
@@ -657,6 +686,7 @@ export default function App() {
           </main>
         </div>
 
+        {tabMenu && sessions.some((s) => s.id === tabMenu.id) && <ContextMenu at={tabMenu} items={tabMenuItems(tabMenu.id)} onClose={() => setTabMenu(null)} />}
         {palette && <CommandPalette onClose={() => setPalette(false)} />}
         {conflictVault && conflictVault.conflicts.length > 0 && <ConflictDialog vault={conflictVault} onClose={() => setConflictVaultId(null)} />}
         {trustAsk && (

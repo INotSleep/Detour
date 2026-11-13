@@ -11,6 +11,7 @@ import { runRealSession, type HostKeyAnswer, type HostKeyQuestion } from "../lib
 import { api, errorText, type SecretKind } from "../lib/api";
 import { mockSecrets } from "../lib/mockData";
 import { shortcutKey, useStore } from "../lib/store";
+import { loginUser } from "../lib/groups";
 import { tr, useT } from "../i18n";
 import { Button, IconButton } from "./ui";
 
@@ -153,8 +154,10 @@ export function TerminalView({ host, active, initialCommand, attach, onStatus, o
     };
 
     let stop: () => void;
+    // Shown as `user@address` while connecting: the user it logs in as.
+    const shown = { ...host, user: loginUser(ws, host) };
     if (api.usesCore(host.vaultId)) {
-      stop = runRealSession(term, host, {
+      stop = runRealSession(term, shown, {
         initialCommand,
         attach,
         onStatus: (s) => {
@@ -170,11 +173,11 @@ export function TerminalView({ host, active, initialCommand, attach, onStatus, o
     } else {
       const secret: SessionSecret | undefined =
         host.auth.type === "password"
-          ? { kind: "password", prompt: `${host.user}@${host.address}'s password: `, saved: mockSecrets.hostPasswords.get(host.id) }
+          ? { kind: "password", prompt: `${shown.user}@${host.address}'s password: `, saved: mockSecrets.hostPasswords.get(host.id) }
           : key?.hasPassphrase
             ? { kind: "passphrase", prompt: `Enter passphrase for key '${key.name}': `, saved: mockSecrets.keyPassphrases.get(key.id) }
             : undefined;
-      stop = runFakeSession(term, host, {
+      stop = runFakeSession(term, shown, {
         initialCommand,
         secret,
         onStatus: (s) => cb.current.onStatus(s),

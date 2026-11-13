@@ -155,6 +155,11 @@ export function fromGroups(ws: Workspace, host: Host): FromGroups {
   return out;
 }
 
+/** The user a host is logged in as: a group's login of this person's, else their own login, else the host's. */
+export function loginUser(ws: Workspace, host: Host): string {
+  return fromGroups(ws, host).login?.prefs.user || (host.own?.active ? host.own.user : host.user);
+}
+
 /* ---------- this person's own grouping of a team's hosts ---------- */
 
 /** Groups of mine in their order, then the hosts in none of them under their shared groups. */
