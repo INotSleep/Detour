@@ -6,6 +6,7 @@
 //! Codex's TOML is edited as text, so the rest of it stays as it was. Claude Code is told
 //! through its own `claude mcp` when it is installed, as it rewrites its file while it runs.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -16,6 +17,8 @@ use crate::{Error, Result};
 
 /// The name the server has in every client.
 const NAME: &str = "detour";
+/// The variable the server reads its tokens from: an agent's access made ahead, in Settings.
+pub const TOKEN_VAR: &str = "DETOUR_TOKEN";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Format {
@@ -132,8 +135,11 @@ fn servers_key(f: Format) -> &'static str {
     if f == Format::Servers { "servers" } else { "mcpServers" }
 }
 
-fn json_entry(f: Format, s: &Server) -> Value {
-    let base = json!({ "command": s.command.display().to_string(), "args": s.args });
+fn json_entry(f: Format, s: &Server, env: &BTreeMap<String, String>) -> Value {
+    let mut base = json!({ "command": s.command.display().to_string(), "args": s.args });
+    if !env.is_empty() {
+        base["env"] = json!(env);
+    }
     match f {
         Format::McpServers => base,
         _ => {
@@ -192,6 +198,45 @@ fn toml_without(text: &str) -> Option<String> {
 fn toml_block(s: &Server) -> String {
     let args: Vec<String> = s.args.iter().map(|a| toml_str(a)).collect();
     format!("[mcp_servers.{NAME}]\ncommand = {}\nargs = [{}]\n", toml_str(&s.command.display().to_string()), args.join(", "))
+}
+
+fn toml_env(env: &BTreeMap<String, String>) -> String {
+    if env.is_empty() {
+        return String::new();
+    }
+    let lines: Vec<String> = env.iter().map(|(k, v)| format!("{k} = {}", toml_str(v))).collect();
+    format!("\n[mcp_servers.{NAME}.env]\n{}\n", lines.join("\n"))
+}
+
+/// The server's `env` table in Codex's TOML (its values as plain or literal strings).
+fn toml_env_of(text: &str) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    let mut inside = false;
+    for line in text.lines() {
+        if is_header(line) {
+            inside = line.trim() == format!("[mcp_servers.{NAME}.env]");
+            continue;
+        }
+        if let (true, Some((k, v))) = (inside, line.split_once('=')) {
+            let v = v.trim();
+            let v = if v.starts_with('"') { serde_json::from_str::<String>(v).unwrap_or_default() } else { v.trim_matches('\'').to_string() };
+            out.insert(k.trim().to_string(), v);
+        }
+    }
+    out
+}
+
+/// The variables the client gives the server now.
+fn env_of(dirs: &Dirs, c: &Spec) -> BTreeMap<String, String> {
+    let file = (c.file)(dirs);
+    match c.format {
+        Format::CodexToml => toml_env_of(&read_text(&file).unwrap_or_default()),
+        f => read_json(&file)
+            .ok()
+            .and_then(|v| v[servers_key(f)][NAME]["env"].as_object().cloned())
+            .map(|m| m.into_iter().filter_map(|(k, v)| Some((k, v.as_str()?.to_string()))).collect())
+            .unwrap_or_default(),
+    }
 }
 
 fn toml_current(text: &str, s: &Server) -> bool {
@@ -255,7 +300,24 @@ pub fn clients(dirs: &Dirs, server: &Server) -> Vec<ClientState> {
 }
 
 /// Adds the server to a client (replacing an older one); `use_cli` lets Claude Code's own command do it.
+/// The variables it had (tokens given ahead) stay.
 pub fn add(dirs: &Dirs, id: &str, server: &Server, use_cli: bool) -> Result<()> {
+    let env = env_of(dirs, spec(id)?);
+    add_with(dirs, id, server, use_cli, &env)
+}
+
+/// Gives the client's server one more token (an agent's access made ahead), adding the server if it has none.
+pub fn add_token(dirs: &Dirs, id: &str, server: &Server, use_cli: bool, token: &str) -> Result<()> {
+    let mut env = env_of(dirs, spec(id)?);
+    let mut tokens: Vec<String> = env.get(TOKEN_VAR).map(|t| t.split([',', ' ']).filter(|t| !t.is_empty()).map(str::to_string).collect()).unwrap_or_default();
+    if !tokens.iter().any(|t| t == token) {
+        tokens.push(token.to_string());
+    }
+    env.insert(TOKEN_VAR.into(), tokens.join(","));
+    add_with(dirs, id, server, use_cli, &env)
+}
+
+fn add_with(dirs: &Dirs, id: &str, server: &Server, use_cli: bool, env: &BTreeMap<String, String>) -> Result<()> {
     let c = spec(id)?;
     let file = (c.file)(dirs);
     if c.id == "claude-code"
@@ -263,7 +325,11 @@ pub fn add(dirs: &Dirs, id: &str, server: &Server, use_cli: bool) -> Result<()> 
         && let Some(cli) = claude_cli()
     {
         let _ = run_claude(&cli, &["mcp".into(), "remove".into(), "--scope".into(), "user".into(), NAME.into()]);
-        let mut args = vec!["mcp".into(), "add".into(), "--scope".into(), "user".into(), NAME.into(), "--".into(), server.command.display().to_string()];
+        let mut args = vec!["mcp".into(), "add".into(), "--scope".into(), "user".into()];
+        for (k, v) in env {
+            args.extend(["-e".into(), format!("{k}={v}")]);
+        }
+        args.extend([NAME.into(), "--".into(), server.command.display().to_string()]);
         args.extend(server.args.iter().cloned());
         let out = run_claude(&cli, &args)?;
         if !out.status.success() {
@@ -282,6 +348,7 @@ pub fn add(dirs: &Dirs, id: &str, server: &Server, use_cli: bool) -> Result<()> 
                 text.push('\n');
             }
             text.push_str(&toml_block(server));
+            text.push_str(&toml_env(env));
             if let Some(dir) = file.parent() {
                 std::fs::create_dir_all(dir).map_err(|e| io(dir, e))?;
             }
@@ -291,7 +358,7 @@ pub fn add(dirs: &Dirs, id: &str, server: &Server, use_cli: bool) -> Result<()> 
             let mut v = read_json(&file)?;
             let root = v.as_object_mut().ok_or_else(|| io(&file, "not a JSON object"))?;
             let servers = root.entry(servers_key(f)).or_insert_with(|| Value::Object(Map::new()));
-            servers.as_object_mut().ok_or_else(|| io(&file, format!("{} is not an object", servers_key(f))))?.insert(NAME.into(), json_entry(f, server));
+            servers.as_object_mut().ok_or_else(|| io(&file, format!("{} is not an object", servers_key(f))))?.insert(NAME.into(), json_entry(f, server, env));
             write_json(&file, &v)
         }
     }
@@ -397,6 +464,30 @@ mod tests {
         std::fs::write(&file, text).unwrap();
         assert!(remove(&d, "codex", false).unwrap());
         assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
+    }
+
+    #[test]
+    fn tokens_given_ahead_go_into_the_env_and_stay_on_update() {
+        let d = temp();
+        let toml = d.home.join(".codex").join("config.toml");
+        std::fs::create_dir_all(toml.parent().unwrap()).unwrap();
+        std::fs::write(&toml, "model = \"x\"\n").unwrap();
+        add_token(&d, "codex", &server(), false, "dtr_a").unwrap();
+        add_token(&d, "codex", &server(), false, "dtr_b").unwrap();
+        add_token(&d, "codex", &server(), false, "dtr_a").unwrap();
+        let text = std::fs::read_to_string(&toml).unwrap();
+        assert!(text.ends_with("[mcp_servers.detour.env]\nDETOUR_TOKEN = 'dtr_a,dtr_b'\n"), "{text}");
+        assert!(clients(&d, &server()).into_iter().find(|c| c.id == "codex").unwrap().current);
+        // Updating the server (another path) keeps them.
+        add(&d, "codex", &Server::new(PathBuf::from("/usr/bin/detour"), None), false).unwrap();
+        assert_eq!(toml_env_of(&std::fs::read_to_string(&toml).unwrap())[TOKEN_VAR], "dtr_a,dtr_b");
+
+        let json_file = d.home.join(".cursor").join("mcp.json");
+        std::fs::create_dir_all(json_file.parent().unwrap()).unwrap();
+        add_token(&d, "cursor", &server(), false, "dtr_c").unwrap();
+        add(&d, "cursor", &server(), false).unwrap();
+        let v: Value = serde_json::from_str(&std::fs::read_to_string(&json_file).unwrap()).unwrap();
+        assert_eq!(v["mcpServers"]["detour"]["env"], json!({ "DETOUR_TOKEN": "dtr_c" }));
     }
 
     #[test]

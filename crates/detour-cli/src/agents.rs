@@ -111,6 +111,153 @@ fn ago(ms: &Value) -> String {
     }
 }
 
+/// What an access made ahead reaches and allows, as given on the command line.
+#[derive(clap::Args, Default)]
+pub struct RuleOpts {
+    #[arg(long)]
+    pub all: bool,
+    #[arg(long = "vault", value_name = "VAULT")]
+    pub vaults: Vec<String>,
+    #[arg(long = "group", value_name = "GROUP")]
+    pub groups: Vec<String>,
+    #[arg(long = "my-group", value_name = "GROUP")]
+    pub my_groups: Vec<String>,
+    #[arg(long = "host", value_name = "HOST")]
+    pub hosts: Vec<String>,
+    #[arg(long)]
+    pub exec: bool,
+    #[arg(long)]
+    pub files: bool,
+    #[arg(long)]
+    pub files_write: bool,
+    #[arg(long)]
+    pub tunnels: bool,
+    #[arg(long)]
+    pub edit: bool,
+    #[arg(long)]
+    pub accept_new_keys: bool,
+    #[arg(long, value_parser = TTLS)]
+    pub ttl: Option<String>,
+}
+
+/// What the options reach and allow, in the core's words.
+async fn rule_of(ctx: &Ctx, o: &RuleOpts) -> Res<(Value, Value, Value)> {
+    let mut reach = Vec::new();
+    if o.all {
+        reach.push(json!({ "type": "all" }));
+    }
+    for v in &o.vaults {
+        reach.push(json!({ "type": "vault", "vaultId": crate::cmds::vault_id(&ctx.c, Some(v)).await? }));
+    }
+    // Groups are of the vault `-T` names (the personal one by default).
+    for g in &o.groups {
+        reach.push(json!({ "type": "group", "vaultId": ctx.vault, "name": g }));
+    }
+    if !o.my_groups.is_empty() {
+        let teams = ctx.c.call("teams_list", json!({})).await?;
+        let layout = teams.as_array().into_iter().flatten().find(|e| s(&e["id"]) == ctx.vault).map(|e| e["view"]["layout"].clone()).unwrap_or(Value::Null);
+        for g in &o.my_groups {
+            let id = layout["groups"].as_array().into_iter().flatten().find(|x| s(&x["name"]).eq_ignore_ascii_case(g) || s(&x["id"]) == *g).map(|x| s(&x["id"])).ok_or_else(|| Fail(format!("{}: {g}", t().unknown_group)))?;
+            reach.push(json!({ "type": "myGroup", "vaultId": ctx.vault, "id": id }));
+        }
+    }
+    let all = ctx.c.call("agent_hosts", json!({})).await?;
+    let mut hosts = Vec::new();
+    for name in &o.hosts {
+        let n = name.to_lowercase();
+        let found: Vec<&Value> = all
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|h| s(&h["id"]) == *name || s(&h["name"]).to_lowercase() == n || h["team"].as_str().is_some_and(|tm| format!("{}/{}", tm.to_lowercase(), s(&h["name"]).to_lowercase()) == n))
+            .collect();
+        match found.as_slice() {
+            [h] => hosts.push(json!({ "vaultId": h["vaultId"], "hostId": h["id"] })),
+            [] => return fail(format!("{}: {name}", t().unknown_host)),
+            _ => return fail(format!("{}: {name}", t().which_host)),
+        }
+    }
+    if reach.is_empty() && hosts.is_empty() {
+        return fail(t().rule_needs_hosts);
+    }
+    let mut scopes = vec![if o.exec { "exec" } else { "connect" }];
+    for (on, scope) in [(o.files || o.files_write, "files:read"), (o.files_write, "files:write"), (o.tunnels, "tunnels"), (o.edit, "vault:edit"), (o.accept_new_keys, "hostkeys:new")] {
+        if on {
+            scopes.push(scope);
+        }
+    }
+    Ok((json!(reach), json!(hosts), json!(scopes)))
+}
+
+/// Gives an agent access ahead of its asking. With `client`, the token goes into that AI
+/// client's config of Detour's MCP server; otherwise it is printed, once.
+pub async fn add(ctx: &Ctx, dir: &std::path::Path, agent: &str, o: RuleOpts, client: Option<&str>) -> Res<()> {
+    let (reach, hosts, scopes) = rule_of(ctx, &o).await?;
+    let made = ctx.c.call("agents_set", json!({ "agent": agent, "reach": reach, "hosts": hosts, "scopes": scopes, "ttl": o.ttl.as_deref().unwrap_or("never") })).await?;
+    let token = s(&made["token"]);
+    match client {
+        Some(id) => {
+            use detour_core::mcp_clients::{self, Dirs, Server};
+            let dirs = Dirs::of_user().ok_or_else(|| Fail("home directory".into()))?;
+            let me = std::env::current_exe().map_err(|e| Fail(e.to_string()))?;
+            let own_dir = (dir != detour_core::store::Store::default_dir()).then_some(dir);
+            let all = mcp_clients::clients(&dirs, &Server::new(me.clone(), own_dir));
+            let c = all.iter().find(|c| c.id.eq_ignore_ascii_case(id) || c.name.eq_ignore_ascii_case(id)).ok_or_else(|| Fail(format!("{}: {id}", t().unknown_client)))?;
+            mcp_clients::add_token(&dirs, c.id, &Server::new(me, own_dir), true, &token).map_err(|e| Fail(crate::i18n::error_text(&serde_json::to_value(&e).unwrap_or_default())))?;
+            eprintln!("{} {}", t().rule_given_to, c.name);
+            eprintln!("{}", t().mcp_restart);
+        }
+        None => {
+            eprintln!("{}", t().rule_token);
+            println!("{token}");
+        }
+    }
+    Ok(())
+}
+
+/// Changes what an access reaches and allows; its token stays.
+pub async fn edit(ctx: &Ctx, which: &str, o: RuleOpts) -> Res<()> {
+    let tokens = ctx.c.call("agents_list", json!({})).await?;
+    let all = tokens.as_array().cloned().unwrap_or_default();
+    let by_id: Vec<&Value> = all.iter().filter(|tk| s(&tk["id"]).starts_with(which)).collect();
+    let picked: Vec<&Value> = if by_id.len() == 1 { by_id } else { all.iter().filter(|tk| s(&tk["agent"]).eq_ignore_ascii_case(which)).collect() };
+    let tk = match picked.as_slice() {
+        [one] => *one,
+        [] => return fail(format!("{}: {which}", t().unknown_agent)),
+        _ => return fail(format!("{}: {which}", t().which_agent)),
+    };
+    let (reach, hosts, scopes) = rule_of(ctx, &o).await?;
+    let mut p = json!({ "id": tk["id"], "reach": reach, "hosts": hosts, "scopes": scopes });
+    if let Some(ttl) = &o.ttl {
+        p["ttl"] = json!(ttl);
+    }
+    ctx.c.call("agents_set", p).await?;
+    eprintln!("{}: {}", t().rule_saved, s(&tk["agent"]));
+    Ok(())
+}
+
+/// What a token reaches, briefly: "all", "Acme", "Acme: Prod", and the hosts it names.
+fn reach_text(tk: &Value, teams: &Value) -> String {
+    let team = |id: &str| if id == crate::cmds::PERSONAL { t().personal_vault.to_string() } else { teams.as_array().into_iter().flatten().find(|e| s(&e["id"]) == id).map(|e| s(&e["view"]["name"])).unwrap_or_else(|| id.to_string()) };
+    let mut parts: Vec<String> = tk["reach"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|r| match s(&r["type"]).as_str() {
+            "all" => t().all_hosts.to_string(),
+            "vault" => team(&s(&r["vaultId"])),
+            "group" => format!("{}: {}", team(&s(&r["vaultId"])), s(&r["name"])),
+            _ => {
+                let layout = teams.as_array().into_iter().flatten().find(|e| e["id"] == r["vaultId"]).map(|e| e["view"]["layout"].clone()).unwrap_or(Value::Null);
+                let name = layout["groups"].as_array().into_iter().flatten().find(|g| g["id"] == r["id"]).map(|g| s(&g["name"])).unwrap_or_default();
+                format!("{}: {name}", team(&s(&r["vaultId"])))
+            }
+        })
+        .collect();
+    parts.extend(tk["named"].as_array().into_iter().flatten().map(host_name));
+    parts.join(", ")
+}
+
 pub async fn list(ctx: &Ctx) -> Res<()> {
     let tokens = ctx.c.call("agents_list", json!({})).await?;
     if ctx.json {
@@ -122,12 +269,10 @@ pub async fn list(ctx: &Ctx) -> Res<()> {
         eprintln!("{}", t().no_agents);
         return Ok(());
     }
+    let teams = ctx.c.call("teams_list", json!({})).await.unwrap_or(json!([]));
     let rows = all
         .iter()
-        .map(|tk| {
-            let hosts: Vec<String> = tk["hosts"].as_array().into_iter().flatten().map(host_name).collect();
-            vec![s(&tk["id"])[..8.min(s(&tk["id"]).len())].to_string(), s(&tk["agent"]), hosts.join(", "), scopes(&tk["scopes"]), until(&tk["expiresAt"]), ago(&tk["lastUsed"])]
-        })
+        .map(|tk| vec![s(&tk["id"])[..8.min(s(&tk["id"]).len())].to_string(), s(&tk["agent"]), reach_text(tk, &teams), scopes(&tk["scopes"]), until(&tk["expiresAt"]), ago(&tk["lastUsed"])])
         .collect();
     table(&t().headers_agents, rows);
     Ok(())

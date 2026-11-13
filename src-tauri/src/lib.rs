@@ -333,6 +333,16 @@ async fn mcp_client_set(core: State<'_, Arc<Core>>, id: String, on: bool) -> Res
         .map_err(|e| Error::Internal { message: e.to_string() })?
 }
 
+/// Puts an agent's token (its access made ahead) into an AI client's config of the MCP server.
+#[tauri::command]
+async fn mcp_client_token(core: State<'_, Arc<Core>>, id: String, token: String) -> Result<()> {
+    let cli = cli_beside().ok_or_else(|| Error::NotFound { what: "detour".into() })?;
+    let (server, dirs) = (mcp_server(&core, cli), home_dirs()?);
+    tauri::async_runtime::spawn_blocking(move || detour_core::mcp_clients::add_token(&dirs, &id, &server, true, &token))
+        .await
+        .map_err(|e| Error::Internal { message: e.to_string() })?
+}
+
 /* ---------- the command line on the PATH (macOS) ---------- */
 
 /// Where macOS gets `detour` from: the app bundle holds it, a link here puts it on the PATH.
@@ -506,6 +516,7 @@ pub fn builder<R: tauri::Runtime>(builder: tauri::Builder<R>, data_dir: PathBuf)
             local_modified,
             mcp_clients,
             mcp_client_set,
+            mcp_client_token,
             tray_set,
             window_show,
             cli_status,

@@ -333,6 +333,18 @@ pub enum McpAction {
 #[derive(Subcommand)]
 enum Agents {
     Ls,
+    Add {
+        agent: String,
+        #[command(flatten)]
+        opts: agents::RuleOpts,
+        #[arg(long)]
+        client: Option<String>,
+    },
+    Edit {
+        agent: String,
+        #[command(flatten)]
+        opts: agents::RuleOpts,
+    },
     Revoke { agent: String },
 }
 
@@ -511,6 +523,8 @@ async fn run(command: Command, dir: &std::path::Path, team: Option<String>, json
         Command::Approve => agents::approve(&ctx).await?,
         Command::Agents(Agents::Ls) => agents::list(&ctx).await?,
         Command::Agents(Agents::Revoke { agent }) => agents::revoke(&ctx, &agent).await?,
+        Command::Agents(Agents::Add { agent, opts, client }) => agents::add(&ctx, &dir, &agent, opts, client.as_deref()).await?,
+        Command::Agents(Agents::Edit { agent, opts }) => agents::edit(&ctx, &agent, opts).await?,
         Command::Status | Command::Quit | Command::Daemon { .. } | Command::Mcp { .. } => unreachable!(),
     }
     Ok(0)
