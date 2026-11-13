@@ -561,7 +561,7 @@ impl Store {
         Identity::generate().to_recovery_key()
     }
 
-    fn team(&self, id: &str) -> Result<&TeamVault> {
+    pub(crate) fn team(&self, id: &str) -> Result<&TeamVault> {
         self.teams.get(id).ok_or_else(|| self.team_unavailable(id))
     }
 

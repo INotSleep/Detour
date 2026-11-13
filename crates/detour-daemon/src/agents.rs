@@ -14,7 +14,7 @@ use std::time::Duration;
 use detour_core::model::{Millis, now_ms};
 use detour_core::ssh;
 use detour_core::store::{PERSONAL, Store};
-use detour_core::tokens::{AgentToken, HostRef, Scope};
+use detour_core::tokens::{AgentToken, HostRef, Reach, Scope};
 use detour_core::{Error, new_id};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -111,7 +111,11 @@ pub struct PendingView {
 struct TokenView {
     id: String,
     agent: String,
+    /// Every host it reaches now.
     hosts: Vec<HostLabel>,
+    /// The hosts it names itself, and what it reaches by what hosts are in.
+    named: Vec<HostLabel>,
+    reach: Vec<Reach>,
     scopes: BTreeSet<Scope>,
     created_at: Millis,
     expires_at: Option<Millis>,
@@ -251,8 +255,23 @@ fn need(t: &AgentToken, scope: Scope) -> Result<(), Value> {
     if t.may(scope) { Ok(()) } else { Err(json!({ "kind": "agentScope", "scope": scope })) }
 }
 
-fn need_host(t: &AgentToken, vault_id: &str, host_id: &str) -> Result<(), Value> {
-    if t.reaches(vault_id, host_id) { Ok(()) } else { Err(json!({ "kind": "agentHost" })) }
+fn need_host(s: &Store, t: &AgentToken, vault_id: &str, host_id: &str) -> Result<(), Value> {
+    if s.token_reaches(t, vault_id, host_id) { Ok(()) } else { Err(json!({ "kind": "agentHost" })) }
+}
+
+/// A server key no one pinned yet is accepted for a token allowed to; otherwise only the person can.
+fn accept_new(t: &AgentToken) -> Option<String> {
+    t.may(Scope::HostKeysNew).then(|| ssh::ACCEPT_NEW.to_string())
+}
+
+/// Hosts of a vault as an agent may change them: the ids of those changed, added and removed.
+fn host_changes(base: &Value, next: &Value) -> (Vec<String>, Vec<String>) {
+    let ids = |v: &Value| -> HashMap<String, Value> { v["hosts"].as_array().into_iter().flatten().map(|h| (str_arg(h, "id").to_string(), h.clone())).collect() };
+    let (before, after) = (ids(base), ids(next));
+    let mut touched: Vec<String> = before.iter().filter(|(id, h)| after.get(*id) != Some(*h)).map(|(id, _)| id.clone()).collect();
+    touched.sort();
+    let added = after.keys().filter(|id| !before.contains_key(*id)).cloned().collect();
+    (touched, added)
 }
 
 /// The agent's own session; another one's is refused as if it didn't exist.
@@ -320,7 +339,7 @@ pub(crate) async fn call(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value) ->
             let hosts: Vec<Value> = all_hosts(&s)?
                 .into_iter()
                 .map(|(l, h)| {
-                    let granted = t.as_ref().is_some_and(|t| t.reaches(&l.vault_id, &l.host_id));
+                    let granted = t.as_ref().is_some_and(|t| s.token_reaches(t, &l.vault_id, &l.host_id));
                     json!({ "id": l.host_id, "vaultId": l.vault_id, "team": l.team, "name": l.label, "address": h["address"], "port": h["port"], "user": h["user"], "group": h["group"], "tags": h["tags"], "granted": granted })
                 })
                 .collect();
@@ -373,8 +392,8 @@ pub(crate) async fn call(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value) ->
             let (h, request) = {
                 let s = core.store.lock().map_err(poisoned)?;
                 let h = resolve(&s, &a.host)?;
-                need_host(&t, &h.vault_id, &h.host_id)?;
-                let request = no_forwarding(s.connect_request_in(&h.vault_id, &h.host_id, None, None).map_err(err)?);
+                need_host(&s, &t, &h.vault_id, &h.host_id)?;
+                let request = no_forwarding(s.connect_request_in(&h.vault_id, &h.host_id, None, accept_new(&t)).map_err(err)?);
                 (h, request)
             };
             let size = (a.cols.unwrap_or(120), a.rows.unwrap_or(40));
@@ -423,7 +442,7 @@ pub(crate) async fn call(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value) ->
             let t = token(core, &a.token)?;
             let session = own_session(core, &t, &a.session_id)?;
             may_run(core, &t, &session.info, &a.command).await?;
-            let request = no_forwarding(core.store.lock().map_err(poisoned)?.connect_request_in(&session.info.vault_id, &session.info.host_id, None, None).map_err(err)?);
+            let request = no_forwarding(core.store.lock().map_err(poisoned)?.connect_request_in(&session.info.vault_id, &session.info.host_id, None, accept_new(&t)).map_err(err)?);
             let run = session.run_started(&a.command, now_ms());
             let ran = || core.emit("session.runs", json!({ "sessionId": session.info.id }));
             ran();
@@ -462,7 +481,12 @@ pub(crate) async fn call(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value) ->
         "agent_call" => {
             let a = a!({ token: String, method: String, params: Option<Value> });
             let t = token(core, &a.token)?;
-            let (inner, params) = (a.method.as_str(), strip_secrets(a.params.unwrap_or_else(|| json!({}))));
+            let (inner, mut params) = (a.method.as_str(), strip_secrets(a.params.unwrap_or_else(|| json!({}))));
+            if matches!(inner, "files_open" | "tunnel_start")
+                && let (Some(o), Some(f)) = (params.as_object_mut(), accept_new(&t))
+            {
+                o.insert("trustFingerprint".into(), json!(f));
+            }
             let owned_files = |p: &Value| -> Result<(), Value> {
                 let id = str_arg(p, "id");
                 if core.agents.files.lock().unwrap().get(id) == Some(&t.id) { Ok(()) } else { Err(json!({ "kind": "notYourFiles" })) }
@@ -470,7 +494,7 @@ pub(crate) async fn call(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value) ->
             match inner {
                 "files_open" => {
                     need(&t, Scope::FilesRead)?;
-                    need_host(&t, str_arg(&params, "vaultId"), str_arg(&params, "hostId"))?;
+                    need_host(&*core.store.lock().map_err(poisoned)?, &t, str_arg(&params, "vaultId"), str_arg(&params, "hostId"))?;
                 }
                 "files_list" | "files_resolve" | "files_download" | "files_download_into" => {
                     need(&t, Scope::FilesRead)?;
@@ -486,7 +510,7 @@ pub(crate) async fn call(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value) ->
                     need(&t, Scope::Tunnels)?;
                     let (vault, tunnel) = (str_arg(&params, "vaultId"), str_arg(&params, "tunnelId"));
                     let via = tunnel_host(core, vault, tunnel)?;
-                    need_host(&t, vault, &via)?;
+                    need_host(&*core.store.lock().map_err(poisoned)?, &t, vault, &via)?;
                     if inner == "tunnel_stop" && core.agents.tunnels.lock().unwrap().get(&format!("{vault}/{tunnel}")) != Some(&t.id) {
                         return Err(json!({ "kind": "notYourTunnel" }));
                     }
@@ -498,6 +522,28 @@ pub(crate) async fn call(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value) ->
                     // Only its own changes: an agent never sends the whole vault over what it didn't see.
                     if params.get("base").is_none_or(Value::is_null) {
                         return Err(json!({ "kind": "badArguments", "message": "base" }));
+                    }
+                }
+                // A team's hosts: only those it reaches change; new ones only with the whole team.
+                "team_put" => {
+                    need(&t, Scope::VaultEdit)?;
+                    let team = str_arg(&params, "id").to_string();
+                    let (base, update) = (params.get("base").cloned().unwrap_or(Value::Null), params.get("update").cloned().unwrap_or(Value::Null));
+                    if !base.is_object() || !update.is_object() {
+                        return Err(json!({ "kind": "badArguments", "message": "base" }));
+                    }
+                    for key in ["keys", "snippets", "tunnels", "proxies", "groups"] {
+                        if update.get(key) != base.get(key) {
+                            return Err(json!({ "kind": "forbidden" }));
+                        }
+                    }
+                    let (touched, added) = host_changes(&base, &update);
+                    let s = core.store.lock().map_err(poisoned)?;
+                    for id in touched.iter().filter(|id| !added.contains(id)) {
+                        need_host(&s, &t, &team, id)?;
+                    }
+                    if !added.is_empty() && !t.reaches_vault(&team) {
+                        return Err(json!({ "kind": "agentHost" }));
                     }
                 }
                 "key_generate" | "key_import" => {
@@ -555,11 +601,20 @@ fn tunnel_host(core: &Core, vault: &str, tunnel: &str) -> Result<String, Value> 
 }
 
 fn view(core: &Core, t: &AgentToken) -> TokenView {
-    let hosts = core.store.lock().map(|s| t.hosts.iter().map(|r| label_of(&s, r)).collect()).unwrap_or_default();
+    let (hosts, named) = core
+        .store
+        .lock()
+        .map(|s| {
+            let reached = all_hosts(&s).map(|all| all.into_iter().map(|(l, _)| l).filter(|l| s.token_reaches(t, &l.vault_id, &l.host_id)).collect()).unwrap_or_default();
+            (reached, t.hosts.iter().map(|r| label_of(&s, r)).collect())
+        })
+        .unwrap_or_default();
     TokenView {
         id: t.id.clone(),
         agent: t.agent.clone(),
         hosts,
+        named,
+        reach: t.reach.clone(),
         scopes: t.scopes.clone(),
         created_at: t.created_at,
         expires_at: t.expires_at,
@@ -587,6 +642,9 @@ pub(crate) async fn person(core: &Arc<Core>, method: &str, p: Value) -> Out {
                 ttl: Option<Ttl>,
                 scopes: Option<Vec<Scope>>,
                 hosts: Option<Vec<HostRef>>,
+                /// Instead of (or besides) the hosts asked for: everything in a team, a group...
+                #[serde(default)]
+                reach: Vec<Reach>,
                 /// For a command: allow its token every command from now on.
                 always: Option<bool>,
             }
@@ -609,12 +667,13 @@ pub(crate) async fn person(core: &Arc<Core>, method: &str, p: Value) -> Out {
                 Ask::Access { agent, hosts, scopes, ttl, .. } => {
                     let asked: BTreeSet<HostRef> = hosts.iter().map(|h| HostRef { vault_id: h.vault_id.clone(), host_id: h.host_id.clone() }).collect();
                     let keep_hosts: BTreeSet<HostRef> = a.hosts.map(|h| h.into_iter().filter(|r| asked.contains(r)).collect()).unwrap_or(asked);
-                    let keep_scopes: BTreeSet<Scope> = a.scopes.map(|s| s.into_iter().filter(|x| scopes.contains(x)).collect()).unwrap_or_else(|| scopes.into_iter().collect());
-                    if keep_hosts.is_empty() || keep_scopes.is_empty() {
+                    // The person may give more than was asked: it is theirs to give.
+                    let keep_scopes: BTreeSet<Scope> = a.scopes.map(|s| s.into_iter().collect()).unwrap_or_else(|| scopes.into_iter().collect());
+                    if (keep_hosts.is_empty() && a.reach.is_empty()) || keep_scopes.is_empty() {
                         return Err(json!({ "kind": "badArguments", "message": "hosts and scopes" }));
                     }
                     let expires_at = a.ttl.unwrap_or(ttl).expires_at();
-                    let (token, secret) = core.store.lock().map_err(poisoned)?.agent_token_add(&agent, keep_hosts, keep_scopes, expires_at).map_err(err)?;
+                    let (token, secret) = core.store.lock().map_err(poisoned)?.agent_token_add(&agent, keep_hosts, a.reach, keep_scopes, expires_at).map_err(err)?;
                     tx.send_replace(Some(Answer::Token { id: token.id.clone(), secret: secret.clone(), expires_at }));
                     core.emit("agents.answered", json!({ "id": a.id }));
                     core.emit("agents.changed", Value::Null);
@@ -630,6 +689,76 @@ pub(crate) async fn person(core: &Arc<Core>, method: &str, p: Value) -> Out {
                     Ok(Value::Null)
                 }
             }
+        }
+        // A token the person makes or changes themselves, before any agent asks: its secret comes
+        // back once, when it is made. What it no longer reaches closes at once.
+        "agents_set" => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct A {
+                id: Option<String>,
+                agent: Option<String>,
+                #[serde(default)]
+                hosts: Vec<HostRef>,
+                #[serde(default)]
+                reach: Vec<Reach>,
+                scopes: Vec<Scope>,
+                /// None keeps the time it ends.
+                ttl: Option<Ttl>,
+            }
+            let a: A = rpc::args(method, p)?;
+            if (a.hosts.is_empty() && a.reach.is_empty()) || a.scopes.is_empty() {
+                return Err(json!({ "kind": "badArguments", "message": "hosts and scopes" }));
+            }
+            let (hosts, scopes) = (a.hosts.into_iter().collect::<BTreeSet<_>>(), a.scopes.into_iter().collect::<BTreeSet<_>>());
+            let out = match a.id {
+                Some(id) => {
+                    let mut s = core.store.lock().map_err(poisoned)?;
+                    let old = s.agent_tokens().map_err(err)?.into_iter().find(|t| t.id == id).ok_or_else(|| json!({ "kind": "notFound", "what": "token" }))?;
+                    let expires_at = a.ttl.map(Ttl::expires_at).unwrap_or(old.expires_at);
+                    let t = s.agent_token_set(&id, hosts, a.reach, scopes, expires_at).map_err(err)?;
+                    // Sessions on hosts it no longer reaches end; so do its files and tunnels if those went.
+                    for x in core.sessions.list().into_iter().filter(|x| x.owner.token_id() == Some(id.as_str())) {
+                        if (!t.may(Scope::Connect) && !t.may(Scope::Exec) || !s.token_reaches(&t, &x.vault_id, &x.host_id))
+                            && let Some(session) = core.sessions.get(&x.id)
+                        {
+                            session.close();
+                        }
+                    }
+                    drop(s);
+                    let (files, tunnels) = (!t.may(Scope::FilesRead) || t.reach != old.reach || t.hosts != old.hosts, !t.may(Scope::Tunnels));
+                    {
+                        if files {
+                            core.agents.files.lock().unwrap().retain(|fid, owner| {
+                                if *owner == id {
+                                    core.files.close(fid);
+                                }
+                                *owner != id
+                            });
+                        }
+                        if tunnels {
+                            core.agents.tunnels.lock().unwrap().retain(|key, owner| {
+                                if *owner == id {
+                                    core.tunnels.stop(key);
+                                }
+                                *owner != id
+                            });
+                        }
+                    }
+                    json!({ "tokenId": t.id })
+                }
+                None => {
+                    let agent = a.agent.unwrap_or_default().trim().chars().take(64).collect::<String>();
+                    if agent.is_empty() {
+                        return Err(json!({ "kind": "badArguments", "message": "agent" }));
+                    }
+                    let expires_at = a.ttl.unwrap_or(Ttl::Never).expires_at();
+                    let (t, secret) = core.store.lock().map_err(poisoned)?.agent_token_add(&agent, hosts, a.reach, scopes, expires_at).map_err(err)?;
+                    json!({ "tokenId": t.id, "token": secret })
+                }
+            };
+            core.emit("agents.changed", Value::Null);
+            Ok(out)
         }
         // Takes a token away; what it opened closes at once.
         "agents_revoke" => {

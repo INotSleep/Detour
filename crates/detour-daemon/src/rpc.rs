@@ -62,7 +62,7 @@ pub(crate) const READ_ONLY: &[&str] = &[
     "github_user", "github_start", "github_repo_access", "session_input", "session_resize", "session_attach", "session_detach", "sessions_list", "session_runs",
     "files_open", "files_list", "files_resolve", "files_cancel", "files_close", "tunnels_status", "tunnel_start", "tunnel_stop", "proxy_check", "proxy_parse", "proxy_export", "settings_get",
     "settings_set", "activity", "quit", "trust_request", "trust_answer", "trust_with_password", "hosts_export",
-    "agents_pending", "agents_list", "agents_answer", "agents_revoke",
+    "agents_pending", "agents_list", "agents_answer", "agents_set", "agents_revoke",
 ];
 
 /// What a client may call before it is trusted: enough to become trusted.
@@ -167,7 +167,7 @@ pub(crate) async fn dispatch(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value
         }
 
         /* ---------- agents ---------- */
-        "agents_pending" | "agents_list" | "agents_answer" | "agents_revoke" => crate::agents::person(core, method, p).await,
+        "agents_pending" | "agents_list" | "agents_answer" | "agents_set" | "agents_revoke" => crate::agents::person(core, method, p).await,
 
         /* ---------- vault ---------- */
         "vault_status" => {

@@ -256,3 +256,103 @@ async fn the_person_may_deny_or_narrow_a_request() {
     // The token is taken once.
     assert_eq!(kind(agent.call("agent_wait", json!({ "requestId": asked["requestId"] })).await), "notFound");
 }
+
+/// A token as Settings makes it, before any agent asks.
+async fn rule(me: &Client, id: Option<&Value>, reach: Value, scopes: Value) -> Value {
+    let mut p = json!({ "agent": "Codex", "reach": reach, "scopes": scopes, "ttl": "never" });
+    if let Some(id) = id {
+        p["id"] = id.clone();
+    }
+    ok(me, "agents_set", p).await
+}
+
+async fn sessions_of(me: &Client) -> usize {
+    ok(me, "sessions_list", json!({})).await.as_array().unwrap().len()
+}
+
+#[tokio::test]
+async fn a_rule_made_ahead_reaches_what_hosts_are_in_and_may_accept_new_server_keys() {
+    let socket = start("rules").await;
+    let me = person(&socket).await;
+    let agent = hello(&socket, "mcp").await;
+
+    // The whole personal vault, made ahead: the agent works at once, no request.
+    let made = rule(&me, None, json!([{ "type": "vault", "vaultId": "personal" }]), json!(["exec"])).await;
+    let (id, token) = (made["tokenId"].clone(), made["token"].as_str().unwrap().to_string());
+    let open = |host: &str| json!({ "token": token, "host": host });
+    let s = ok(&agent, "agent_session_open", open("web")).await["sessionId"].clone();
+    assert_eq!(ok(&agent, "agent_run", json!({ "token": token, "sessionId": s, "command": "uptime" })).await["stdout"], "ran:uptime\n");
+    // `db` was never connected to: its key waits for the person...
+    assert_eq!(kind(agent.call("agent_session_open", open("db")).await), "hostKeyUnknown");
+
+    // ...unless the rule lets the agent accept new keys. Its secret stays the same.
+    let again = rule(&me, Some(&id), json!([{ "type": "vault", "vaultId": "personal" }]), json!(["exec", "hostkeys:new"])).await;
+    assert!(again.get("token").is_none(), "a rule changed gives no new secret");
+    ok(&agent, "agent_session_open", open("db")).await;
+    // The key is pinned now, for the person too.
+    let mine = ok(&me, "session_open", json!({ "args": { "vaultId": "personal", "hostId": "h2", "cols": 80, "rows": 24 } })).await;
+    ok(&me, "session_close", json!({ "sessionId": mine["sessionId"] })).await;
+
+    // A host added later is in the vault, so in the rule.
+    let base = ok(&me, "vault_get", json!({})).await;
+    let mut next = json!({ "hosts": base["hosts"], "keys": base["keys"], "snippets": base["snippets"], "tunnels": base["tunnels"] });
+    let mut h3 = host("h3", "late", sshd().await);
+    h3["group"] = json!("Prod");
+    next["hosts"].as_array_mut().unwrap().push(h3);
+    let old = json!({ "hosts": base["hosts"], "keys": base["keys"], "snippets": base["snippets"], "tunnels": base["tunnels"] });
+    ok(&me, "vault_put", json!({ "update": next, "base": old })).await;
+    ok(&agent, "agent_session_open", open("late")).await;
+    assert_eq!(sessions_of(&me).await, 3);
+
+    // Narrowed to the group `Prod`: sessions on hosts out of it end at once, `late` stays.
+    rule(&me, Some(&id), json!([{ "type": "group", "vaultId": "personal", "name": "Prod" }]), json!(["exec", "hostkeys:new"])).await;
+    for _ in 0..100 {
+        if sessions_of(&me).await == 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(sessions_of(&me).await, 1);
+    assert_eq!(kind(agent.call("agent_session_open", open("web")).await), "agentHost");
+    let who = ok(&agent, "agent_whoami", json!({ "token": token })).await;
+    assert_eq!(who["hosts"].as_array().unwrap().iter().map(|h| h["label"].clone()).collect::<Vec<_>>(), [json!("late")]);
+    // A host list in a request it already reaches would be granted without asking: the MCP checks first.
+    let hosts = ok(&agent, "agent_hosts", json!({ "token": token })).await;
+    assert_eq!(hosts.as_array().unwrap().iter().filter(|h| h["granted"] == true).count(), 1);
+}
+
+#[tokio::test]
+async fn an_agent_changes_a_teams_hosts_only_where_its_rule_reaches() {
+    let socket = start("team-edit").await;
+    let me = person(&socket).await;
+    let agent = hello(&socket, "mcp").await;
+    let shared = std::env::temp_dir().join(format!("detour-agents-team-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    let recovery = ok(&me, "recovery_key_new", json!({})).await;
+    let team = ok(&me, "team_create", json!({ "path": shared.display().to_string(), "name": "Acme", "myName": "Me", "recoveryKey": recovery })).await;
+    let tid = team["id"].as_str().unwrap().to_string();
+    let t = |id: &str, group: &str| json!({ "id": id, "group": group, "label": id, "address": "10.0.0.1", "port": 22, "user": "root", "auth": { "type": "agent" }, "tags": [], "hasPassword": false });
+    let update = json!({ "hosts": [t("a", "Prod"), t("b", "Stage")], "keys": [], "snippets": [], "tunnels": [] });
+    ok(&me, "team_put", json!({ "id": tid, "update": update })).await;
+
+    let made = rule(&me, None, json!([{ "type": "group", "vaultId": tid, "name": "Prod" }]), json!(["vault:edit"])).await;
+    let token = made["token"].as_str().unwrap().to_string();
+    let put = |next: Value, base: Value| json!({ "token": token, "method": "team_put", "params": { "id": tid, "update": next, "base": base } });
+    let base = json!({ "hosts": [t("a", "Prod"), t("b", "Stage")], "keys": [], "snippets": [], "tunnels": [] });
+    let with = |hosts: Vec<Value>| json!({ "hosts": hosts, "keys": [], "snippets": [], "tunnels": [] });
+    let mut a2 = t("a", "Prod");
+    a2["user"] = json!("broglie");
+    let mut b2 = t("b", "Stage");
+    b2["user"] = json!("broglie");
+
+    // In its group: changed. Out of it, or a new host without the whole team: refused.
+    assert_eq!(kind(agent.call("agent_call", put(with(vec![a2.clone(), t("b", "Stage")]), base.clone())).await), "ok");
+    assert_eq!(kind(agent.call("agent_call", put(with(vec![a2.clone(), b2.clone()]), with(vec![a2.clone(), t("b", "Stage")]))).await), "agentHost");
+    assert_eq!(kind(agent.call("agent_call", put(with(vec![a2.clone(), t("b", "Stage"), t("c", "Prod")]), with(vec![a2.clone(), t("b", "Stage")]))).await), "agentHost");
+    let snippets = json!({ "hosts": [a2.clone(), t("b", "Stage")], "keys": [], "snippets": [{ "id": "s", "name": "x", "command": "id" }], "tunnels": [] });
+    assert_eq!(kind(agent.call("agent_call", put(snippets, with(vec![a2.clone(), t("b", "Stage")]))).await), "forbidden");
+    let teams = ok(&me, "teams_list", json!({})).await;
+    let hosts = teams[0]["view"]["data"]["hosts"].as_array().unwrap().clone();
+    let user = |id: &str| hosts.iter().find(|h| h["id"] == id).unwrap()["user"].clone();
+    assert_eq!((user("a"), user("b")), (json!("broglie"), json!("root")));
+    let _ = std::fs::remove_dir_all(&shared);
+}

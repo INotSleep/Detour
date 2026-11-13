@@ -20,6 +20,10 @@ use crate::model::{Auth, Host, KeyEntry, KnownHost, now_ms};
 use crate::store::endpoint;
 use crate::{Error, Result, SecretKind, agent, keys};
 
+/// In `trust_fingerprint`: accept the key of a server none is pinned for yet, whatever it is
+/// (an agent allowed to). A pinned key that changed is refused all the same.
+pub const ACCEPT_NEW: &str = "*new*";
+
 #[derive(Clone)]
 pub struct ConnectRequest {
     pub host: Host,
@@ -138,7 +142,7 @@ impl client::Handler for Client {
         *self.seen.lock().unwrap() = Some(key.clone());
         Ok(match &self.pinned {
             Some(pinned) => pinned.key_data() == key.key_data(),
-            None => self.trust_fingerprint.as_deref().is_some_and(|t| t.split(',').any(|f| f == fingerprint(&key))),
+            None => self.trust_fingerprint.as_deref().is_some_and(|t| t.split(',').any(|f| f == ACCEPT_NEW || f == fingerprint(&key))),
         })
     }
 
