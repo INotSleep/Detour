@@ -382,6 +382,25 @@ pub(crate) async fn call(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value) ->
             Ok(serde_json::to_value(view(core, &t)).unwrap_or_default())
         }
 
+        // A vault's hosts as they are kept (no secrets), for changing them (`vault:edit`).
+        "agent_vault_hosts" => {
+            let a = a!({ token: String, vault_id: String });
+            let t = token(core, &a.token)?;
+            need(&t, Scope::VaultEdit)?;
+            let s = core.store.lock().map_err(poisoned)?;
+            let hosts = if a.vault_id == PERSONAL { serde_json::to_value(s.view().map_err(err)?.hosts) } else { serde_json::to_value(s.team_view(&a.vault_id).map_err(err)?.data.hosts) };
+            let mut hosts = hosts.unwrap_or_default();
+            // What only this device keeps doesn't go back into the team.
+            for h in hosts.as_array_mut().into_iter().flatten() {
+                if let Some(o) = h.as_object_mut() {
+                    for k in ["lastConnected", "own", "forwardAgent", "access"] {
+                        o.remove(k);
+                    }
+                }
+            }
+            Ok(hosts)
+        }
+
         /* ---------- sessions ---------- */
         "agent_session_open" => {
             let a = a!({ token: String, host: String, cols: Option<u32>, rows: Option<u32> });

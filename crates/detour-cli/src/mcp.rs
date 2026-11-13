@@ -50,9 +50,26 @@ enum Scope {
     /// Start and stop the person's saved tunnels through the host.
     #[serde(rename = "tunnels")]
     Tunnels,
-    /// Add and change hosts, snippets and keys in the person's vault.
+    /// Add and change hosts, snippets and keys in the person's vault, and change a team's hosts.
     #[serde(rename = "vault:edit")]
     VaultEdit,
+    /// Accept the key of a server no one has connected to yet (a changed key is never accepted).
+    #[serde(rename = "hostkeys:new")]
+    HostKeysNew,
+}
+
+impl Scope {
+    fn name(self) -> &'static str {
+        match self {
+            Scope::Connect => "connect",
+            Scope::Exec => "exec",
+            Scope::FilesRead => "files:read",
+            Scope::FilesWrite => "files:write",
+            Scope::Tunnels => "tunnels",
+            Scope::VaultEdit => "vault:edit",
+            Scope::HostKeysNew => "hostkeys:new",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, JsonSchema, serde::Serialize)]
@@ -177,6 +194,8 @@ struct RunSnippet {
 struct AddHost {
     /// A name for the host.
     name: String,
+    /// The team to add it to (its name); the personal vault if not given.
+    team: Option<String>,
     /// Its address: a name or an IP.
     address: String,
     /// SSH port (default 22).
@@ -234,6 +253,18 @@ type Browser = (String, String);
 struct Grant {
     secret: String,
     hosts: Vec<(String, String, String)>,
+    scopes: Vec<String>,
+}
+
+impl Grant {
+    fn new(secret: String) -> Self {
+        Self { secret, hosts: Vec::new(), scopes: Vec::new() }
+    }
+
+    /// Allows this on the host (`exec` covers `connect`).
+    fn allows(&self, scope: &str) -> bool {
+        self.scopes.iter().any(|s| s == scope) || scope == "connect" && self.scopes.iter().any(|s| s == "exec")
+    }
 }
 
 #[derive(Clone)]
@@ -259,7 +290,8 @@ fn explain(e: &Value) -> String {
         "notYourFiles" | "notYourTunnel" => "That isn't yours: it was opened by someone else.".into(),
         "denied" => "The person said no.".into(),
         "approvalTimedOut" => "Nobody approved the command in time. Ask the person to watch the Detour window (or run `detour approve`), then try again.".into(),
-        "hostKeyUnknown" | "hostKeyChanged" => "Detour has not confirmed this server's key. Ask the person to connect to the host once in Detour and confirm its key; you can't do that.".into(),
+        "hostKeyUnknown" => "Detour has not confirmed this server's key. Ask the person to connect to the host once in Detour and confirm it, or to let you accept new servers' keys (the hostkeys:new scope, which you may request).".into(),
+        "hostKeyChanged" => "This server's key is not the one Detour knows: it may be another server. Only the person can accept it, in Detour.".into(),
         "needSecret" | "authFailed" | "jumpNeedsLogin" => "The host's login needs a password or passphrase Detour has not saved. Ask the person to save it for this host in Detour.".into(),
         "ambiguousHost" => format!("Several hosts are called that: {}. Use one of these names.", e["options"].as_array().map(|o| o.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", ")).unwrap_or_default()),
         "notFound" => format!("Not found: {}.", e["what"].as_str().unwrap_or("")),
@@ -318,7 +350,7 @@ fn temp_path() -> PathBuf {
 impl Detour {
     pub fn new(dir: PathBuf) -> Self {
         let preset = std::env::var("DETOUR_TOKEN").unwrap_or_default();
-        let grants = preset.split([',', ' ']).filter(|t| !t.is_empty()).map(|t| Grant { secret: t.to_string(), hosts: Vec::new() }).collect();
+        let grants = preset.split([',', ' ']).filter(|t| !t.is_empty()).map(|t| Grant::new(t.to_string())).collect();
         Self { dir, link: Arc::default(), grants: Arc::new(Mutex::new(grants)), files: Arc::default(), tool_router: Self::tool_router() }
     }
 
@@ -349,9 +381,10 @@ impl Detour {
             match self.core("agent_whoami", json!({ "token": g.secret })).await {
                 Ok(who) => {
                     g.hosts = who["hosts"].as_array().into_iter().flatten().map(|h| (s(&h["vaultId"]), s(&h["hostId"]), host_label(h))).collect();
+                    g.scopes = who["scopes"].as_array().into_iter().flatten().map(s).collect();
                     let mut list = self.grants.lock().unwrap();
                     if let Some(x) = list.iter_mut().find(|x| x.secret == g.secret) {
-                        x.hosts = g.hosts.clone();
+                        (x.hosts, x.scopes) = (g.hosts.clone(), g.scopes.clone());
                     }
                 }
                 Err(e) if e["kind"] == "tokenInvalid" => {
@@ -477,6 +510,41 @@ impl Detour {
         Ok(self.with_tokens(|_| true, "agent_call", |token| json!({ "token": token, "method": "vault_get" })).await?.1)
     }
 
+    /// The vault a host to change is in, and that vault's hosts: a host by name, `team/name` or id.
+    async fn hosts_of(&self, host: &str) -> Result<(String, Value), String> {
+        let all = self.core("agent_hosts", json!({})).await.map_err(|e| explain(&e))?;
+        let n = host.to_lowercase();
+        let found: Vec<&Value> = all
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|h| s(&h["id"]) == host || s(&h["name"]).to_lowercase() == n || h["team"].as_str().is_some_and(|t| format!("{}/{}", t.to_lowercase(), s(&h["name"]).to_lowercase()) == n))
+            .collect();
+        let vault = match found.as_slice() {
+            [h] => s(&h["vaultId"]),
+            [] => return Err(format!("No host called {host}.")),
+            _ => return Err(format!("Several hosts are called {host}: use team/name.")),
+        };
+        Ok((vault.clone(), self.vault_hosts(&vault).await?))
+    }
+
+    async fn vault_hosts(&self, vault: &str) -> Result<Value, String> {
+        Ok(self.with_tokens(|_| true, "agent_vault_hosts", |token| json!({ "token": token, "vaultId": vault })).await?.1)
+    }
+
+    /// Saves changed hosts of a vault: the personal one, or a team (only the hosts change).
+    async fn put_hosts(&self, vault: &str, base: Value, next: Value) -> Result<(), String> {
+        if vault == detour_core::store::PERSONAL {
+            let all = self.vault().await?;
+            let (mut b, mut n) = (all.clone(), all);
+            (b["hosts"], n["hosts"]) = (base, next);
+            return self.put(&b, &n).await;
+        }
+        let with = |hosts: Value| json!({ "hosts": hosts, "keys": [], "snippets": [], "tunnels": [] });
+        self.with_tokens(|_| true, "agent_call", |token| json!({ "token": token, "method": "team_put", "params": { "id": vault, "update": with(next.clone()), "base": with(base.clone()) } })).await?;
+        Ok(())
+    }
+
     /// Saves an edit of the personal vault made on `base`: only what changed goes in.
     async fn put(&self, base: &Value, next: &Value) -> Result<(), String> {
         let pick = |d: &Value| json!({ "hosts": d["hosts"], "keys": d["keys"], "snippets": d["snippets"], "tunnels": d["tunnels"] });
@@ -542,6 +610,13 @@ impl Detour {
         allow less than you asked. Waits up to 100 seconds for the answer; if it is still pending, ask the person to approve it \
         and call wait_for_access.")]
     async fn request_access(&self, Parameters(a): Parameters<RequestAccess>, peer: Peer<RoleServer>) -> Out {
+        // What the person gave ahead (or before) already covers it: no need to ask again.
+        let grants = self.grants().await;
+        let covered = |name: &str| grants.iter().any(|g| g.hosts.iter().any(|h| names(h, name)) && a.scopes.iter().all(|sc| g.allows(sc.name())));
+        if !a.hosts.is_empty() && a.hosts.iter().all(|h| covered(h)) {
+            let scopes: Vec<&str> = a.scopes.iter().map(|sc| sc.name()).collect();
+            return Ok(format!("Already allowed: {} on {}. Open a session with open_session.", scopes.join(", "), a.hosts.join(", ")));
+        }
         let agent = peer.peer_info().map(|i| i.client_info.title.clone().unwrap_or_else(|| i.client_info.name.clone())).filter(|n| !n.is_empty()).unwrap_or_else(|| "AI agent".into());
         let r = self
             .core("agent_request", json!({ "agent": agent, "hosts": a.hosts, "scopes": a.scopes, "ttl": a.duration, "reason": a.reason, "waitSecs": WAIT_SECS }))
@@ -560,7 +635,7 @@ impl Detour {
         match r["status"].as_str() {
             Some("approved") => {
                 let secret = s(&r["token"]);
-                self.grants.lock().unwrap().push(Grant { secret: secret.clone(), hosts: Vec::new() });
+                self.grants.lock().unwrap().push(Grant::new(secret.clone()));
                 let who = self.core("agent_whoami", json!({ "token": secret })).await.map_err(|e| explain(&e))?;
                 let hosts: Vec<String> = who["hosts"].as_array().into_iter().flatten().map(host_label).collect();
                 let scopes: Vec<String> = who["scopes"].as_array().into_iter().flatten().map(s).collect();
@@ -786,36 +861,46 @@ impl Detour {
 
     /* ---------- the vault (vault:edit) ---------- */
 
-    #[tool(description = "Add a host to the person's vault (needs vault:edit). To use it, request access to it.")]
+    #[tool(description = "Add a host to the person's vault, or to a team (needs vault:edit; in a team, over all its hosts). To use it, request access to it.")]
     async fn add_host(&self, Parameters(a): Parameters<AddHost>) -> Out {
-        let base = self.vault().await?;
-        let mut next = base.clone();
+        let personal = self.vault().await?;
+        let vault = match &a.team {
+            Some(team) => {
+                let all = self.core("agent_hosts", json!({})).await.map_err(|e| explain(&e))?;
+                all.as_array().into_iter().flatten().find(|h| h["team"].as_str().is_some_and(|t| t.eq_ignore_ascii_case(team))).map(|h| s(&h["vaultId"])).ok_or_else(|| format!("No team called {team} (or it has no hosts yet)."))?
+            }
+            None => detour_core::store::PERSONAL.to_string(),
+        };
+        // Keys and proxies are the vault's own: a personal key can't log in to a team's host.
+        let source = if vault == detour_core::store::PERSONAL { personal.clone() } else { json!({}) };
         let auth = match &a.key {
             Some(k) => {
-                let key = base["keys"].as_array().into_iter().flatten().find(|x| s(&x["name"]).eq_ignore_ascii_case(k) || x["id"] == k.as_str()).ok_or_else(|| format!("No key called {k}."))?;
+                let key = source["keys"].as_array().into_iter().flatten().find(|x| s(&x["name"]).eq_ignore_ascii_case(k) || x["id"] == k.as_str()).ok_or_else(|| format!("No key called {k}."))?;
                 json!({ "type": "key", "keyId": key["id"] })
             }
             None => json!({ "type": "agent" }),
         };
         let proxy = match &a.proxy {
-            Some(p) => proxy_id(&base, p)?,
+            Some(p) => proxy_id(&source, p)?,
             None => Value::Null,
         };
         let host = json!({
             "id": detour_core::new_id(), "group": a.group.unwrap_or_default(), "label": a.name, "address": a.address, "port": a.port.unwrap_or(22),
             "user": a.user.unwrap_or_else(|| "root".into()), "auth": auth, "tags": [], "hasPassword": false, "forwardAgent": false, "proxyId": proxy,
         });
-        next["hosts"].as_array_mut().ok_or("The vault has no host list.")?.push(host);
-        self.put(&base, &next).await?;
+        let base = self.vault_hosts(&vault).await?;
+        let mut next = base.clone();
+        next.as_array_mut().ok_or("The vault has no host list.")?.push(host);
+        self.put_hosts(&vault, base, next).await?;
         Ok(format!("Added {}.", a.name))
     }
 
-    #[tool(description = "Change a host of the person's vault (needs vault:edit).")]
+    #[tool(description = "Change a host of the person's vault or of a team (needs vault:edit; in a team, a host your access reaches).")]
     async fn update_host(&self, Parameters(a): Parameters<UpdateHost>) -> Out {
-        let base = self.vault().await?;
+        let (vault, base) = self.hosts_of(&a.host).await?;
         let mut next = base.clone();
-        let hosts = next["hosts"].as_array_mut().ok_or("The vault has no host list.")?;
-        let h = hosts.iter_mut().find(|h| s(&h["label"]).eq_ignore_ascii_case(&a.host) || h["id"] == a.host.as_str()).ok_or_else(|| format!("No host called {} in the personal vault.", a.host))?;
+        let wanted = a.host.rsplit('/').next().unwrap_or(&a.host).to_lowercase();
+        let h = next.as_array_mut().into_iter().flatten().find(|h| s(&h["label"]).to_lowercase() == wanted || h["id"] == a.host.as_str()).ok_or_else(|| format!("No host called {}.", a.host))?;
         if let Some(v) = a.name {
             h["label"] = json!(v);
         }
@@ -832,24 +917,26 @@ impl Detour {
             h["group"] = json!(v);
         }
         if let Some(p) = &a.proxy {
-            h["proxyId"] = proxy_id(&base, p)?;
+            let source = if vault == detour_core::store::PERSONAL { self.vault().await? } else { json!({}) };
+            h["proxyId"] = if p.eq_ignore_ascii_case("none") { Value::Null } else { proxy_id(&source, p)? };
             h["proxy"] = Value::Null;
         }
-        self.put(&base, &next).await?;
+        self.put_hosts(&vault, base, next).await?;
         Ok("Saved.".into())
     }
 
-    #[tool(description = "Remove a host from the person's vault (needs vault:edit).")]
+    #[tool(description = "Remove a host from the person's vault or from a team (needs vault:edit; in a team, a host your access reaches).")]
     async fn remove_host(&self, Parameters(a): Parameters<HostArg>) -> Out {
-        let base = self.vault().await?;
+        let (vault, base) = self.hosts_of(&a.host).await?;
         let mut next = base.clone();
-        let hosts = next["hosts"].as_array_mut().ok_or("The vault has no host list.")?;
+        let wanted = a.host.rsplit('/').next().unwrap_or(&a.host).to_lowercase();
+        let hosts = next.as_array_mut().ok_or("The vault has no host list.")?;
         let before = hosts.len();
-        hosts.retain(|h| !(s(&h["label"]).eq_ignore_ascii_case(&a.host) || h["id"] == a.host.as_str()));
+        hosts.retain(|h| !(s(&h["label"]).to_lowercase() == wanted || h["id"] == a.host.as_str()));
         if hosts.len() == before {
-            return Err(format!("No host called {} in the personal vault.", a.host));
+            return Err(format!("No host called {}.", a.host));
         }
-        self.put(&base, &next).await?;
+        self.put_hosts(&vault, base, next).await?;
         Ok("Removed.".into())
     }
 
