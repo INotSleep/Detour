@@ -1154,3 +1154,10 @@ body.resizing-col, body.resizing-col * { cursor: row-resize !important; }
 .run-code.err { color: var(--err); }
 .ok-text { color: var(--ok); flex: none; }
 .mcp-client-actions { display: flex; align-items: center; gap: 8px; }
+.section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.section-head .section-title { margin: 0; }
+.agent-reach { display: flex; flex-direction: column; gap: 10px; max-height: 210px; overflow-y: auto; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r); }
+.agent-vault { display: flex; flex-direction: column; gap: 6px; }
+.agent-picks { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding-left: 26px; }
+.agent-sub { width: 100%; font-size: 11.5px; color: var(--muted); }
+.agent-scopes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; }

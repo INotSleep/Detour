@@ -408,7 +408,10 @@ export interface CoreSession {
 }
 
 /** What an AI agent may do with a token (detour_core::tokens::Scope). */
-export type AgentScope = "connect" | "exec" | "files:read" | "files:write" | "tunnels" | "vault:edit";
+export type AgentScope = "connect" | "exec" | "files:read" | "files:write" | "tunnels" | "vault:edit" | "hostkeys:new";
+export const AGENT_SCOPES: AgentScope[] = ["connect", "exec", "files:read", "files:write", "tunnels", "vault:edit", "hostkeys:new"];
+/** Hosts a token reaches by what they are in (detour_core::tokens::Reach): hosts added there later too. */
+export type AgentReach = { type: "all" } | { type: "vault"; vaultId: string } | { type: "group"; vaultId: string; name: string } | { type: "myGroup"; vaultId: string; id: string };
 export type AgentTtl = "2h" | "1d" | "7d" | "never";
 export interface AgentHost {
   vaultId: string;
@@ -428,7 +431,11 @@ export type AgentRequest = { id: string; at: number; agent: string } & (
 export interface AgentToken {
   id: string;
   agent: string;
+  /** Every host it reaches now. */
   hosts: AgentHost[];
+  /** The hosts it names itself, and what it reaches by what hosts are in. */
+  named: AgentHost[];
+  reach: AgentReach[];
   scopes: AgentScope[];
   createdAt: number;
   expiresAt: number | null;
@@ -514,6 +521,26 @@ async function demoTransfer(transfer: string, total: number, onProgress: OnProgr
 /* ---------- api ---------- */
 
 const real = isTauri();
+
+/* Demo agents: an access given ahead, and the AI clients of a typical computer. */
+let demoTokens: AgentToken[] = [
+  {
+    id: "t1",
+    agent: "Claude Code",
+    hosts: [],
+    named: [],
+    reach: [{ type: "group", vaultId: "acme", name: "Staging" }],
+    scopes: ["exec", "files:read", "hostkeys:new"],
+    createdAt: Date.now() - 86_400_000 * 3,
+    expiresAt: null,
+    expired: false,
+    lastUsed: Date.now() - 600_000,
+  },
+];
+const demoClients: McpClient[] = [
+  { id: "claude-code", name: "Claude Code", installed: true, added: true, current: true, config: "" },
+  { id: "codex", name: "Codex", installed: true, added: true, current: true, config: "" },
+];
 
 export const api = {
   /** True inside the Tauri window. */
@@ -684,12 +711,30 @@ export const api = {
   },
 
   /** Allows or denies a request; for access the person may keep fewer hosts and rights. Returns the new token. */
-  agentsAnswer(id: string, allow: boolean, opts: { ttl?: AgentTtl; scopes?: AgentScope[]; hosts?: { vaultId: string; hostId: string }[]; always?: boolean } = {}): Promise<{ tokenId: string; token: string } | null> {
+  agentsAnswer(id: string, allow: boolean, opts: { ttl?: AgentTtl; scopes?: AgentScope[]; hosts?: { vaultId: string; hostId: string }[]; reach?: AgentReach[]; always?: boolean } = {}): Promise<{ tokenId: string; token: string } | null> {
     return invoke("agents_answer", { id, allow, ...opts });
   },
 
   agentsList(): Promise<AgentToken[]> {
-    return real ? invoke("agents_list") : Promise.resolve([]);
+    return real ? invoke("agents_list") : Promise.resolve(demoTokens.map((t) => ({ ...t })));
+  },
+
+  /** Makes (no `id`) or changes an access ahead of any request; a new one comes back with its token, once. */
+  agentsSet(rule: { id?: string; agent?: string; reach: AgentReach[]; hosts: { vaultId: string; hostId: string }[]; scopes: AgentScope[]; ttl?: AgentTtl }): Promise<{ tokenId: string; token?: string }> {
+    if (real) return invoke("agents_set", rule);
+    const named = rule.hosts.map((h) => ({ ...h, label: h.hostId, team: null }));
+    if (rule.id) {
+      demoTokens = demoTokens.map((t) => (t.id === rule.id ? { ...t, reach: rule.reach, named, scopes: rule.scopes } : t));
+      return Promise.resolve({ tokenId: rule.id });
+    }
+    const id = `t${demoTokens.length + 1}`;
+    demoTokens = [...demoTokens, { id, agent: rule.agent ?? "", hosts: named, named, reach: rule.reach, scopes: rule.scopes, createdAt: Date.now(), expiresAt: null, expired: false, lastUsed: null }];
+    return Promise.resolve({ tokenId: id, token: "dtr_demo" });
+  },
+
+  /** Puts an agent's token into an AI client's config of Detour's MCP server: it starts with the access. */
+  mcpClientToken(id: string, token: string): Promise<void> {
+    return real ? invoke("mcp_client_token", { id, token }) : Promise.resolve();
   },
 
   /** What an agent ran in a session, for its tab. */
@@ -699,7 +744,7 @@ export const api = {
 
   /** AI clients on this computer, to add Detour to (none when the command line isn't installed). */
   mcpClients(): Promise<McpClient[]> {
-    return real ? invoke("mcp_clients") : Promise.resolve([]);
+    return real ? invoke("mcp_clients") : Promise.resolve(demoClients);
   },
 
   mcpClientSet(id: string, on: boolean): Promise<void> {
@@ -728,6 +773,10 @@ export const api = {
 
   /** Takes a token away: its sessions, file browsers and tunnels close. */
   agentsRevoke(id: string): Promise<boolean> {
+    if (!real) {
+      demoTokens = demoTokens.filter((t) => t.id !== id);
+      return Promise.resolve(true);
+    }
     return invoke("agents_revoke", { id });
   },
 

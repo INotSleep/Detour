@@ -203,8 +203,8 @@ export function SettingsView() {
       )}
 
       {api.real && <CliSetting />}
-      {api.real && <AgentsSettings />}
-      {api.real && <McpClients />}
+      <AgentsSettings />
+      <McpClients />
 
       <section className="settings-group">
         <h3 className="section-title">{t.about}</h3>
