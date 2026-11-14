@@ -325,11 +325,12 @@ fn add_with(dirs: &Dirs, id: &str, server: &Server, use_cli: bool, env: &BTreeMa
         && let Some(cli) = claude_cli()
     {
         let _ = run_claude(&cli, &["mcp".into(), "remove".into(), "--scope".into(), "user".into(), NAME.into()]);
-        let mut args = vec!["mcp".into(), "add".into(), "--scope".into(), "user".into()];
+        // The name first: `-e` takes any number of values, up to `--`.
+        let mut args = vec!["mcp".into(), "add".into(), "--scope".into(), "user".into(), NAME.into()];
         for (k, v) in env {
             args.extend(["-e".into(), format!("{k}={v}")]);
         }
-        args.extend([NAME.into(), "--".into(), server.command.display().to_string()]);
+        args.extend(["--".into(), server.command.display().to_string()]);
         args.extend(server.args.iter().cloned());
         let out = run_claude(&cli, &args)?;
         if !out.status.success() {

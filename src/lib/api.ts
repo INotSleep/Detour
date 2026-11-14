@@ -376,7 +376,7 @@ function demoKey(vaultId: string, name: string, algorithm: SshKey["algorithm"], 
 /* ---------- the core ---------- */
 
 /** What the window does itself; everything else is a method of the core. */
-const WINDOW_COMMANDS = new Set(["core_info", "core_me", "write_text_file", "local_home", "local_list", "local_mkdir", "open_local", "editors", "open_with", "edit_copy_path", "local_modified", "mcp_clients", "mcp_client_set", "tray_set", "window_show", "cli_status", "cli_install"]);
+const WINDOW_COMMANDS = new Set(["core_info", "core_me", "write_text_file", "local_home", "local_list", "local_mkdir", "open_local", "editors", "open_with", "edit_copy_path", "local_modified", "mcp_clients", "mcp_client_set", "mcp_client_token", "tray_set", "window_show", "cli_status", "cli_install"]);
 
 /**
  * Calls the core with the arguments its method takes. A `Channel` among them becomes

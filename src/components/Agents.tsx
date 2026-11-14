@@ -283,7 +283,11 @@ function RuleDialog({ token, onClose, onSaved }: { token: AgentToken | null; onC
       const got = await api.agentsSet({ id: token?.id, agent, reach, hosts, scopes: [...scopes], ttl: ttl ?? undefined });
       if (token) toast({ text: t.rule.saved, tone: "success" });
       else if (picked !== OTHER && got.token) {
-        await api.mcpClientToken(picked, got.token);
+        // Not in the client's config, the access would only wait there unused.
+        await api.mcpClientToken(picked, got.token).catch(async (e) => {
+          await api.agentsRevoke(got.tokenId).catch(() => {});
+          throw e;
+        });
         toast({ text: t.rule.given(agent), tone: "success" });
       } else if (got.token) {
         const secret = got.token;
