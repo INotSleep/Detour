@@ -39,6 +39,12 @@ enum Command {
     Unlock,
     Lock,
     Quit,
+    Logs {
+        #[arg(long, short = 'n', default_value_t = 50)]
+        lines: usize,
+        #[arg(long)]
+        path: bool,
+    },
     Ls { query: Option<String> },
     #[command(subcommand)]
     Hosts(Hosts),
@@ -363,6 +369,7 @@ fn app_beside() -> Option<PathBuf> {
 async fn main() -> ExitCode {
     let cli = help::parse();
     let dir = data_dir(cli.data_dir);
+    detour_core::logfile::init(&dir, "cli");
     if let Command::Daemon { app } = cli.command {
         return match detour_daemon::run_with_tray(&dir, app.or_else(app_beside)).await {
             Ok(()) => ExitCode::SUCCESS,
@@ -405,6 +412,26 @@ async fn run(command: Command, dir: &std::path::Path, team: Option<String>, json
         Command::Status => {
             let c = conn::connect(dir).await?;
             cmds::status(&c, json).await?;
+            return Ok(0);
+        }
+        // Read from the file: a core that won't start can still be traced.
+        Command::Logs { lines, path } => {
+            let file = detour_core::logfile::path(dir);
+            if path {
+                println!("{}", file.display());
+                return Ok(0);
+            }
+            let text = detour_core::logfile::tail(dir, 4 << 20);
+            if text.is_empty() {
+                eprintln!("{}: {}", i18n::t().log_empty, file.display());
+                return Ok(0);
+            }
+            let all: Vec<&str> = text.lines().collect();
+            for l in &all[all.len().saturating_sub(lines)..] {
+                println!("{l}");
+            }
+            eprintln!("
+{}", file.display());
             return Ok(0);
         }
         Command::Quit => {
@@ -525,7 +552,7 @@ async fn run(command: Command, dir: &std::path::Path, team: Option<String>, json
         Command::Agents(Agents::Revoke { agent }) => agents::revoke(&ctx, &agent).await?,
         Command::Agents(Agents::Add { agent, opts, client }) => agents::add(&ctx, dir, &agent, opts, client.as_deref()).await?,
         Command::Agents(Agents::Edit { agent, opts }) => agents::edit(&ctx, &agent, opts).await?,
-        Command::Status | Command::Quit | Command::Daemon { .. } | Command::Mcp { .. } => unreachable!(),
+        Command::Status | Command::Quit | Command::Logs { .. } | Command::Daemon { .. } | Command::Mcp { .. } => unreachable!(),
     }
     Ok(0)
 }

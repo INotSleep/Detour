@@ -732,6 +732,16 @@ export const api = {
     return Promise.resolve({ tokenId: id, token: "dtr_demo" });
   },
 
+  /** Writes an error of the window into the log (the core's file: the window can't write one). */
+  logWrite(level: "error" | "warn" | "info", message: string): Promise<void> {
+    return real ? invoke("log_write", { level, message }) : Promise.resolve();
+  },
+
+  /** The end of the log, and where it is. */
+  logTail(bytes = 64 * 1024): Promise<{ path: string; dir: string; text: string }> {
+    return real ? invoke("log_tail", { bytes }) : Promise.resolve({ path: "", dir: "", text: "" });
+  },
+
   /** Puts an agent's token into an AI client's config of Detour's MCP server: it starts with the access. */
   mcpClientToken(id: string, token: string): Promise<void> {
     return real ? invoke("mcp_client_token", { id, token }) : Promise.resolve();

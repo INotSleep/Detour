@@ -222,6 +222,8 @@ fn tray_app(core: Arc<Core>, app: PathBuf) {
 
 async fn serve(data_dir: &Path, trust: Trust, tray: bool) -> std::io::Result<()> {
     let listener = detour_ipc::listen(&detour_ipc::socket_name(data_dir)).await?;
+    detour_core::logfile::init(data_dir, "core");
+    detour_core::logfile::info(&format!("Detour core {} started ({} {})", detour_core::VERSION, std::env::consts::OS, std::env::consts::ARCH));
     let app = match &trust {
         Trust::App(app) => app.clone(),
         Trust::Everyone => None,
@@ -248,6 +250,17 @@ async fn serve(data_dir: &Path, trust: Trust, tray: bool) -> std::io::Result<()>
         }
     }
     Ok(())
+}
+
+/// A call that failed, by its method and error (never its arguments). What is asked of the
+/// person on the way (a password, a key to trust, unlocking) is not an error.
+fn logged(method: &str, err: &Value) {
+    const ASKS: &[&str] = &["needSecret", "hostKeyUnknown", "locked", "notTrusted", "denied"];
+    let kind = err["kind"].as_str().unwrap_or("");
+    if ASKS.contains(&kind) || method == "log_write" {
+        return;
+    }
+    detour_core::logfile::write("warn", &format!("{method}: {err}"));
 }
 
 async fn serve_conn(core: Arc<Core>, stream: detour_ipc::Stream) {
@@ -292,7 +305,10 @@ async fn serve_conn(core: Arc<Core>, stream: detour_ipc::Stream) {
             let ctx = Ctx { id, out: out.clone() };
             let reply = match rpc::call(&core, &ctx, &method, params).await {
                 Ok(ok) => Message::Reply { id: call, ok, err: None },
-                Err(err) => Message::Reply { id: call, ok: Value::Null, err: Some(err) },
+                Err(err) => {
+                    logged(&method, &err);
+                    Message::Reply { id: call, ok: Value::Null, err: Some(err) }
+                }
             };
             let _ = out.send(Frame::Msg(reply));
         });

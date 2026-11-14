@@ -1161,3 +1161,8 @@ body.resizing-col, body.resizing-col * { cursor: row-resize !important; }
 .agent-picks { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding-left: 26px; }
 .agent-sub { width: 100%; font-size: 11.5px; color: var(--muted); }
 .agent-scopes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; }
+.crash { position: fixed; inset: 0; display: grid; place-items: center; background: var(--bg); color: var(--text); padding: 24px; }
+.crash-box { width: min(640px, 100%); display: flex; flex-direction: column; align-items: flex-start; gap: 14px; }
+.crash-box h1 { margin: 0; font-size: 20px; font-weight: 650; }
+.crash-error { width: 100%; margin: 0; padding: 12px 14px; border-radius: var(--r); background: var(--input); color: var(--text-2); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; user-select: text; }
+.crash-actions { display: flex; gap: 8px; flex-wrap: wrap; }

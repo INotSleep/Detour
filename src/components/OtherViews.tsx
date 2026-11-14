@@ -128,7 +128,7 @@ function SnippetDialog({ snippet, onClose }: { snippet: Snippet | null; onClose:
 /* ---------- settings ---------- */
 
 export function SettingsView() {
-  const { settings, setSettings, coreInfo, lock, update_: update, checkUpdate, installUpdate } = useStore();
+  const { settings, setSettings, coreInfo, lock, update_: update, checkUpdate, installUpdate, toast } = useStore();
   const t = useT().settings;
   const [changingMaster, setChangingMaster] = useState(false);
   return (
@@ -216,6 +216,12 @@ export function SettingsView() {
           <span>{t.license}</span>
           <span className="muted mono selectable">AGPL-3.0 · github.com/INotSleep/Detour</span>
         </div>
+        {api.real && (
+          <div className="setting">
+            <span>{t.log}</span>
+            <Button size="sm" onClick={() => void api.logTail(0).then((l) => api.openLocal(l.dir)).catch((e) => toast({ text: errorText(e), tone: "error" }))}>{t.openLog}</Button>
+          </div>
+        )}
         {api.real && (
           <>
             <div className="setting">

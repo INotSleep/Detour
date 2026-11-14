@@ -61,7 +61,7 @@ pub(crate) const READ_ONLY: &[&str] = &[
     "host_password", "key_export", "my_id", "id_inspect", "recovery_key_new", "teams_list", "team_inspect", "team_inspect_git",
     "github_user", "github_start", "github_repo_access", "session_input", "session_resize", "session_attach", "session_detach", "sessions_list", "session_runs",
     "files_open", "files_list", "files_resolve", "files_cancel", "files_close", "tunnels_status", "tunnel_start", "tunnel_stop", "proxy_check", "proxy_parse", "proxy_export", "settings_get",
-    "settings_set", "activity", "quit", "trust_request", "trust_answer", "trust_with_password", "hosts_export",
+    "settings_set", "activity", "log_write", "log_tail", "quit", "trust_request", "trust_answer", "trust_with_password", "hosts_export",
     "agents_pending", "agents_list", "agents_answer", "agents_set", "agents_revoke",
 ];
 
@@ -152,6 +152,18 @@ pub(crate) async fn dispatch(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value
         "hello" => Ok(json!({ "connId": ctx.id, "coreVersion": detour_core::VERSION, "protocol": detour_ipc::PROTOCOL, "pid": std::process::id() })),
         "core_info" => Ok(json!({ "coreVersion": detour_core::VERSION, "os": std::env::consts::OS })),
         "activity" => Ok(Value::Null),
+        // An error of the window (it can't write files of its own), and the log's end for it.
+        "log_write" => {
+            let a = args!(method, p, { level: String, message: String });
+            let level = if matches!(a.level.as_str(), "error" | "warn" | "info") { a.level.as_str() } else { "error" };
+            detour_core::logfile::write(level, &format!("window: {}", a.message.chars().take(20_000).collect::<String>()));
+            Ok(Value::Null)
+        }
+        "log_tail" => {
+            let a = args!(method, p, { bytes: Option<usize> });
+            let path = detour_core::logfile::path(&core.data_dir);
+            Ok(json!({ "path": path, "dir": detour_core::logfile::dir(&core.data_dir), "text": detour_core::logfile::tail(&core.data_dir, a.bytes.unwrap_or(64 * 1024).min(1 << 20)) }))
+        }
         "settings_get" => Ok(serde_json::to_value(core.settings.lock().unwrap().clone()).unwrap_or_default()),
         "settings_set" => {
             let a = args!(method, p, { auto_lock_minutes: Option<u32> });

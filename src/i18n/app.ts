@@ -7,6 +7,13 @@ export const en = {
   quickConnect: "Connect",
   newConnection: "New connection · Ctrl K",
   newSftp: "New SFTP tab",
+  crash: {
+    title: "Detour hit an error",
+    reload: "Reload the window",
+    copy: "Copy the error",
+    copied: "Copied",
+    openLog: "Open the log",
+  },
   tabs: {
     close: "Close",
     closeOthers: "Close others",
@@ -72,6 +79,13 @@ export const ru: typeof en = {
   quickConnect: "Подключиться",
   newConnection: "Новое подключение · Ctrl K",
   newSftp: "Новая вкладка SFTP",
+  crash: {
+    title: "В Detour произошла ошибка",
+    reload: "Перезагрузить окно",
+    copy: "Скопировать ошибку",
+    copied: "Скопировано",
+    openLog: "Открыть журнал",
+  },
   tabs: {
     close: "Закрыть",
     closeOthers: "Закрыть остальные",

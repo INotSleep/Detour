@@ -526,6 +526,7 @@ pub fn builder<R: tauri::Runtime>(builder: tauri::Builder<R>, data_dir: PathBuf)
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    detour_core::logfile::init(&data_dir(), "app");
     let mut app = tauri::Builder::default();
     let tray_only = std::env::args_os().any(|a| a == "--tray");
     // Started again, Detour comes forward instead of opening a second window. A vault folder
