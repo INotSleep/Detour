@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration as Span, Instant};
 
 use detour_ipc::Client;
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -26,7 +26,9 @@ type Out = Result<String, String>;
 
 /// How long a request for access waits for the person in one call (MCP clients time out).
 const WAIT_SECS: u64 = 100;
-const ACCESS_REQUEST_SECS: u64 = 10 * 60;
+/// How long the core keeps a request for the person (its `KEEP`): an answer given until then
+/// still reaches this server, without the agent calling wait_for_access.
+const REQUEST_KEEP: Span = Span::from_secs(10 * 60);
 /// The most of a remote file `read_file` returns.
 const MAX_READ: u64 = 1024 * 1024;
 
@@ -251,20 +253,27 @@ struct GenerateKey {
 /// A file browser's id and the home directory it opened in.
 type Browser = (String, String);
 
+/// A request for access still waiting for the person. Its answer is collected in the
+/// background, once, and every wait for it gets the same.
 #[derive(Clone)]
-struct PendingAccess {
+struct Pending {
     answer: watch::Receiver<Option<Out>>,
-    pending: String,
-    started: Instant,
+    /// What a wait says while there is no answer yet.
+    waiting: String,
+    asked: Instant,
 }
 
-impl PendingAccess {
+impl Pending {
+    fn live(&self) -> bool {
+        self.asked.elapsed() < REQUEST_KEEP
+    }
+
+    /// The answer, or what to say while there is none after one call's wait.
     async fn wait(mut self) -> Out {
-        let got = tokio::time::timeout(std::time::Duration::from_secs(WAIT_SECS), self.answer.wait_for(Option::is_some)).await;
-        match got {
-            Ok(Ok(answer)) => answer.as_ref().unwrap().clone(),
+        match tokio::time::timeout(Span::from_secs(WAIT_SECS), self.answer.wait_for(Option::is_some)).await {
+            Ok(Ok(answer)) => answer.clone().unwrap_or(Ok(self.waiting)),
             Ok(Err(_)) => Err("Lost the connection to Detour. Try again.".into()),
-            Err(_) => Ok(self.pending),
+            Err(_) => Ok(self.waiting),
         }
     }
 }
@@ -293,7 +302,8 @@ pub struct Detour {
     dir: PathBuf,
     link: Arc<tokio::sync::Mutex<Option<Client>>>,
     grants: Arc<Mutex<Vec<Grant>>>,
-    access_requests: Arc<Mutex<HashMap<String, PendingAccess>>>,
+    /// Requests for access still waiting for the person, by their id.
+    pending: Arc<Mutex<HashMap<String, Pending>>>,
     /// File browsers opened, by token and host (`vault/host`): their id and home directory.
     files: Arc<Mutex<HashMap<(String, String), Browser>>>,
     tool_router: ToolRouter<Self>,
@@ -373,7 +383,7 @@ impl Detour {
     pub fn new(dir: PathBuf) -> Self {
         let preset = std::env::var("DETOUR_TOKEN").unwrap_or_default();
         let grants = preset.split([',', ' ']).filter(|t| !t.is_empty()).map(|t| Grant::new(t.to_string())).collect();
-        Self { dir, link: Arc::default(), grants: Arc::new(Mutex::new(grants)), access_requests: Arc::default(), files: Arc::default(), tool_router: Self::tool_router() }
+        Self { dir, link: Arc::default(), grants: Arc::new(Mutex::new(grants)), pending: Arc::default(), files: Arc::default(), tool_router: Self::tool_router() }
     }
 
     /// A call to the core, starting it (or reconnecting) when needed.
@@ -629,8 +639,8 @@ impl Detour {
     }
 
     #[tool(description = "Ask the person for access to hosts. They see your name, the hosts, the scopes and your reason, and may \
-        allow less than you asked. Waits up to 100 seconds for the answer; if it is still pending, ask the person to approve it \
-        and call wait_for_access.")]
+        allow less than you asked. Waits up to 100 seconds for the answer; if it is still pending, ask the person to approve it: \
+        their answer takes effect by itself, and wait_for_access waits for it.")]
     async fn request_access(&self, Parameters(a): Parameters<RequestAccess>, peer: Peer<RoleServer>) -> Out {
         // What the person gave ahead (or before) already covers it: no need to ask again.
         let grants = self.grants().await;
@@ -649,51 +659,51 @@ impl Detour {
 
     #[tool(description = "Wait for the person's answer to a request_access that is still pending (up to 100 seconds).")]
     async fn wait_for_access(&self, Parameters(a): Parameters<RequestId>) -> Out {
-        let pending = self.access_requests.lock().unwrap().get(&a.request_id).filter(|p| p.started.elapsed().as_secs() < ACCESS_REQUEST_SECS).cloned();
-        if let Some(pending) = pending {
-            return pending.wait().await;
+        let pending = self.pending.lock().unwrap().get(&a.request_id).filter(|p| p.live()).cloned();
+        if let Some(p) = pending {
+            return p.wait().await;
         }
         let r = self.core("agent_wait", json!({ "requestId": a.request_id, "waitSecs": 0 })).await.map_err(|e| explain(&e))?;
         self.access_response(r).await
     }
 
+    /// The core's answer to a request; one still pending is waited for (up to one call's wait)
+    /// and collected in the background after that, so a late "Allow" works at once.
     async fn access_response(&self, r: Value) -> Out {
         if r["status"] != "pending" {
             return self.answered(r).await;
         }
         let id = s(&r["requestId"]);
-        let message = self.answered(r).await?;
-        let pending = {
-            let mut requests = self.access_requests.lock().unwrap();
-            requests.retain(|_, p| p.started.elapsed().as_secs() < ACCESS_REQUEST_SECS);
-            requests.entry(id.clone()).or_insert_with(|| {
-                let (answer, rx) = watch::channel(None);
-                let this = self.clone();
-                // Keep receiving the approved token after a tool call stops waiting.
-                tokio::spawn(async move {
-                    let receive = async {
-                        loop {
-                            let r = match this.core("agent_wait", json!({ "requestId": id, "waitSecs": WAIT_SECS })).await {
-                                Ok(r) => r,
-                                Err(e) => {
-                                    this.access_requests.lock().unwrap().remove(&id);
-                                    return Err(explain(&e));
-                                }
-                            };
-                            if r["status"] != "pending" {
-                                return this.answered(r).await;
-                            }
-                        }
-                    };
-                    let result = tokio::time::timeout(std::time::Duration::from_secs(ACCESS_REQUEST_SECS), receive)
-                        .await
-                        .unwrap_or_else(|_| Err("The access request expired. Call request_access again.".into()));
-                    answer.send_replace(Some(result));
-                });
-                PendingAccess { answer: rx, pending: message, started: Instant::now() }
-            }).clone()
+        let waiting = self.answered(r).await?;
+        let p = {
+            let mut pending = self.pending.lock().unwrap();
+            pending.retain(|_, p| p.live());
+            pending.entry(id.clone()).or_insert_with(|| self.collect(id, waiting)).clone()
         };
-        pending.wait().await
+        p.wait().await
+    }
+
+    /// Waits for the person's answer to a request until the core drops it, and takes it in.
+    fn collect(&self, id: String, waiting: String) -> Pending {
+        let (tx, rx) = watch::channel(None);
+        let this = self.clone();
+        tokio::spawn(async move {
+            let answer = async {
+                loop {
+                    match this.core("agent_wait", json!({ "requestId": id, "waitSecs": WAIT_SECS })).await {
+                        Ok(r) if r["status"] == "pending" => continue,
+                        Ok(r) => return this.answered(r).await,
+                        Err(e) => {
+                            this.pending.lock().unwrap().remove(&id);
+                            return Err(explain(&e));
+                        }
+                    }
+                }
+            };
+            let answer = tokio::time::timeout(REQUEST_KEEP, answer).await.unwrap_or_else(|_| Err("The request for access expired. Call request_access again.".into()));
+            tx.send_replace(Some(answer));
+        });
+        Pending { answer: rx, waiting, asked: Instant::now() }
     }
 
     async fn answered(&self, r: Value) -> Out {
@@ -709,7 +719,10 @@ impl Detour {
             Some("denied") => Err("The person denied the request.".into()),
             _ => {
                 let how = if r["window"] == true { "in the Detour window" } else { "by running `detour approve` in their terminal (Detour's window is not open)" };
-                Ok(format!("Still waiting for the person. Ask them to approve it {how}, then call wait_for_access with request_id \"{}\".", s(&r["requestId"])))
+                Ok(format!(
+                    "Still waiting for the person. Ask them to approve it {how}. Once they do, the access works at once (list_hosts shows it); to wait for the answer, call wait_for_access with request_id \"{}\".",
+                    s(&r["requestId"])
+                ))
             }
         }
     }
@@ -1129,10 +1142,6 @@ pub fn setup(action: crate::McpAction, dir: &Path, json: bool) -> crate::conn::R
 }
 
 #[cfg(test)]
-#[path = "mcp_access_tests.rs"]
-mod access_tests;
-
-#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1151,5 +1160,142 @@ mod tests {
         let team = ("t1".to_string(), "h9".to_string(), "Acme/web".to_string());
         assert!(names(&team, "h9") && names(&team, "acme/WEB") && names(&team, "web"));
         assert!(!names(&team, "other/web") && !names(&team, "db"));
+    }
+
+    /// A core of its own with two hosts, the person's connection to it and an MCP server.
+    struct Core {
+        dir: PathBuf,
+        socket: String,
+        me: Client,
+        agent: Detour,
+        daemon: tokio::task::JoinHandle<std::io::Result<()>>,
+    }
+
+    impl Core {
+        async fn start() -> Self {
+            let dir = std::env::temp_dir().join(format!("detour-mcp-{}", detour_core::new_id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let socket = detour_ipc::socket_name(&dir);
+            let daemon = tokio::spawn({
+                let dir = dir.clone();
+                async move { detour_daemon::run(&dir, None).await }
+            });
+            let me = tokio::time::timeout(Span::from_secs(5), async {
+                loop {
+                    if let Ok(c) = Client::connect(&socket).await {
+                        break c;
+                    }
+                    tokio::time::sleep(Span::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            me.call("hello", json!({ "client": "cli" })).await.unwrap();
+            me.call("vault_create", json!({ "masterPassword": "test-only" })).await.unwrap();
+            let host = |name: &str| json!({ "id": name, "label": name, "group": "", "address": "127.0.0.1", "port": 9, "user": "test", "auth": { "type": "agent" }, "tags": [], "hasPassword": false });
+            me.call("vault_put", json!({ "update": { "hosts": [host("web"), host("db")], "keys": [], "snippets": [], "tunnels": [] } })).await.unwrap();
+            let agent = Self::agent(&socket).await;
+            Self { dir, socket, me, agent, daemon }
+        }
+
+        /// An MCP server on this core, holding no tokens.
+        async fn agent(socket: &str) -> Detour {
+            let c = Client::connect(socket).await.unwrap();
+            c.call("hello", json!({ "client": "mcp" })).await.unwrap();
+            let agent = Detour::new(PathBuf::new());
+            agent.grants.lock().unwrap().clear();
+            *agent.link.lock().await = Some(c);
+            agent
+        }
+
+        /// Asks for `web` without waiting: the request stays pending.
+        async fn request(&self) -> String {
+            let r = self.agent.core("agent_request", json!({ "agent": "Test", "hosts": ["web"], "scopes": ["connect"], "waitSecs": 0 })).await.unwrap();
+            assert_eq!(r["status"], "pending");
+            s(&r["requestId"])
+        }
+
+        /// The person answers, allowing every right on all hosts.
+        async fn answer(&self, id: &str, allow: bool) -> Value {
+            let scopes = ["connect", "exec", "files:read", "files:write", "tunnels", "vault:edit", "hostkeys:new"];
+            self.me.call("agents_answer", json!({ "id": id, "allow": allow, "ttl": "never", "hosts": [], "reach": [{ "type": "all" }], "scopes": scopes })).await.unwrap()
+        }
+
+        async fn hosts(agent: &Detour) -> Vec<Value> {
+            serde_json::from_str(&agent.list_hosts().await.unwrap()).unwrap()
+        }
+
+        /// Starts a wait for the request and leaves it after a moment, as an MCP client that times out.
+        async fn wait_a_moment(&self, id: &str) {
+            let wait = self.agent.wait_for_access(Parameters(RequestId { request_id: id.into() }));
+            assert!(tokio::time::timeout(Span::from_millis(50), wait).await.is_err());
+        }
+
+        async fn wait(&self, id: &str) -> Out {
+            self.agent.wait_for_access(Parameters(RequestId { request_id: id.into() })).await
+        }
+    }
+
+    impl Drop for Core {
+        fn drop(&mut self) {
+            self.daemon.abort();
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    #[tokio::test]
+    async fn an_approval_given_after_the_wait_reaches_the_agent_by_itself() {
+        let core = Core::start().await;
+        let id = core.request().await;
+        core.wait_a_moment(&id).await;
+        let given = core.answer(&id, true).await;
+
+        // No wait_for_access: the next tool already has the access.
+        let hosts = tokio::time::timeout(Span::from_secs(2), async {
+            loop {
+                let hosts = Core::hosts(&core.agent).await;
+                if hosts.iter().all(|h| h["access"].as_array().unwrap().len() == 7) {
+                    break hosts;
+                }
+                tokio::time::sleep(Span::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the approved access never reached the MCP server");
+        assert_eq!(hosts.len(), 2);
+        assert_eq!(core.agent.grants.lock().unwrap().len(), 1);
+
+        // Another MCP server on the same core gets nothing of it.
+        let other = Core::agent(&core.socket).await;
+        assert!(Core::hosts(&other).await.iter().all(|h| h["access"] == json!([])));
+
+        // Waits after the answer (two at once) say the same and take the token in only once.
+        let (a, b) = tokio::join!(core.wait(&id), core.wait(&id));
+        assert_eq!(a, b);
+        assert!(a.unwrap().starts_with("Allowed:"));
+        assert_eq!(core.agent.grants.lock().unwrap().len(), 1);
+
+        core.me.call("agents_revoke", json!({ "id": given["tokenId"] })).await.unwrap();
+        assert!(Core::hosts(&core.agent).await.iter().all(|h| h["access"] == json!([])));
+    }
+
+    #[tokio::test]
+    async fn a_denial_given_after_the_wait_reaches_every_wait_and_gives_nothing() {
+        let core = Core::start().await;
+        let id = core.request().await;
+        core.wait_a_moment(&id).await;
+        core.answer(&id, false).await;
+        let (a, b) = tokio::join!(core.wait(&id), core.wait(&id));
+        assert_eq!(a, Err("The person denied the request.".into()));
+        assert_eq!(a, b);
+        assert!(core.agent.grants.lock().unwrap().is_empty());
+        assert!(Core::hosts(&core.agent).await.iter().all(|h| h["access"] == json!([])));
+    }
+
+    #[tokio::test]
+    async fn waiting_for_a_request_that_does_not_exist_is_an_error() {
+        let core = Core::start().await;
+        assert_eq!(core.wait("missing").await, Err("Not found: request.".into()));
+        assert!(core.agent.grants.lock().unwrap().is_empty());
     }
 }
