@@ -287,6 +287,11 @@ impl Store {
 
     /// Applies a UI's edit of the vault while keeping every secret it can't see.
     pub fn put(&mut self, update: VaultUpdate) -> Result<VaultView> {
+        // A key a repository is reached with stays: without it this device can't sync to get it back.
+        let v = self.vault()?;
+        if repo_keys(v).iter().any(|id| v.keys.iter().any(|k| &k.id == id) && !update.keys.iter().any(|k| &k.id == id)) {
+            return Err(Error::KeyInUse);
+        }
         let mut trash_keys = std::mem::take(&mut self.trash_keys);
         let mut trash_passwords = std::mem::take(&mut self.trash_passwords);
         let mut trash_proxies = std::mem::take(&mut self.trash_proxies);
@@ -1129,7 +1134,15 @@ impl Store {
         let _ = sv.maintain();
         let synced: BTreeMap<String, SyncRecord> = sv.all_records().into_iter().map(|(id, (coll, fields))| (id, SyncRecord { coll, fields })).collect();
         let came_in = synced != local;
+        // The key this device reaches its repositories with stays, even deleted elsewhere: without
+        // it, this device can't sync again. It goes back to the others with the next sync.
+        let needed: Vec<KeyEntry> = repo_keys(&s.vault).iter().filter_map(|id| s.vault.keys.iter().find(|k| &k.id == id).cloned()).collect();
         let gone = personal::adopt(&mut s.vault, &synced);
+        for k in needed {
+            if !s.vault.keys.iter().any(|x| x.id == k.id) {
+                s.vault.keys.push(k);
+            }
+        }
         s.vault.sync_base = synced;
         if let Some(r) = &s.vault.sync {
             s.vault.team_heads.insert(r.id.clone(), sv.known_heads().clone());
@@ -1378,7 +1391,7 @@ impl Store {
         let url = SshUrl::parse(&remote.url)?;
         let v = &self.unlocked()?.vault;
         let key = match &remote.auth {
-            Auth::Key { key_id } => Some(v.keys.iter().find(|k| &k.id == key_id).ok_or_else(|| not_found("key"))?.clone()),
+            Auth::Key { key_id } => Some(v.keys.iter().find(|k| &k.id == key_id).ok_or(Error::RepoKeyMissing)?.clone()),
             Auth::Agent => None,
             Auth::Password => return Err(Error::Git { message: "repositories need a key or ssh-agent".into() }),
         };
@@ -1483,6 +1496,12 @@ impl Store {
         let t = TeamVault::open(&files, root, &me, &device, self.known_heads(&info.id))?;
         self.add_team(t, Some(remote))
     }
+}
+
+/// The keys this device reaches its repositories with: its sync's and its teams' in Git.
+fn repo_keys(v: &VaultData) -> Vec<String> {
+    let remotes = v.sync.iter().chain(&v.teams).filter_map(|t| t.remote.as_ref());
+    remotes.filter_map(|r| if let Auth::Key { key_id } = &r.auth { Some(key_id.clone()) } else { None }).collect()
 }
 
 pub fn endpoint(host: &Host) -> String {
@@ -2212,5 +2231,69 @@ mod bundle_tests {
         let v = other.vault().unwrap();
         let web = v.hosts.iter().find(|h| h.label == "web").unwrap();
         assert_eq!(v.hosts.iter().find(|h| h.label == "db").unwrap().proxy, Some(Proxy::Jump { host_id: web.id.clone() }));
+    }
+}
+
+#[cfg(test)]
+mod repo_key_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    fn device(tag: &str) -> Mutex<Store> {
+        let dir = std::env::temp_dir().join(format!("detour-test-{tag}-{}", crate::new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut s = Store::open(dir);
+        s.create("m").unwrap();
+        Mutex::new(s)
+    }
+
+    fn without_key(s: &Mutex<Store>, id: &str) -> Result<VaultView> {
+        let mut st = s.lock().unwrap();
+        let v = st.view().unwrap();
+        let keys = v.keys.into_iter().filter(|k| k.id != id).collect();
+        st.put(VaultUpdate { hosts: v.hosts, keys, snippets: v.snippets, tunnels: v.tunnels, proxies: None, groups: Some(v.groups) })
+    }
+
+    /// As if this device reached its synced vault in Git with this key.
+    fn reach_with(s: &Mutex<Store>, key_id: &str) {
+        let mut st = s.lock().unwrap();
+        let r = st.vault_mut().unwrap().sync.as_mut().unwrap();
+        r.remote = Some(GitRemote { url: "git@example.com:me/vault.git".into(), auth: Auth::Key { key_id: key_id.into() }, token: None, github: false });
+    }
+
+    #[tokio::test]
+    async fn a_device_keeps_the_key_it_reaches_its_repository_with() {
+        let laptop = device("laptop");
+        let folder = std::env::temp_dir().join(format!("detour-test-sync-{}", crate::new_id())).join("vault");
+        laptop.lock().unwrap().sync_enable(&folder.display().to_string(), None).unwrap();
+        let code = crate::sync::add_device(&laptop).await.unwrap();
+        let desktop = device("desktop");
+        let git = desktop.lock().unwrap().generate_key("git", KeyAlgorithm::Ed25519, None, false).unwrap();
+        crate::sync::join_folder_sync(&desktop, folder.display().to_string(), code.code).await.unwrap();
+        laptop.lock().unwrap().sync_personal().unwrap();
+        reach_with(&desktop, &git.id);
+
+        // Deleting it here is refused.
+        assert!(matches!(without_key(&desktop, &git.id), Err(Error::KeyInUse)));
+        // Deleted on the laptop, where nothing uses it: the desktop keeps it, and it comes back.
+        without_key(&laptop, &git.id).unwrap();
+        laptop.lock().unwrap().sync_personal().unwrap();
+        desktop.lock().unwrap().sync_personal().unwrap();
+        assert!(desktop.lock().unwrap().view().unwrap().keys.iter().any(|k| k.id == git.id));
+        desktop.lock().unwrap().sync_personal().unwrap();
+        laptop.lock().unwrap().sync_personal().unwrap();
+        assert!(laptop.lock().unwrap().view().unwrap().keys.iter().any(|k| k.id == git.id));
+        // A key nothing reaches a repository with still goes.
+        let other = laptop.lock().unwrap().generate_key("other", KeyAlgorithm::Ed25519, None, false).unwrap();
+        without_key(&laptop, &other.id).unwrap();
+    }
+
+    #[test]
+    fn a_repository_whose_key_is_gone_says_so() {
+        let s = device("gone");
+        let mut st = s.lock().unwrap();
+        let remote = GitRemote { url: "git@example.com:me/vault.git".into(), auth: Auth::Key { key_id: "missing".into() }, token: None, github: false };
+        assert!(matches!(st.git_remote(&remote, None), Err(Error::RepoKeyMissing)));
+        let _ = st.vault_mut();
     }
 }

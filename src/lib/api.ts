@@ -42,7 +42,7 @@ export type CoreError =
   | { kind: "invalidId"; reason: string }
   | { kind: "forbidden" | "notATeamVault" | "folderNotEmpty" | "rootChanged" | "alreadyMember" }
   | { kind: "notASyncVault" | "invalidCode" | "codeExpired" | "syncHasTeams" | "syncExists" }
-  | { kind: "wrongFilePassword" | "notADetourFile" | "newerFile" }
+  | { kind: "wrongFilePassword" | "notADetourFile" | "newerFile" | "keyInUse" | "repoKeyMissing" }
   | { kind: "git"; message: string }
   | { kind: "portBusy" | "forwardRefused"; port: number }
   | { kind: "unavailable"; path: string }
@@ -89,6 +89,8 @@ export function errorText(e: unknown): string {
     case "wrongFilePassword": return t.wrongFilePassword;
     case "notADetourFile": return t.notADetourFile;
     case "newerFile": return t.newerFile;
+    case "keyInUse": return t.keyInUse;
+    case "repoKeyMissing": return t.repoKeyMissing;
     case "syncHasTeams": return t.syncHasTeams;
     case "syncExists": return t.syncExists;
     case "unavailable": return t.unavailable(e.path);

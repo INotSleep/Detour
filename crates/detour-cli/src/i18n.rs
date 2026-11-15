@@ -962,6 +962,8 @@ pub fn error_text(e: &serde_json::Value) -> String {
         "wrongFilePassword" => s("Wrong password for this file", "Неверный пароль файла"),
         "notADetourFile" => s("This is not a Detour file", "Это не файл Detour"),
         "newerFile" => s("This file is from a newer Detour: update it first", "Файл из более новой версии Detour: сначала обновите Detour"),
+        "keyInUse" => s("This key logs in to a repository: pick another one for sync or the team first", "Этим ключом входит репозиторий: сначала выберите другой для синхронизации или команды"),
+        "repoKeyMissing" => s("The repository's key is gone: pick another one (detour sync)", "Ключа для репозитория больше нет: выберите другой (detour sync)"),
         "notInitialized" => s("There is no vault yet", "Хранилища ещё нет"),
         "notFound" => format!("{}: {}", s("Not found", "Не найдено"), e["what"].as_str().unwrap_or("")),
         "unreachable" => format!("{} {}", s("Can't reach", "Не удаётся подключиться к"), e["endpoint"].as_str().unwrap_or("")),

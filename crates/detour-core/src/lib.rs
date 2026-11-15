@@ -112,6 +112,12 @@ pub enum Error {
     WrongFilePassword,
     #[error("this is not a Detour file")]
     NotADetourFile,
+    /// The key this device logs in to a repository with (sync or a team's): not to be deleted.
+    #[error("this key logs in to a repository")]
+    KeyInUse,
+    /// The key set for a repository is gone from this device.
+    #[error("the repository's key is gone")]
+    RepoKeyMissing,
     /// A Detour file written by a newer version.
     #[error("this file is from a newer Detour")]
     NewerFile,
