@@ -82,29 +82,43 @@ pub fn request(id: &[u8; 16], vision: bool, target: &str, port: u16) -> Result<V
     Ok(h)
 }
 
-/// A stream to `target:port` through a VLESS proxy over TCP.
+/// A stream to `target:port` through a VLESS proxy: over TCP (with TLS or REALITY) or
+/// XHTTP, under VLESS Encryption if the proxy has it.
 pub async fn connect(p: &ProxyEntry, target: &str, port: u16) -> Result<Stream> {
-    let ProxyKind::Vless { address, port: pport, security, sni, alpn, pinned_cert, transport, flow, .. } = &p.kind else { return Err(failed("protocol")) };
+    let ProxyKind::Vless { address, port: pport, security, sni, alpn, pinned_cert, transport, flow, encryption, .. } = &p.kind else { return Err(failed("protocol")) };
     let id = user_id(p.uuid.as_deref().ok_or_else(|| failed("auth"))?)?;
-    if *transport == VlessTransport::Xhttp {
-        return super::xhttp::connect(p, &id, target, port).await;
-    }
+    let encryption = super::encryption::parse(encryption)?;
     let vision = flow == VISION;
-    let tcp = reach(address, *pport).await?;
-    let sni = if sni.is_empty() { address.as_str() } else { sni.as_str() };
-    match security {
-        VlessSecurity::None if vision => Err(failed("unsupported:Vision without TLS")),
-        VlessSecurity::None => Ok(Box::new(VlessStream::open(tcp, &id, false, target, port).await?)),
-        VlessSecurity::Tls => {
-            // As Xray: both, when the link names none.
-            let alpn = if alpn.is_empty() { vec!["h2".to_string(), "http/1.1".to_string()] } else { alpn.clone() };
-            let tls = super::tls::connect(tcp, sni, &alpn, pinned_cert).await?;
-            Ok(Box::new(VlessStream::open(tls, &id, vision, target, port).await?))
+    // Vision pads what goes inside TLS: under TLS or REALITY, or anywhere under VLESS Encryption (as Xray allows).
+    if vision && encryption.is_none() {
+        if *transport == VlessTransport::Xhttp {
+            return Err(failed("unsupported:Vision over XHTTP"));
         }
-        VlessSecurity::Reality => {
-            let tls = super::reality::connect(tcp, p, sni).await?;
-            Ok(Box::new(VlessStream::open(tls, &id, vision, target, port).await?))
+        if *security == VlessSecurity::None {
+            return Err(failed("unsupported:Vision without TLS"));
         }
+    }
+    let carrier: Stream = if *transport == VlessTransport::Xhttp {
+        Box::new(super::xhttp::connect(p).await?)
+    } else {
+        let tcp = reach(address, *pport).await?;
+        let sni = if sni.is_empty() { address.as_str() } else { sni.as_str() };
+        match security {
+            VlessSecurity::None => Box::new(tcp),
+            VlessSecurity::Tls => {
+                // As Xray: both, when the link names none.
+                let alpn = if alpn.is_empty() { vec!["h2".to_string(), "http/1.1".to_string()] } else { alpn.clone() };
+                Box::new(super::tls::connect(tcp, sni, &alpn, pinned_cert).await?)
+            }
+            VlessSecurity::Reality => Box::new(super::reality::connect(tcp, p, sni).await?),
+        }
+    };
+    match encryption {
+        Some(e) => {
+            let sealed = super::encryption::handshake(carrier, &e).await?;
+            Ok(Box::new(VlessStream::open(sealed, &id, vision, target, port).await?))
+        }
+        None => Ok(Box::new(VlessStream::open(carrier, &id, vision, target, port).await?)),
     }
 }
 

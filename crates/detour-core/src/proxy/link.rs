@@ -74,10 +74,8 @@ fn vless(link: &str) -> Result<ProxyEntry> {
     let mut q: BTreeMap<String, String> = query.split('&').filter(|p| !p.is_empty()).map(|p| p.split_once('=').map(|(k, v)| (k.to_string(), unescape(v))).unwrap_or((p.to_string(), String::new()))).collect();
     let mut take = |k: &str| q.remove(k).unwrap_or_default();
 
-    let encryption = take("encryption");
-    if !encryption.is_empty() && encryption != "none" {
-        return Err(bad("VLESS encryption"));
-    }
+    let encryption = take("encryption").trim().to_string();
+    let encryption = if super::encryption::parse(&encryption)?.is_some() { encryption } else { String::new() };
     let security = match take("security").as_str() {
         "" | "none" => VlessSecurity::None,
         "tls" => VlessSecurity::Tls,
@@ -110,6 +108,7 @@ fn vless(link: &str) -> Result<ProxyEntry> {
         pinned_cert: take("pcs"),
         transport,
         flow,
+        encryption,
         path: take("path"),
         host: take("host"),
         mode: take("mode"),
@@ -122,8 +121,8 @@ fn vless(link: &str) -> Result<ProxyEntry> {
 
 /// A `vless://` link of a proxy, with its user id.
 pub fn vless_link(p: &ProxyEntry) -> Option<String> {
-    let ProxyKind::Vless { address, port, security, sni, alpn, public_key, short_id, pinned_cert, transport, flow, path, host, mode, extra, params } = &p.kind else { return None };
-    let mut q: Vec<(String, String)> = vec![("encryption".into(), "none".into())];
+    let ProxyKind::Vless { address, port, security, sni, alpn, public_key, short_id, pinned_cert, transport, flow, encryption, path, host, mode, extra, params } = &p.kind else { return None };
+    let mut q: Vec<(String, String)> = vec![("encryption".into(), if encryption.is_empty() { "none".into() } else { encryption.clone() })];
     let mut put = |k: &str, v: &str| {
         if !v.is_empty() {
             q.push((k.to_string(), v.to_string()));
@@ -268,6 +267,18 @@ mod tests {
         assert_eq!(refused("vless://id@h:1?encryption=mlkem768x25519plus.native.0rtt.x"), "unsupported:VLESS encryption");
         assert_eq!(refused("vless://id@h:1?type=xhttp&alpn=h3"), "unsupported:HTTP/3");
         assert_eq!(refused("vless://nothing"), "protocol");
+    }
+
+    #[test]
+    fn links_with_vless_encryption_keep_it() {
+        let enc = "mlkem768x25519plus.xorpub.0rtt.100-111-1111.75-0-111.50-0-3333.ptjHQxBQxTJ9MWr2cd5qWIflBSACHOevTauCQwa_71U";
+        let p = parse(&format!("vless://b831381d-6324-4d53-ad4f-8cda48b30811@h:443?encryption={enc}&flow=xtls-rprx-vision&type=xhttp&path=%2F#E")).unwrap();
+        let ProxyKind::Vless { encryption, flow, transport, .. } = &p.kind else { panic!() };
+        assert_eq!((encryption.as_str(), flow.as_str(), *transport), (enc, "xtls-rprx-vision", VlessTransport::Xhttp));
+        let again = parse(&vless_link(&p).unwrap()).unwrap();
+        assert_eq!(again.kind, p.kind);
+        let none = parse("vless://id@h:1?encryption=none").unwrap();
+        assert!(matches!(&none.kind, ProxyKind::Vless { encryption, .. } if encryption.is_empty()));
     }
 
     #[test]

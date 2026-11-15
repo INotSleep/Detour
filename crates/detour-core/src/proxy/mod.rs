@@ -1,5 +1,7 @@
 //! Reaching a host through a saved proxy: a stream to the host that carries the SSH connection.
 
+mod blake3;
+mod encryption;
 pub mod link;
 mod plain;
 mod reality;

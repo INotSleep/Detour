@@ -43,6 +43,7 @@ export const en = {
     shortId: "Short ID",
     transport: "Transport",
     vision: "XTLS Vision",
+    encryption: "VLESS encryption",
     path: "Path",
     host: "Host",
     mode: "Mode",
@@ -56,6 +57,7 @@ export const en = {
     key: "A WireGuard key: 44 characters of base64",
     address: "An address like 10.0.0.2/32",
     uuid: "A UUID like 3f1c…-…",
+    encryption: "Like mlkem768x25519plus.native.0rtt.…",
   },
 };
 
@@ -102,6 +104,7 @@ export const ru: typeof en = {
     shortId: "Short ID",
     transport: "Транспорт",
     vision: "XTLS Vision",
+    encryption: "Шифрование VLESS",
     path: "Путь",
     host: "Host",
     mode: "Режим",
@@ -115,5 +118,6 @@ export const ru: typeof en = {
     key: "Ключ WireGuard: 44 символа base64",
     address: "Адрес вида 10.0.0.2/32",
     uuid: "UUID вида 3f1c…-…",
+    encryption: "Вида mlkem768x25519plus.native.0rtt.…",
   },
 };

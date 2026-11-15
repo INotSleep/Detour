@@ -228,6 +228,7 @@ interface Draft {
   shortId: string;
   transport: "tcp" | "xhttp";
   vision: boolean;
+  encryption: string;
   path: string;
   host: string;
   mode: string;
@@ -253,6 +254,7 @@ function draftOf(p: SavedProxy | null): Draft {
     shortId: "",
     transport: "tcp",
     vision: true,
+    encryption: "",
     path: "",
     host: "",
     mode: "auto",
@@ -273,6 +275,7 @@ function draftOf(p: SavedProxy | null): Draft {
     shortId: k.shortId,
     transport: k.transport,
     vision: k.flow === "xtls-rprx-vision",
+    encryption: k.encryption ?? "",
     path: k.path,
     host: k.host,
     mode: k.mode || "auto",
@@ -302,8 +305,8 @@ function kindOf(d: Draft, old: ProxyKind | undefined): ProxyKind {
         shortId: d.security === "reality" ? d.shortId.trim() : "",
         pinnedCert: d.security === "tls" ? prev?.pinnedCert ?? "" : "",
         transport: d.transport,
-        // Vision needs TLS or REALITY under it, and doesn't go with XHTTP.
-        flow: d.transport === "tcp" && d.security !== "none" && d.vision ? "xtls-rprx-vision" : "",
+        flow: visionFits(d) && d.vision ? "xtls-rprx-vision" : "",
+        encryption: sealed(d.encryption) ? d.encryption.trim() : "",
         path: d.transport === "xhttp" ? d.path.trim() : "",
         host: d.transport === "xhttp" ? d.host.trim() : "",
         mode: d.transport === "xhttp" ? d.mode : "",
@@ -313,6 +316,11 @@ function kindOf(d: Draft, old: ProxyKind | undefined): ProxyKind {
     }
   }
 }
+
+/** Vision needs TLS or REALITY under it over TCP, or VLESS encryption under it over anything. */
+const sealed = (v: string) => /^mlkem768x25519plus\.(native|xorpub|random)\.(0rtt|1rtt)\.\S+$/.test(v.trim());
+const encryptionOk = (v: string) => !v.trim() || v.trim() === "none" || sealed(v);
+const visionFits = (d: Draft) => sealed(d.encryption) || (d.transport === "tcp" && d.security !== "none");
 
 /** The secrets a type of proxy asks for. */
 const secretsOf = (type: ProxyType): ProxySecret[] => (type === "wireguard" ? ["privateKey", "presharedKey"] : type === "vless" ? ["uuid"] : ["password"]);
@@ -352,6 +360,7 @@ export function ProxyDialog({ proxy, parsed, onClose, onCreated }: { proxy: Save
     errors.uuid = d.secrets.uuid ? (uuidOk(d.secrets.uuid) ? null : e.uuid) : has("uuid") ? null : e.required;
     errors.sni = d.security === "reality" && !d.sni.trim() ? e.required : null;
     errors.publicKey = d.security === "reality" && !d.publicKey.trim() ? e.required : null;
+    errors.encryption = encryptionOk(d.encryption) ? null : e.encryption;
   }
   const invalid = Object.values(errors).some(Boolean);
   const err = (k: string) => (showErrors ? errors[k] ?? null : null);
@@ -513,7 +522,10 @@ export function ProxyDialog({ proxy, parsed, onClose, onCreated }: { proxy: Save
               ]}
             />
           </Field>
-          {d.transport === "tcp" && d.security !== "none" && (
+          <Field label={t.encryption} error={err("encryption")}>
+            <input className={`input mono ${cls("encryption")}`} value={d.encryption} onChange={(x) => set({ encryption: x.target.value })} placeholder="none" autoComplete="off" spellCheck={false} />
+          </Field>
+          {visionFits(d) && (
             <div className="field">
               <Checkbox checked={d.vision} onChange={(vision) => set({ vision })}>{t.vision}</Checkbox>
             </div>

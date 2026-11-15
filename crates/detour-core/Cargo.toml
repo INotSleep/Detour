@@ -32,6 +32,8 @@ rustls = { version = "0.23.46", default-features = false, features = ["ring", "s
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
 rustls-platform-verifier = "0.7.1"
 ml-kem = "0.3.3"
+aes = "0.8.4"
+ctr = "0.9.2"
 curve25519-dalek = "5.0.0"
 ring = "0.17.14"
 hyper = { version = "1.12.0", features = ["client", "http1", "http2"] }
@@ -44,5 +46,6 @@ bytes = "1.12.1"
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Threading"] }
 
 [dev-dependencies]
+blake3 = "1.8.2"
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "io-util", "test-util"] }
 serde_json.workspace = true

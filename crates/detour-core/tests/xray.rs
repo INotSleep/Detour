@@ -1,6 +1,6 @@
 //! Through a real Xray server to a real sshd behind it (named `sshd`, user `u`, password `pw`).
 //! Ignored by default; the server's ports are 10001-10007 on this computer and its ids and keys
-//! come from the environment (`XRAY_ID_*`, `XRAY_PBK`, `XRAY_SID`, `XRAY_PCS`).
+//! come from the environment (`XRAY_ID_*`, `XRAY_PBK`, `XRAY_SID`, `XRAY_PCS`, `XRAY_ENC_*`).
 
 use std::collections::BTreeMap;
 
@@ -21,6 +21,8 @@ struct Vless {
     mode: &'static str,
     extra: &'static str,
     alpn: Vec<String>,
+    /// The variable with the client's VLESS Encryption, if any.
+    encryption: Option<&'static str>,
 }
 
 fn proxy(v: &Vless) -> ProxyEntry {
@@ -36,6 +38,7 @@ fn proxy(v: &Vless) -> ProxyEntry {
         pinned_cert: if v.security == VlessSecurity::Tls { env("XRAY_PCS") } else { String::new() },
         transport: v.transport,
         flow: if v.vision { "xtls-rprx-vision".into() } else { String::new() },
+        encryption: v.encryption.map(env).unwrap_or_default(),
         path: "/xh".into(),
         host: String::new(),
         mode: v.mode.into(),
@@ -89,11 +92,11 @@ async fn works(v: Vless) {
 }
 
 fn tcp(port: u16, id: &'static str, security: VlessSecurity, vision: bool) -> Vless {
-    Vless { port, id, security, transport: VlessTransport::Tcp, vision, mode: "", extra: "", alpn: vec![] }
+    Vless { port, id, security, transport: VlessTransport::Tcp, vision, mode: "", extra: "", alpn: vec![], encryption: None }
 }
 
 fn xhttp(port: u16, security: VlessSecurity, mode: &'static str) -> Vless {
-    Vless { port, id: "XRAY_ID_XHTTP", security, transport: VlessTransport::Xhttp, vision: false, mode, extra: "", alpn: vec![] }
+    Vless { port, id: "XRAY_ID_XHTTP", security, transport: VlessTransport::Xhttp, vision: false, mode, extra: "", alpn: vec![], encryption: None }
 }
 
 #[tokio::test]
@@ -180,4 +183,45 @@ async fn reality_handshakes_many_times() {
         }
     }
     assert!(failures.is_empty(), "{} of 120 failed: {failures:?}", failures.len());
+}
+
+/* ---------- VLESS Encryption ---------- */
+
+fn sealed(port: u16, security: VlessSecurity, transport: VlessTransport, vision: bool, encryption: &'static str) -> Vless {
+    Vless { port, id: "XRAY_ID_ENC", security, transport, vision, mode: "", extra: "", alpn: vec![], encryption: Some(encryption) }
+}
+
+#[tokio::test]
+#[ignore = "needs the test Xray server"]
+async fn encryption_native_over_tcp() {
+    works(sealed(10008, VlessSecurity::None, VlessTransport::Tcp, false, "XRAY_ENC_NATIVE")).await;
+}
+
+#[tokio::test]
+#[ignore = "needs the test Xray server"]
+async fn encryption_xorpub_through_two_keys_with_vision() {
+    works(sealed(10009, VlessSecurity::None, VlessTransport::Tcp, true, "XRAY_ENC_XORPUB")).await;
+}
+
+#[tokio::test]
+#[ignore = "needs the test Xray server"]
+async fn encryption_random_over_xhttp_with_vision() {
+    works(sealed(10010, VlessSecurity::None, VlessTransport::Xhttp, true, "XRAY_ENC_RANDOM")).await;
+}
+
+#[tokio::test]
+#[ignore = "needs the test Xray server"]
+async fn encryption_under_tls() {
+    works(sealed(10011, VlessSecurity::Tls, VlessTransport::Tcp, true, "XRAY_ENC_RANDOM")).await;
+}
+
+#[tokio::test]
+#[ignore = "needs the test Xray server"]
+async fn encryption_with_the_wrong_key_fails() {
+    let mut p = proxy(&sealed(10008, VlessSecurity::None, VlessTransport::Tcp, false, "XRAY_ENC_NATIVE"));
+    if let ProxyKind::Vless { encryption, .. } = &mut p.kind {
+        // Another server's key.
+        *encryption = encryption.rsplit_once('.').map(|(head, _)| format!("{head}.ptjHQxBQxTJ9MWr2cd5qWIflBSACHOevTauCQwa_71U")).unwrap();
+    }
+    assert!(ssh::session(&request(p)).await.is_err());
 }

@@ -22,8 +22,7 @@ use serde::Deserialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 
-use super::vless::VlessStream;
-use super::{Io, Stream, failed, reach};
+use super::{Io, failed, reach};
 use crate::Result;
 use crate::model::{ProxyEntry, ProxyKind, VlessSecurity};
 
@@ -354,11 +353,8 @@ fn session_id() -> String {
 }
 
 /// A VLESS stream to `target:port` through an XHTTP proxy.
-pub async fn connect(p: &ProxyEntry, id: &[u8; 16], target: &str, port: u16) -> Result<Stream> {
-    let ProxyKind::Vless { address, security, sni, alpn, host, path, mode, extra, flow, .. } = &p.kind else { return Err(failed("protocol")) };
-    if !flow.is_empty() {
-        return Err(failed("unsupported:Vision over XHTTP"));
-    }
+pub async fn connect(p: &ProxyEntry) -> Result<tokio::io::DuplexStream> {
+    let ProxyKind::Vless { address, security, sni, alpn, host, path, mode, extra, .. } = &p.kind else { return Err(failed("protocol")) };
     let extra: Extra = if extra.trim().is_empty() { Extra::default() } else { serde_json::from_str(extra).map_err(|_| failed("unsupported:extra"))? };
     if extra.download_settings.is_some() {
         return Err(failed("unsupported:downloadSettings"));
@@ -467,7 +463,7 @@ pub async fn connect(p: &ProxyEntry, id: &[u8; 16], target: &str, port: u16) -> 
             }
         }
     }
-    Ok(Box::new(VlessStream::open(mine, id, false, target, port).await?))
+    Ok(mine)
 }
 
 /// Feeds what the VLESS stream writes into a streaming request body.

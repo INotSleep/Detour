@@ -211,6 +211,9 @@ pub enum ProxyKind {
         /// `xtls-rprx-vision` or empty.
         #[serde(default)]
         flow: String,
+        /// VLESS Encryption (`mlkem768x25519plus...` with the server's keys); empty for none.
+        #[serde(default)]
+        encryption: String,
         /// XHTTP: the path, `Host` and mode (`auto`, `packet-up`, `stream-up`, `stream-one`).
         #[serde(default)]
         path: String,

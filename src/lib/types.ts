@@ -138,6 +138,8 @@ export type ProxyKind =
       pinnedCert: string;
       transport: "tcp" | "xhttp";
       flow: string;
+      /** VLESS Encryption (mlkem768x25519plus...); empty for none. */
+      encryption?: string;
       path: string;
       host: string;
       mode: string;
