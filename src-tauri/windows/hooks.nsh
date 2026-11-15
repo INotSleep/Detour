@@ -8,9 +8,7 @@
 ; moved aside and keeps running, and the new one goes in its place.
 
 !include WinMessages.nsh
-
-${UnStrLoc}
-${UnStrRep}
+!include "${__FILEDIR__}\path.nsh"
 
 ; The sidecar as Tauri gets it, next to this file's folder (see scripts/sidecar.mjs).
 !define DETOUR_CLI "${__FILEDIR__}\..\binaries\detour-x86_64-pc-windows-msvc.exe"
@@ -24,18 +22,7 @@ ${UnStrRep}
 !macro NSIS_HOOK_POSTINSTALL
   SetOutPath "$INSTDIR"
   File "/oname=detour.exe" "${DETOUR_CLI}"
-
-  ; The install folder on the user's PATH, once.
-  ReadRegStr $0 HKCU "Environment" "Path"
-  ${StrLoc} $1 ";$0;" ";$INSTDIR;" ">"
-  ${If} $1 == ""
-    ${If} $0 == ""
-      WriteRegExpandStr HKCU "Environment" "Path" "$INSTDIR"
-    ${Else}
-      WriteRegExpandStr HKCU "Environment" "Path" "$0;$INSTDIR"
-    ${EndIf}
-    SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=500
-  ${EndIf}
+  !insertmacro DETOUR_PATH_ADD "Environment"
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL
@@ -43,15 +30,6 @@ ${UnStrRep}
   ${If} $UpdateMode <> 1
     Delete "$INSTDIR\detour.exe"
     Delete "$INSTDIR\detour.exe.old"
-    ReadRegStr $0 HKCU "Environment" "Path"
-    ${UnStrLoc} $1 ";$0;" ";$INSTDIR;" ">"
-    ${If} $1 != ""
-      ${UnStrRep} $1 ";$0;" ";$INSTDIR;" ";"
-      ; Without the ";" added at both ends.
-      StrCpy $1 $1 "" 1
-      StrCpy $1 $1 -1
-      WriteRegExpandStr HKCU "Environment" "Path" "$1"
-      SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=500
-    ${EndIf}
+    !insertmacro DETOUR_PATH_REMOVE "Environment"
   ${EndIf}
 !macroend
