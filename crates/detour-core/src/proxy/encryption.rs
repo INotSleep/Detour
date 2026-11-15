@@ -195,7 +195,6 @@ fn record_len(h: &[u8; 5]) -> io::Result<usize> {
 /// Opens the layer over `conn`: the exchange with the server, after which bytes go sealed.
 pub async fn handshake<S: AsyncRead + AsyncWrite + Unpin>(mut conn: S, e: &Encryption) -> Result<EncryptedStream<S>> {
     let hs = |_| failed("handshake");
-    let mut rng = rand::rng();
     let relays: usize = e.keys.iter().map(|k| if k.len() == 32 { 64 } else { 1088 + 32 }).sum::<usize>() - 32;
     let start = 16 + relays;
     const PFS: usize = 18 + 1184 + 32 + 16;
@@ -220,7 +219,8 @@ pub async fn handshake<S: AsyncRead + AsyncWrite + Unpin>(mut conn: S, e: &Encry
             32
         } else {
             let ek = ml_kem::EncapsulationKey::<MlKem768>::new_from_slice(key).map_err(|_| failed("unsupported:VLESS encryption"))?;
-            let (ct, shared) = ek.encapsulate_with_rng(&mut rng);
+            // The thread's generator isn't held across an await: the future must be Send.
+            let (ct, shared) = ek.encapsulate_with_rng(&mut rand::rng());
             hello[at..at + 1088].copy_from_slice(&ct);
             nfs.copy_from_slice(&shared);
             1088
@@ -244,7 +244,7 @@ pub async fn handshake<S: AsyncRead + AsyncWrite + Unpin>(mut conn: S, e: &Encry
     let mut first = Aead::new(&iv, &nfs);
 
     // This connection's own keys, and the padding.
-    let (kem_secret, kem_public) = MlKem768::generate_keypair_from_rng(&mut rng);
+    let (kem_secret, kem_public) = MlKem768::generate_keypair_from_rng(&mut rand::rng());
     let x_secret: [u8; 32] = rand::random();
     let mut pfs_public = kem_public.to_bytes().to_vec();
     pfs_public.extend_from_slice(&MontgomeryPoint::mul_base_clamped(x_secret).0);
@@ -451,6 +451,14 @@ mod tests {
         for bad in ["aes-128-gcm", "mlkem768x25519plus.native.0rtt", "mlkem768x25519plus.weird.0rtt.x", &format!("mlkem768x25519plus.native.2rtt.{X}"), "mlkem768x25519plus.native.0rtt.AAAAAAAAAAAAAAAAAAAAAAAAAA", &format!("mlkem768x25519plus.native.0rtt.50-111-1111.{X}")] {
             assert!(parse(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn the_exchange_can_run_on_any_thread() {
+        fn send<T: Send>(_: &T) {}
+        let (a, _b) = tokio::io::duplex(64);
+        let e = parse(&format!("mlkem768x25519plus.native.0rtt.{X}")).unwrap().unwrap();
+        send(&handshake(a, &e));
     }
 
     #[test]
