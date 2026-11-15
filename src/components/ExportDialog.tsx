@@ -1,19 +1,28 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowRight, Check, Copy, Save } from "lucide-react";
-import { api, errorText } from "../lib/api";
+import { api, errorText, type FileCounts, type FileInclude } from "../lib/api";
 import { copyText, useStore } from "../lib/store";
 import { keyFileName, keysOf, sshConfig, withJumps } from "../lib/sshConfig";
 import type { Host } from "../lib/types";
-import { Button, Checkbox, Modal } from "./ui";
+import { Button, Checkbox, Field, Modal, PasswordInput, Segmented } from "./ui";
 import { useT } from "../i18n";
 
-/** Hosts as ~/.ssh/config entries, copied or saved to a file, with their keys if asked. */
+const INCLUDE: (keyof FileInclude)[] = ["passwords", "keys", "proxies", "knownHosts", "groups"];
+
+/** Hosts as ~/.ssh/config entries, copied or saved to a file, with their keys if asked;
+ *  or as a Detour file sealed with a password, with what logs in to them. */
 export function ExportDialog({ hosts, initial, onClose }: { hosts: Host[]; initial?: string[]; onClose: () => void }) {
   const t = useT();
   const { ws, toast } = useStore();
   const [chosen, setChosen] = useState<Set<string>>(new Set(initial ?? hosts.map((h) => h.id)));
   const [withKeys, setWithKeys] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [format, setFormat] = useState<"ssh" | "file">("ssh");
+  const [include, setInclude] = useState<FileInclude>({ passwords: true, keys: true, proxies: true, knownHosts: true, groups: true });
+  const [counts, setCounts] = useState<FileCounts | null>(null);
+  const [password, setPassword] = useState("");
+  const [repeat, setRepeat] = useState("");
+  const [tried, setTried] = useState(false);
 
   const picked = hosts.filter((h) => chosen.has(h.id));
   const keys = useMemo(() => keysOf(withJumps(picked, ws.hosts), ws.keys), [picked, ws.hosts, ws.keys]);
@@ -28,6 +37,25 @@ export function ExportDialog({ hosts, initial, onClose }: { hosts: Host[]; initi
     return () => void (live = false);
   }, [ids, hosts]);
   const text = api.real ? coreText : demoText;
+  useEffect(() => {
+    if (format !== "file" || !ids) return setCounts(null);
+    if (!api.real) {
+      const all = withJumps(picked, ws.hosts);
+      const distinct = (xs: (string | undefined | null)[]) => new Set(xs.filter(Boolean)).size;
+      return setCounts({ hosts: all.length, passwords: all.filter((h) => h.hasPassword).length, keys: keys.length, proxies: distinct(all.map((h) => h.proxyId)), knownHosts: all.length, groups: distinct(all.map((h) => h.group)) });
+    }
+    let live = true;
+    api.hostsFileCounts(hosts[0]!.vaultId, ids.split(",")).then((c) => live && setCounts(c)).catch(() => {});
+    return () => void (live = false);
+  }, [format, ids, hosts]);
+  const passwordError = !tried ? null : !password ? t.hosts.export.passwordRequired : repeat !== password ? t.hosts.export.passwordsDiffer : null;
+  const countOf: Record<keyof FileInclude, (n: number) => string> = {
+    passwords: t.hosts.export.passwords,
+    keys: t.hosts.export.keys,
+    proxies: t.hosts.export.proxies,
+    knownHosts: t.hosts.export.serverKeys,
+    groups: t.hosts.export.groups,
+  };
   const all = chosen.size === hosts.length;
   const saveKeys = withKeys && keys.length > 0;
 
@@ -71,20 +99,44 @@ export function ExportDialog({ hosts, initial, onClose }: { hosts: Host[]; initi
     }
   };
 
+  const saveFile = async () => {
+    setTried(true);
+    if (!picked.length || busy || !password || repeat !== password) return;
+    setBusy(true);
+    try {
+      const path = await api.pickSavePath("hosts.detour");
+      if (!path) return setBusy(false);
+      if (api.real) await api.hostsFileExport(picked[0]!.vaultId, picked.map((h) => h.id), include, password, path);
+      toast({ text: t.hosts.export.saved(path), tone: "success" });
+      onClose();
+    } catch (e) {
+      setBusy(false);
+      toast({ text: errorText(e), tone: "error" });
+    }
+  };
+
   return (
     <Modal
       title={t.hosts.export.title}
       width={600}
       onClose={onClose}
-      onSubmit={save}
+      onSubmit={format === "ssh" ? save : saveFile}
       footer={
         <>
           <Button type="button" variant="ghost" onClick={onClose}>{t.common.cancel}</Button>
-          {!saveKeys && <Button type="button" icon={Copy} disabled={!picked.length} onClick={copy}>{t.hosts.export.copy}</Button>}
+          {format === "ssh" && !saveKeys && <Button type="button" icon={Copy} disabled={!picked.length} onClick={copy}>{t.hosts.export.copy}</Button>}
           <Button type="submit" variant="primary" icon={Save} loading={busy} disabled={!picked.length}>{t.hosts.export.save}</Button>
         </>
       }
     >
+      <Segmented
+        value={format}
+        onChange={setFormat}
+        options={[
+          { value: "ssh", label: t.hosts.export.sshConfig },
+          { value: "file", label: t.hosts.export.file },
+        ]}
+      />
       <div className="import-head">
         <Checkbox checked={all} onChange={(on) => setChosen(new Set(on ? hosts.map((h) => h.id) : []))}>
           {t.hosts.import.hosts(hosts.length)}
@@ -114,12 +166,33 @@ export function ExportDialog({ hosts, initial, onClose }: { hosts: Host[]; initi
           );
         })}
       </div>
-      {keys.length > 0 && (
+      {format === "ssh" && keys.length > 0 && (
         <Checkbox checked={withKeys} onChange={setWithKeys}>
           {t.hosts.export.saveKeys(t.common.keyCount(keys.length))}
         </Checkbox>
       )}
-      {text && <pre className="export-preview mono">{text}</pre>}
+      {format === "ssh" && text && <pre className="export-preview mono">{text}</pre>}
+      {format === "file" && (
+        <>
+          {counts && INCLUDE.some((k) => counts[k] > 0) && (
+            <div className="export-include">
+              {INCLUDE.filter((k) => counts[k] > 0).map((k) => (
+                <Checkbox key={k} checked={include[k]} onChange={(on) => setInclude((i) => ({ ...i, [k]: on }))}>
+                  {countOf[k](counts[k])}
+                </Checkbox>
+              ))}
+            </div>
+          )}
+          <div className="export-password">
+            <Field label={t.hosts.export.filePassword} error={tried && !password ? passwordError : null}>
+              <PasswordInput value={password} onChange={setPassword} invalid={tried && !password} autoFocus />
+            </Field>
+            <Field label={t.hosts.export.repeat} error={tried && password && repeat !== password ? passwordError : null}>
+              <PasswordInput value={repeat} onChange={setRepeat} invalid={tried && !!password && repeat !== password} />
+            </Field>
+          </div>
+        </>
+      )}
     </Modal>
   );
 }

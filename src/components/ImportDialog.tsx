@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
-import { ArrowRight, Check, FileWarning, Loader2 } from "lucide-react";
-import { api, errorText, type ImportHost, type ImportPreview } from "../lib/api";
+import { ArrowRight, Check, FileKey, FileWarning, Loader2 } from "lucide-react";
+import { api, errorText, type FileCounts, type FileHost, type ImportHost, type ImportPreview } from "../lib/api";
 import { uid, useStore } from "../lib/store";
 import type { Host } from "../lib/types";
-import { Button, Checkbox, Empty, Modal } from "./ui";
+import { Button, Checkbox, Empty, Field, Modal, PasswordInput } from "./ui";
 import { useT } from "../i18n";
 
 /** What a plain browser shows: a typical ~/.ssh/config. */
@@ -21,8 +21,25 @@ const DEMO: ImportPreview = {
   knownHashed: 3,
 };
 
-/** Hosts, keys and pinned server keys from ~/.ssh, into the personal vault. */
+/** What a plain browser shows for a Detour file. */
+const DEMO_FILE: { hosts: FileHost[]; counts: FileCounts } = {
+  hosts: [
+    { id: "f1", label: "gateway", address: "198.51.100.20", port: 22, user: "ops", group: "Office", via: null, exists: false },
+    { id: "f2", label: "build-01", address: "10.20.0.11", port: 22, user: "ci", group: "Office", via: "gateway", exists: false },
+    { id: "f3", label: "api-1", address: "10.0.1.11", port: 22, user: "deploy", group: "Production", via: null, exists: true },
+  ],
+  counts: { hosts: 3, passwords: 1, keys: 2, proxies: 0, knownHosts: 3, groups: 2 },
+};
+
+/** Hosts, keys and pinned server keys from ~/.ssh, into the personal vault; or a Detour file's. */
 export function ImportDialog({ onClose }: { onClose: () => void }) {
+  const [file, setFile] = useState<string | null>(null);
+  if (file) return <FileImport path={file} onClose={onClose} />;
+  const pick = () => void api.pickDetourFile().then((p) => p && setFile(p)).catch(() => {});
+  return <SshImport onClose={onClose} onFile={pick} />;
+}
+
+function SshImport({ onClose, onFile }: { onClose: () => void; onFile: () => void }) {
   const t = useT();
   const { update, toast, refreshPersonal } = useStore();
   const [preview, setPreview] = useState<ImportPreview | null>(null);
@@ -88,6 +105,7 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
       onSubmit={submit}
       footer={
         <>
+          <Button type="button" variant="ghost" icon={FileKey} className="footer-left" onClick={onFile}>{t.hosts.import.fromFile}</Button>
           <Button type="button" variant="ghost" onClick={onClose}>{t.common.cancel}</Button>
           <Button type="submit" variant="primary" loading={busy} disabled={!preview || nothing}>
             {count ? t.hosts.import.importHosts(count) : t.hosts.import.import}
@@ -146,5 +164,122 @@ function ImportRow({ h, checked, onChange }: { h: ImportHost; checked: boolean; 
       </span>
       {note && <span className={`chip ${h.exists ? "" : "warn"}`}>{note}</span>}
     </label>
+  );
+}
+
+/** A Detour file: opened with its password, then the chosen hosts come in with what logs in to them. */
+function FileImport({ path, onClose }: { path: string; onClose: () => void }) {
+  const t = useT();
+  const { toast, refreshPersonal, update } = useStore();
+  const [password, setPassword] = useState("");
+  const [preview, setPreview] = useState<{ hosts: FileHost[]; counts: FileCounts } | null>(null);
+  const [chosen, setChosen] = useState<Set<string>>(new Set());
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const openFile = async () => {
+    if (!password || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const p = api.real ? await api.hostsFileOpen(path, password) : DEMO_FILE;
+      setPreview(p);
+      setChosen(new Set(p.hosts.filter((h) => !h.exists).map((h) => h.id)));
+    } catch (e) {
+      setError(errorText(e));
+    }
+    setBusy(false);
+  };
+
+  const importHosts = async () => {
+    if (!preview || !chosen.size || busy) return;
+    setBusy(true);
+    try {
+      if (api.real) {
+        const r = await api.hostsFileImport(path, password, [...chosen]);
+        await refreshPersonal();
+        const parts = [t.common.hostCount(r.hosts)];
+        if (r.keys) parts.push(t.common.keyCount(r.keys));
+        if (r.proxies) parts.push(t.hosts.import.proxyCount(r.proxies));
+        if (r.known) parts.push(t.hosts.import.serverKeyCount(r.known));
+        toast({ text: t.hosts.import.imported(parts.join(", ")), tone: "success" });
+      } else {
+        const added: Host[] = preview.hosts
+          .filter((h) => chosen.has(h.id))
+          .map((h) => ({ id: uid("h"), vaultId: "personal", group: h.group, label: h.label, address: h.address, port: h.port, user: h.user, auth: { type: "agent" }, tags: [], hasPassword: false, os: "ubuntu", online: true }));
+        update((w) => ({ ...w, hosts: [...w.hosts, ...added] }));
+        toast({ text: t.hosts.import.imported(t.common.hostCount(added.length)), tone: "success" });
+      }
+      onClose();
+    } catch (e) {
+      setError(errorText(e));
+      setBusy(false);
+    }
+  };
+
+  const toggle = (id: string, on: boolean) =>
+    setChosen((s) => {
+      const next = new Set(s);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  const name = path.slice(Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\")) + 1);
+  return (
+    <Modal
+      title={t.hosts.import.fileTitle}
+      width={600}
+      onClose={onClose}
+      onSubmit={preview ? importHosts : openFile}
+      footer={
+        <>
+          <Button type="button" variant="ghost" onClick={onClose}>{t.common.cancel}</Button>
+          {preview ? (
+            <Button type="submit" variant="primary" loading={busy} disabled={!chosen.size}>
+              {chosen.size ? t.hosts.import.importHosts(chosen.size) : t.hosts.import.import}
+            </Button>
+          ) : (
+            <Button type="submit" variant="primary" loading={busy} disabled={!password}>{t.hosts.import.open}</Button>
+          )}
+        </>
+      }
+    >
+      {!preview && (
+        <Field label={`${t.hosts.export.filePassword}: ${name}`} error={error}>
+          <PasswordInput value={password} onChange={(v) => { setPassword(v); setError(null); }} invalid={!!error} autoFocus />
+        </Field>
+      )}
+      {preview && (
+        <>
+          {error && <span className="field-error">{error}</span>}
+          <div className="import-head">
+            <Checkbox checked={chosen.size === preview.hosts.length} onChange={(on) => setChosen(new Set(on ? preview.hosts.map((h) => h.id) : []))}>
+              {t.hosts.import.hosts(preview.hosts.length)}
+            </Checkbox>
+          </div>
+          <div className="import-list">
+            {preview.hosts.map((h) => (
+              <label key={h.id} className="checkbox import-row">
+                <input type="checkbox" checked={chosen.has(h.id)} onChange={(e) => toggle(h.id, e.target.checked)} />
+                <span className="checkbox-box"><Check size={12} strokeWidth={3} /></span>
+                <span className="import-main">
+                  <span className="import-alias">{h.label}</span>
+                  <span className="import-addr mono">
+                    {h.user}@{h.address}{h.port !== 22 && `:${h.port}`}
+                    {h.via && (
+                      <>
+                        {" "}
+                        <ArrowRight size={11} /> {t.hosts.import.via(h.via)}
+                      </>
+                    )}
+                  </span>
+                </span>
+                {h.exists && <span className="chip">{t.hosts.import.copy}</span>}
+              </label>
+            ))}
+          </div>
+        </>
+      )}
+    </Modal>
   );
 }

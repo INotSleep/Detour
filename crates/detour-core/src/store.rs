@@ -933,19 +933,11 @@ impl Store {
         Ok((host, key))
     }
 
-    /// Everything a connection to a host needs: its login, its pinned key, and the way
-    /// to it (a jump host of the same vault, with its own login, or a proxy).
-    pub fn connect_request_in(&self, vault: &str, host_id: &str, secret: Option<String>, trust_fingerprint: Option<String>) -> Result<ssh::ConnectRequest> {
-        self.request_via(vault, host_id, secret, trust_fingerprint, &mut Vec::new())
-    }
-
-    fn request_via(&self, vault: &str, host_id: &str, secret: Option<String>, trust_fingerprint: Option<String>, seen: &mut Vec<String>) -> Result<ssh::ConnectRequest> {
-        if seen.iter().any(|s| s == host_id) || seen.len() > 4 {
-            return Err(Error::JumpLoop);
-        }
-        seen.push(host_id.to_string());
+    /// A host as this person logs in to it: its login (their own, a group's of theirs, or the
+    /// shared one), the key for it, and their settings of its group.
+    fn login_in(&self, vault: &str, host_id: &str) -> Result<(Host, Option<KeyEntry>, GroupPrefs)> {
         let (mut host, mut key) = if vault == PERSONAL { self.personal_login(host_id)? } else { self.team_login(vault, host_id)? };
-        // First this person's own settings of the host's group, then the host's, then the group's shared proxy.
+        // First this person's own settings of the host's group, then the host's.
         let prefs = self.prefs_for(vault, &host)?;
         if let Some(auth) = prefs.auth.clone() {
             key = match &auth {
@@ -958,12 +950,30 @@ impl Store {
         if let Some(user) = prefs.user.clone() {
             host.user = user;
         }
+        Ok((host, key, prefs))
+    }
+
+    /// The proxy a group's hosts share when they have none of their own.
+    fn shared_proxy(&self, vault: &str, group: &str) -> Option<String> {
+        let groups = if vault == PERSONAL { self.unlocked().ok()?.vault.groups.clone() } else { self.team(vault).ok()?.data().groups };
+        groups.into_iter().find(|g| g.name == group).and_then(|g| g.proxy_id)
+    }
+
+    /// Everything a connection to a host needs: its login, its pinned key, and the way
+    /// to it (a jump host of the same vault, with its own login, or a proxy).
+    pub fn connect_request_in(&self, vault: &str, host_id: &str, secret: Option<String>, trust_fingerprint: Option<String>) -> Result<ssh::ConnectRequest> {
+        self.request_via(vault, host_id, secret, trust_fingerprint, &mut Vec::new())
+    }
+
+    fn request_via(&self, vault: &str, host_id: &str, secret: Option<String>, trust_fingerprint: Option<String>, seen: &mut Vec<String>) -> Result<ssh::ConnectRequest> {
+        if seen.iter().any(|s| s == host_id) || seen.len() > 4 {
+            return Err(Error::JumpLoop);
+        }
+        seen.push(host_id.to_string());
+        let (host, key, prefs) = self.login_in(vault, host_id)?;
         let ep = endpoint(&host);
         let known = self.unlocked()?.vault.known_hosts.iter().find(|k| k.endpoint == ep).cloned();
-        let shared = || -> Option<String> {
-            let groups = if vault == PERSONAL { self.unlocked().ok()?.vault.groups.clone() } else { self.team(vault).ok()?.data().groups };
-            groups.into_iter().find(|g| g.name == host.group).and_then(|g| g.proxy_id)
-        };
+        let shared = || self.shared_proxy(vault, &host.group);
         let route = match (prefs.proxy.clone(), &host.proxy_id, host.proxy.clone()) {
             (Some(r), _, _) => ssh::Route::Proxy(Box::new(self.proxy_for_connect(&r.vault, &r.id)?)),
             (None, Some(id), _) => ssh::Route::Proxy(Box::new(self.proxy_for_connect(vault, id)?)),
@@ -1797,6 +1807,231 @@ impl Store {
     }
 }
 
+/* ---------- Detour files ---------- */
+
+/// A host in a Detour file, as the import shows it.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BundleHost {
+    pub id: String,
+    pub label: String,
+    pub address: String,
+    pub port: u16,
+    pub user: String,
+    pub group: String,
+    /// The host it goes through, by its name in the file.
+    pub via: Option<String>,
+    /// The same host (address, port and user, or name) is in the vault already.
+    pub exists: bool,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BundlePreview {
+    pub hosts: Vec<BundleHost>,
+    pub counts: crate::bundle::Counts,
+}
+
+#[derive(Debug, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BundleResult {
+    pub hosts: usize,
+    pub keys: usize,
+    pub proxies: usize,
+    pub known: usize,
+}
+
+impl Store {
+    /// The chosen hosts of a vault, with the hosts they go through, as a Detour file carries
+    /// them: each with the login and the way this person reaches it by.
+    pub fn bundle_of(&self, vault: &str, host_ids: &[String], include: crate::bundle::Include) -> Result<crate::bundle::Bundle> {
+        let mut b = crate::bundle::Bundle::new();
+        let v = &self.unlocked()?.vault;
+        let groups = if vault == PERSONAL { v.groups.clone() } else { self.team(vault)?.data().groups };
+        let mut queue: Vec<String> = host_ids.iter().rev().cloned().collect();
+        while let Some(id) = queue.pop() {
+            if b.hosts.iter().any(|h| h.id == id) {
+                continue;
+            }
+            let (mut host, key, prefs) = self.login_in(vault, &id)?;
+            // The way to it: a saved proxy (this person's choice for the group, the host's, the
+            // group's shared one), or a jump host, which comes along.
+            let proxy = match (&prefs.proxy, &host.proxy_id, &host.proxy) {
+                (Some(r), _, _) => self.proxy_for_connect(&r.vault, &r.id).ok(),
+                (None, Some(p), _) => self.proxy_for_connect(vault, p).ok(),
+                (None, None, None) => self.shared_proxy(vault, &host.group).and_then(|p| self.proxy_for_connect(vault, &p).ok()),
+                _ => None,
+            };
+            host.proxy_id = None;
+            if let Some(mut p) = proxy.filter(|_| include.proxies) {
+                if matches!(host.proxy, Some(Proxy::Jump { .. })) {
+                    host.proxy = None;
+                }
+                host.proxy_id = Some(p.id.clone());
+                if !include.passwords {
+                    p.password = None;
+                }
+                if !b.proxies.iter().any(|x| x.id == p.id) {
+                    b.proxies.push(p);
+                }
+            }
+            if let Some(Proxy::Jump { host_id }) = &host.proxy {
+                queue.push(host_id.clone());
+            }
+            match key.filter(|_| include.keys) {
+                Some(mut k) => {
+                    if !include.passwords {
+                        k.passphrase = None;
+                    }
+                    if !b.keys.iter().any(|x| x.id == k.id) {
+                        b.keys.push(k);
+                    }
+                }
+                None if matches!(host.auth, Auth::Key { .. }) => host.auth = Auth::Agent,
+                None => {}
+            }
+            if !include.passwords {
+                (host.password, host.proxy_password) = (None, None);
+            }
+            if include.known_hosts {
+                let ep = endpoint(&host);
+                if let Some(k) = v.known_hosts.iter().find(|k| k.endpoint == ep)
+                    && !b.known_hosts.iter().any(|x| x.endpoint == ep)
+                {
+                    b.known_hosts.push(k.clone());
+                }
+            }
+            if include.groups {
+                if let Some(g) = groups.iter().find(|g| g.name == host.group && !g.name.is_empty())
+                    && !b.groups.iter().any(|x| x.name == g.name)
+                {
+                    // Its proxy is already the hosts' own.
+                    b.groups.push(Group { proxy_id: None, ..g.clone() });
+                }
+            } else {
+                (host.group, host.order) = (String::new(), None);
+            }
+            host.last_connected = None;
+            b.hosts.push(host);
+        }
+        Ok(b)
+    }
+
+    /// What a Detour file holds, against this person's vault.
+    pub fn bundle_preview(&self, b: &crate::bundle::Bundle) -> Result<BundlePreview> {
+        let v = &self.unlocked()?.vault;
+        let hosts = b
+            .hosts
+            .iter()
+            .map(|h| BundleHost {
+                id: h.id.clone(),
+                label: h.label.clone(),
+                address: h.address.clone(),
+                port: h.port,
+                user: h.user.clone(),
+                group: h.group.clone(),
+                via: match &h.proxy {
+                    Some(Proxy::Jump { host_id }) => b.hosts.iter().find(|x| &x.id == host_id).map(|x| x.label.clone()),
+                    _ => None,
+                },
+                exists: Self::same_host(v, &h.label, &h.address, h.port, &h.user).is_some(),
+            })
+            .collect();
+        Ok(BundlePreview { hosts, counts: crate::bundle::Counts::of(b) })
+    }
+
+    /// Takes the chosen hosts of a Detour file into this person's vault, with what they log in
+    /// with and the hosts they go through. A key or proxy already here is used, not added again;
+    /// a host they go through that is here already is gone through.
+    pub fn bundle_import(&mut self, b: &crate::bundle::Bundle, host_ids: &[String]) -> Result<BundleResult> {
+        let mut result = BundleResult::default();
+        // Host ids in the file -> here.
+        let mut ids: HashMap<String, String> = HashMap::new();
+        let mut take: Vec<&Host> = Vec::new();
+        let mut queue: Vec<(String, bool)> = host_ids.iter().rev().map(|id| (id.clone(), true)).collect();
+        while let Some((id, chosen)) = queue.pop() {
+            if ids.contains_key(&id) {
+                continue;
+            }
+            let Some(h) = b.hosts.iter().find(|h| h.id == id) else { continue };
+            // A host it goes through comes along unless it is here already.
+            if !chosen && let Some(here) = Self::same_host(self.vault()?, &h.label, &h.address, h.port, &h.user) {
+                ids.insert(id, here);
+                continue;
+            }
+            ids.insert(id, crate::new_id());
+            take.push(h);
+            if let Some(Proxy::Jump { host_id }) = &h.proxy {
+                queue.push((host_id.clone(), false));
+            }
+        }
+        let v = self.vault_mut()?;
+        let mut keys: HashMap<String, String> = HashMap::new();
+        let mut proxies: HashMap<String, String> = HashMap::new();
+        for h in &take {
+            if let Auth::Key { key_id } = &h.auth
+                && !keys.contains_key(key_id)
+                && let Some(k) = b.keys.iter().find(|k| &k.id == key_id)
+            {
+                let id = match v.keys.iter().find(|x| x.fingerprint == k.fingerprint) {
+                    Some(x) => x.id.clone(),
+                    None => {
+                        let id = crate::new_id();
+                        v.keys.push(KeyEntry { id: id.clone(), ..k.clone() });
+                        result.keys += 1;
+                        id
+                    }
+                };
+                keys.insert(key_id.clone(), id);
+            }
+            if let Some(pid) = &h.proxy_id
+                && !proxies.contains_key(pid)
+                && let Some(p) = b.proxies.iter().find(|p| &p.id == pid)
+            {
+                let same = |x: &&ProxyEntry| x.kind == p.kind && x.password == p.password && x.private_key == p.private_key && x.preshared_key == p.preshared_key && x.uuid == p.uuid;
+                let id = match v.proxies.iter().find(same) {
+                    Some(x) => x.id.clone(),
+                    None => {
+                        let id = crate::new_id();
+                        v.proxies.push(ProxyEntry { id: id.clone(), ..p.clone() });
+                        result.proxies += 1;
+                        id
+                    }
+                };
+                proxies.insert(pid.clone(), id);
+            }
+            if !h.group.is_empty()
+                && !v.groups.iter().any(|g| g.name == h.group)
+                && let Some(g) = b.groups.iter().find(|g| g.name == h.group)
+            {
+                v.groups.push(Group { id: crate::new_id(), proxy_id: None, ..g.clone() });
+            }
+            let mut host = (*h).clone();
+            host.id = ids[&h.id].clone();
+            host.auth = match &h.auth {
+                Auth::Key { key_id } => keys.get(key_id).map(|id| Auth::Key { key_id: id.clone() }).unwrap_or(Auth::Agent),
+                other => other.clone(),
+            };
+            host.proxy_id = h.proxy_id.as_ref().and_then(|p| proxies.get(p).cloned());
+            if let Some(Proxy::Jump { host_id }) = &h.proxy {
+                host.proxy = ids.get(host_id).map(|id| Proxy::Jump { host_id: id.clone() });
+            }
+            host.last_connected = None;
+            let ep = endpoint(&host);
+            if let Some(k) = b.known_hosts.iter().find(|k| k.endpoint == ep)
+                && !v.known_hosts.iter().any(|x| x.endpoint.eq_ignore_ascii_case(&ep))
+            {
+                v.known_hosts.push(k.clone());
+                result.known += 1;
+            }
+            v.hosts.push(host);
+            result.hosts += 1;
+        }
+        self.save()?;
+        Ok(result)
+    }
+}
+
 /* ---------- teams on this person's other devices ---------- */
 
 /// A team joined on another device of this person and not here (yet).
@@ -1878,5 +2113,101 @@ impl Store {
         let view = self.join_team(path, &link.root)?;
         self.link_errors.remove(team_id);
         Ok(view)
+    }
+}
+
+#[cfg(test)]
+mod bundle_tests {
+    use super::*;
+    use crate::bundle::{self, Include};
+
+    fn store() -> Store {
+        let dir = std::env::temp_dir().join(format!("detour-test-{}", crate::new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut s = Store::open(dir);
+        s.create("m").unwrap();
+        s
+    }
+
+    fn host(id: &str, address: &str, auth: Auth) -> Host {
+        Host { id: id.into(), group: "Web".into(), label: id.into(), address: address.into(), port: 22, user: "root".into(), auth, tags: vec![], last_connected: Some(1), password: None, proxy: None, proxy_password: None, proxy_id: None, forward_agent: false, order: Some(2.0) }
+    }
+
+    /// web (a password, a saved SOCKS proxy with a password, a pinned key) and db, through web with a key.
+    fn source() -> (Store, String) {
+        let mut s = store();
+        let key = keys::generate("deploy", KeyAlgorithm::Ed25519, None, false).unwrap();
+        let key_id = key.id.clone();
+        let v = s.vault_mut().unwrap();
+        v.keys.push(key);
+        v.proxies.push(ProxyEntry { id: "p1".into(), name: "office".into(), kind: ProxyKind::Socks5 { address: "10.9.9.9".into(), port: 1080, user: "me".into() }, password: Some("sockspw".into()), private_key: None, preshared_key: None, uuid: None });
+        v.groups.push(Group { id: "g1".into(), name: "Web".into(), order: 1.0, proxy_id: None });
+        let mut web = host("web", "10.0.0.1", Auth::Password);
+        web.password = Some("webpw".into());
+        web.proxy_id = Some("p1".into());
+        let mut db = host("db", "10.0.0.2", Auth::Key { key_id: key_id.clone() });
+        db.proxy = Some(Proxy::Jump { host_id: "web".into() });
+        v.hosts.extend([web, db]);
+        v.known_hosts.push(KnownHost { endpoint: "10.0.0.1:22".into(), key: "ssh-ed25519 AAAA".into(), fingerprint: "SHA256:x".into(), added_at: 1 });
+        s.save().unwrap();
+        (s, key_id)
+    }
+
+    #[test]
+    fn hosts_go_over_to_another_detour_with_what_logs_in_to_them() {
+        let (a, _) = source();
+        // db alone takes web along, the host it goes through.
+        let b = a.bundle_of(PERSONAL, &["db".into()], Include::ALL).unwrap();
+        assert_eq!(bundle::Counts::of(&b), bundle::Counts { hosts: 2, passwords: 2, keys: 1, proxies: 1, known_hosts: 1, groups: 1 });
+        let b = bundle::open(bundle::seal(&b, "pw").unwrap().as_bytes(), "pw").unwrap();
+
+        let mut other = store();
+        let preview = other.bundle_preview(&b).unwrap();
+        assert_eq!(preview.hosts.iter().map(|h| (h.label.as_str(), h.via.as_deref(), h.exists)).collect::<Vec<_>>(), [("db", Some("web"), false), ("web", None, false)]);
+        let r = other.bundle_import(&b, &["db".into()]).unwrap();
+        assert_eq!((r.hosts, r.keys, r.proxies, r.known), (2, 1, 1, 1));
+        let v = other.vault().unwrap();
+        let web = v.hosts.iter().find(|h| h.label == "web").unwrap();
+        let db = v.hosts.iter().find(|h| h.label == "db").unwrap();
+        assert_ne!(web.id, "web");
+        assert_eq!(db.proxy, Some(Proxy::Jump { host_id: web.id.clone() }));
+        assert!(matches!(&db.auth, Auth::Key { key_id } if v.keys.iter().any(|k| &k.id == key_id && !k.private_key.is_empty())));
+        assert_eq!(web.password.as_deref(), Some("webpw"));
+        let p = v.proxies.iter().find(|p| Some(&p.id) == web.proxy_id.as_ref()).unwrap();
+        assert_eq!((p.name.as_str(), p.password.as_deref()), ("office", Some("sockspw")));
+        assert_eq!((web.group.as_str(), web.order, web.last_connected), ("Web", Some(2.0), None));
+        assert!(v.groups.iter().any(|g| g.name == "Web"));
+        assert!(v.known_hosts.iter().any(|k| k.endpoint == "10.0.0.1:22"));
+        // It connects as the source did.
+        let req = other.connect_request(&db.id, None, None).unwrap();
+        assert!(req.key.is_some() && matches!(req.route, ssh::Route::Jump(_)));
+
+        // Again: the hosts are here now, and the key and proxy aren't added twice.
+        let preview = other.bundle_preview(&b).unwrap();
+        assert!(preview.hosts.iter().all(|h| h.exists));
+        let r = other.bundle_import(&b, &["web".into()]).unwrap();
+        assert_eq!((r.hosts, r.keys, r.proxies, r.known), (1, 0, 0, 0));
+    }
+
+    #[test]
+    fn what_is_left_out_stays_out() {
+        let (a, _) = source();
+        let none = Include { passwords: false, keys: false, proxies: false, known_hosts: false, groups: false };
+        let b = a.bundle_of(PERSONAL, &["db".into(), "web".into()], none).unwrap();
+        assert_eq!(bundle::Counts::of(&b), bundle::Counts { hosts: 2, ..Default::default() });
+        let text = serde_json::to_string(&b).unwrap();
+        assert!(!text.contains("webpw") && !text.contains("sockspw") && !text.contains("PRIVATE KEY"), "{text}");
+        let db = b.hosts.iter().find(|h| h.id == "db").unwrap();
+        assert_eq!((&db.auth, db.group.as_str(), db.order), (&Auth::Agent, "", None));
+        let web = b.hosts.iter().find(|h| h.id == "web").unwrap();
+        assert_eq!(web.proxy_id, None);
+        // A host already here that a chosen one goes through is gone through, not copied.
+        let mut other = store();
+        other.bundle_import(&b, &["web".into()]).unwrap();
+        let r = other.bundle_import(&b, &["db".into()]).unwrap();
+        assert_eq!(r.hosts, 1);
+        let v = other.vault().unwrap();
+        let web = v.hosts.iter().find(|h| h.label == "web").unwrap();
+        assert_eq!(v.hosts.iter().find(|h| h.label == "db").unwrap().proxy, Some(Proxy::Jump { host_id: web.id.clone() }));
     }
 }

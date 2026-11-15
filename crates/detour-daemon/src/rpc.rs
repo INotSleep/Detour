@@ -27,6 +27,12 @@ pub(crate) fn err(e: Error) -> Value {
     serde_json::to_value(&e).unwrap_or_else(|_| json!({ "kind": "internal", "message": e.to_string() }))
 }
 
+/// A Detour file opened with its password.
+async fn open_file(path: &str, password: String) -> Result<detour_core::bundle::Bundle, Value> {
+    let text = std::fs::read(path).map_err(|e| err(e.into()))?;
+    tokio::task::spawn_blocking(move || detour_core::bundle::open(&text, &password)).await.map_err(|e| err(detour_core::Error::Internal { message: e.to_string() }))?.map_err(err)
+}
+
 fn ok<T: Serialize>(r: detour_core::Result<T>) -> Out {
     r.map(|v| serde_json::to_value(v).unwrap_or(Value::Null)).map_err(err)
 }
@@ -62,6 +68,7 @@ pub(crate) const READ_ONLY: &[&str] = &[
     "github_user", "github_start", "github_repo_access", "session_input", "session_resize", "session_attach", "session_detach", "sessions_list", "session_runs",
     "files_open", "files_list", "files_resolve", "files_cancel", "files_close", "tunnels_status", "tunnel_start", "tunnel_stop", "proxy_check", "proxy_parse", "proxy_export", "settings_get",
     "settings_set", "activity", "log_write", "log_tail", "quit", "trust_request", "trust_answer", "trust_with_password", "hosts_export",
+    "hosts_file_counts", "hosts_file_export", "hosts_file_open",
     "agents_pending", "agents_list", "agents_answer", "agents_set", "agents_revoke",
 ];
 
@@ -278,6 +285,30 @@ pub(crate) async fn dispatch(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value
             ok(pushed(core, PERSONAL, r))
         }
         "ssh_import_preview" => ok(s!().ssh_import_preview()),
+        // Detour files (see `bundle`): sealing and opening take a while, outside the store's lock.
+        "hosts_file_counts" => {
+            let a = args!(method, p, { vault_id: String, host_ids: Vec<String> });
+            let b = s!().bundle_of(&a.vault_id, &a.host_ids, detour_core::bundle::Include::ALL).map_err(err)?;
+            ok(Ok(detour_core::bundle::Counts::of(&b)))
+        }
+        "hosts_file_export" => {
+            let a = args!(method, p, { vault_id: String, host_ids: Vec<String>, include: detour_core::bundle::Include, password: String, path: String });
+            let b = s!().bundle_of(&a.vault_id, &a.host_ids, a.include).map_err(err)?;
+            let text = tokio::task::spawn_blocking(move || detour_core::bundle::seal(&b, &a.password).map(|t| (t, detour_core::bundle::Counts::of(&b)))).await.map_err(|e| err(detour_core::Error::Internal { message: e.to_string() }))?.map_err(err)?;
+            std::fs::write(&a.path, text.0).map_err(|e| err(e.into()))?;
+            Ok(json!({ "path": a.path, "counts": text.1 }))
+        }
+        "hosts_file_open" => {
+            let a = args!(method, p, { path: String, password: String });
+            let b = open_file(&a.path, a.password).await?;
+            ok(s!().bundle_preview(&b))
+        }
+        "hosts_file_import" => {
+            let a = args!(method, p, { path: String, password: String, host_ids: Vec<String> });
+            let b = open_file(&a.path, a.password).await?;
+            let r = s!().bundle_import(&b, &a.host_ids);
+            ok(pushed(core, PERSONAL, r))
+        }
         "ssh_import" => {
             let a = args!(method, p, { aliases: Vec<String>, known_hosts: bool });
             let r = s!().ssh_import(&a.aliases, a.known_hosts);

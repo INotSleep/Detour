@@ -854,6 +854,86 @@ pub async fn host_export(ctx: &Ctx, names: Vec<String>, out: Option<std::path::P
     Ok(())
 }
 
+/// What a Detour file leaves out (`hosts export --file`).
+#[derive(clap::Args, Debug, Default)]
+pub struct LeaveOut {
+    #[arg(long, requires = "file")]
+    no_passwords: bool,
+    #[arg(long, requires = "file")]
+    no_keys: bool,
+    #[arg(long, requires = "file")]
+    no_proxies: bool,
+    #[arg(long, requires = "file")]
+    no_known_hosts: bool,
+    #[arg(long, requires = "file")]
+    no_groups: bool,
+}
+
+/// A password for a Detour file, typed twice.
+fn new_file_password() -> Res<String> {
+    let pw = crate::conn::secret(t().file_password)?;
+    if pw.is_empty() {
+        return fail(t().cancelled);
+    }
+    if crate::conn::secret(t().repeat_password)? != pw {
+        return fail(t().passwords_differ);
+    }
+    Ok(pw)
+}
+
+/// What a Detour file holds, in one line.
+fn file_counts(c: &Value) -> String {
+    let n = |k: &str| c[k].as_u64().unwrap_or(0);
+    let parts = [("hosts", t().count_hosts), ("keys", t().count_keys), ("passwords", t().count_passwords), ("proxies", t().count_proxies), ("knownHosts", t().count_known_hosts)];
+    parts.iter().filter(|(k, _)| n(k) > 0).map(|(k, name)| format!("{name}: {}", n(k))).collect::<Vec<_>>().join(", ")
+}
+
+pub async fn host_export_file(ctx: &Ctx, names: Vec<String>, file: &std::path::Path, out: LeaveOut) -> Res<()> {
+    let d = data(ctx).await?;
+    let ids: Vec<String> = if names.is_empty() {
+        d["hosts"].as_array().into_iter().flatten().map(|h| s(&h["id"])).collect()
+    } else {
+        names.iter().map(|n| find(&d["hosts"], n, "label", t().unknown_host).map(|h| s(&h["id"]))).collect::<Res<_>>()?
+    };
+    let include = json!({ "passwords": !out.no_passwords, "keys": !out.no_keys, "proxies": !out.no_proxies, "knownHosts": !out.no_known_hosts, "groups": !out.no_groups });
+    let password = new_file_password()?;
+    let path = std::path::absolute(file).unwrap_or(file.to_path_buf()).display().to_string();
+    let r = ctx.c.call("hosts_file_export", json!({ "vaultId": ctx.vault, "hostIds": ids, "include": include, "password": password, "path": path })).await?;
+    if ctx.json {
+        print_json(&r);
+        return Ok(());
+    }
+    eprintln!("{} {} ({})", t().saved_to, s(&r["path"]), file_counts(&r["counts"]));
+    Ok(())
+}
+
+pub async fn host_import_file(ctx: &Ctx, file: &std::path::Path, names: Vec<String>) -> Res<()> {
+    let path = std::path::absolute(file).unwrap_or(file.to_path_buf()).display().to_string();
+    let password = crate::conn::secret(t().file_password)?;
+    let preview = ctx.c.call("hosts_file_open", json!({ "path": path, "password": password })).await?;
+    let hosts = &preview["hosts"];
+    // By default the hosts not here yet; named ones even if they are (they come as copies).
+    let ids: Vec<String> = if names.is_empty() {
+        hosts.as_array().into_iter().flatten().filter(|h| h["exists"] == false).map(|h| s(&h["id"])).collect()
+    } else {
+        names.iter().map(|n| find(hosts, n, "label", t().unknown_host).map(|h| s(&h["id"]))).collect::<Res<_>>()?
+    };
+    if ids.is_empty() {
+        eprintln!("{}", t().nothing_to_import);
+        return Ok(());
+    }
+    let r = ctx.c.call("hosts_file_import", json!({ "path": path, "password": password, "hostIds": ids })).await?;
+    if ctx.json {
+        print_json(&r);
+        return Ok(());
+    }
+    let n = |k: &str| r[k].as_u64().unwrap_or(0);
+    let parts = [("hosts", t().count_hosts), ("keys", t().count_keys), ("proxies", t().count_proxies), ("known", t().count_known_hosts)];
+    let done: Vec<String> = parts.iter().filter(|(k, _)| n(k) > 0).map(|(k, name)| format!("{name}: {}", n(k))).collect();
+    eprintln!("{}: {}", t().imported, done.join(", "));
+    Ok(())
+}
+
 /* ---------- running commands ---------- */
 
 /// The most of piped input `exec` passes on: it travels in one message to the core.

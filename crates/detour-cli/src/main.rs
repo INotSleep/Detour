@@ -127,13 +127,19 @@ enum Hosts {
         aliases: Vec<String>,
         #[arg(long)]
         known_hosts: bool,
+        #[arg(long, value_name = "FILE", conflicts_with = "known_hosts")]
+        file: Option<PathBuf>,
     },
     Export {
         hosts: Vec<String>,
-        #[arg(long, short)]
+        #[arg(long, short, conflicts_with = "file")]
         output: Option<PathBuf>,
-        #[arg(long, value_name = "DIR")]
+        #[arg(long, value_name = "DIR", conflicts_with = "file")]
         keys: Option<PathBuf>,
+        #[arg(long, value_name = "FILE")]
+        file: Option<PathBuf>,
+        #[command(flatten)]
+        leave_out: cmds::LeaveOut,
     },
 }
 
@@ -470,8 +476,10 @@ async fn run(command: Command, dir: &std::path::Path, team: Option<String>, json
         Command::Groups(Groups::Move { group, before, last: _, mine: true }) => cmds::mine_group_move(&ctx, &group, before.as_deref()).await?,
         Command::Groups(Groups::Move { group, before, last: _, mine: false }) => cmds::group_move(&ctx, &group, before.as_deref()).await?,
         Command::Groups(Groups::Set { group, opts }) => cmds::group_set(&ctx, &group, opts).await?,
-        Command::Hosts(Hosts::Import { aliases, known_hosts }) => cmds::host_import(&ctx, aliases, known_hosts).await?,
-        Command::Hosts(Hosts::Export { hosts, output, keys }) => cmds::host_export(&ctx, hosts, output, keys).await?,
+        Command::Hosts(Hosts::Import { aliases, file: Some(file), .. }) => cmds::host_import_file(&ctx, &file, aliases).await?,
+        Command::Hosts(Hosts::Import { aliases, known_hosts, file: None }) => cmds::host_import(&ctx, aliases, known_hosts).await?,
+        Command::Hosts(Hosts::Export { hosts, file: Some(file), leave_out, .. }) => cmds::host_export_file(&ctx, hosts, &file, leave_out).await?,
+        Command::Hosts(Hosts::Export { hosts, output, keys, .. }) => cmds::host_export(&ctx, hosts, output, keys).await?,
         Command::Ssh { host } => return term::ssh(&ctx, &host).await,
         Command::Exec { host, command } => return cmds::exec(&ctx, &host, &command.join(" ")).await,
         Command::Cp { from, to } => cmds::cp(&ctx, &from, &to).await?,

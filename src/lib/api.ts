@@ -42,6 +42,7 @@ export type CoreError =
   | { kind: "invalidId"; reason: string }
   | { kind: "forbidden" | "notATeamVault" | "folderNotEmpty" | "rootChanged" | "alreadyMember" }
   | { kind: "notASyncVault" | "invalidCode" | "codeExpired" | "syncHasTeams" }
+  | { kind: "wrongFilePassword" | "notADetourFile" | "newerFile" }
   | { kind: "git"; message: string }
   | { kind: "portBusy" | "forwardRefused"; port: number }
   | { kind: "unavailable"; path: string }
@@ -85,6 +86,9 @@ export function errorText(e: unknown): string {
     case "notASyncVault": return t.notASyncVault;
     case "invalidCode": return t.invalidCode;
     case "codeExpired": return t.codeExpired;
+    case "wrongFilePassword": return t.wrongFilePassword;
+    case "notADetourFile": return t.notADetourFile;
+    case "newerFile": return t.newerFile;
     case "syncHasTeams": return t.syncHasTeams;
     case "unavailable": return t.unavailable(e.path);
     case "git": return gitReason(e.message);
@@ -293,6 +297,37 @@ export interface ImportHost {
   unsupported: "proxyCommand" | null;
   exists: boolean;
   keyMissing: boolean;
+}
+
+/** What goes into a Detour file besides the hosts. */
+export interface FileInclude {
+  passwords: boolean;
+  keys: boolean;
+  proxies: boolean;
+  knownHosts: boolean;
+  groups: boolean;
+}
+
+/** How many of each a Detour file carries. */
+export interface FileCounts {
+  hosts: number;
+  passwords: number;
+  keys: number;
+  proxies: number;
+  knownHosts: number;
+  groups: number;
+}
+
+/** A host in a Detour file, against this person's vault. */
+export interface FileHost {
+  id: string;
+  label: string;
+  address: string;
+  port: number;
+  user: string;
+  group: string;
+  via: string | null;
+  exists: boolean;
 }
 
 export interface ImportPreview {
@@ -585,6 +620,33 @@ export const api = {
   /** Hosts of a vault as ~/.ssh/config entries, made by the core; with `keyDir` their keys are saved there. */
   hostsExport(vaultId: string, hostIds: string[], keyDir: string | null): Promise<{ config: string; keyFiles: string[] }> {
     return invoke("hosts_export", { vaultId, hostIds, keyDir });
+  },
+
+  /** How many passwords, keys, proxies, server keys and groups a Detour file of these hosts would carry. */
+  hostsFileCounts(vaultId: string, hostIds: string[]): Promise<FileCounts> {
+    return invoke("hosts_file_counts", { vaultId, hostIds });
+  },
+
+  /** Saves hosts to a Detour file sealed with `password`. */
+  hostsFileExport(vaultId: string, hostIds: string[], include: FileInclude, password: string, path: string): Promise<{ path: string; counts: FileCounts }> {
+    return invoke("hosts_file_export", { vaultId, hostIds, include, password, path });
+  },
+
+  /** Asks for a Detour file to open; null if cancelled. */
+  async pickDetourFile(): Promise<string | null> {
+    if (!real) return "hosts.detour";
+    const r = await open({ multiple: false, directory: false, filters: [{ name: "Detour", extensions: ["detour"] }] });
+    return typeof r === "string" ? r : null;
+  },
+
+  /** What a Detour file holds, opened with its password. */
+  hostsFileOpen(path: string, password: string): Promise<{ hosts: FileHost[]; counts: FileCounts }> {
+    return invoke("hosts_file_open", { path, password });
+  },
+
+  /** Takes the chosen hosts of a Detour file into the personal vault. */
+  hostsFileImport(path: string, password: string, hostIds: string[]): Promise<{ hosts: number; keys: number; proxies: number; known: number }> {
+    return invoke("hosts_file_import", { path, password, hostIds });
   },
 
   /* vault */

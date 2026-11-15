@@ -6,6 +6,7 @@
 //! replaced without touching it.
 
 pub mod agent;
+pub mod bundle;
 pub mod export;
 pub mod github;
 pub mod identity;
@@ -106,6 +107,14 @@ pub enum Error {
     InvalidCode,
     #[error("the pairing code has expired")]
     CodeExpired,
+    /// A Detour file (see `bundle`) that its password doesn't open.
+    #[error("wrong password for this file")]
+    WrongFilePassword,
+    #[error("this is not a Detour file")]
+    NotADetourFile,
+    /// A Detour file written by a newer version.
+    #[error("this file is from a newer Detour")]
+    NewerFile,
     /// This device's identity is in use by teams, so it can't take another person's.
     #[error("leave your teams on this device first")]
     SyncHasTeams,
