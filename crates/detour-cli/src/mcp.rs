@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use detour_ipc::Client;
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -19,11 +20,13 @@ use rmcp::{ServerHandler, ServiceExt, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use tokio::sync::watch;
 
 type Out = Result<String, String>;
 
 /// How long a request for access waits for the person in one call (MCP clients time out).
 const WAIT_SECS: u64 = 100;
+const ACCESS_REQUEST_SECS: u64 = 10 * 60;
 /// The most of a remote file `read_file` returns.
 const MAX_READ: u64 = 1024 * 1024;
 
@@ -248,6 +251,24 @@ struct GenerateKey {
 /// A file browser's id and the home directory it opened in.
 type Browser = (String, String);
 
+#[derive(Clone)]
+struct PendingAccess {
+    answer: watch::Receiver<Option<Out>>,
+    pending: String,
+    started: Instant,
+}
+
+impl PendingAccess {
+    async fn wait(mut self) -> Out {
+        let got = tokio::time::timeout(std::time::Duration::from_secs(WAIT_SECS), self.answer.wait_for(Option::is_some)).await;
+        match got {
+            Ok(Ok(answer)) => answer.as_ref().unwrap().clone(),
+            Ok(Err(_)) => Err("Lost the connection to Detour. Try again.".into()),
+            Err(_) => Ok(self.pending),
+        }
+    }
+}
+
 /// What an agent's token reaches, as the core says.
 #[derive(Clone)]
 struct Grant {
@@ -272,6 +293,7 @@ pub struct Detour {
     dir: PathBuf,
     link: Arc<tokio::sync::Mutex<Option<Client>>>,
     grants: Arc<Mutex<Vec<Grant>>>,
+    access_requests: Arc<Mutex<HashMap<String, PendingAccess>>>,
     /// File browsers opened, by token and host (`vault/host`): their id and home directory.
     files: Arc<Mutex<HashMap<(String, String), Browser>>>,
     tool_router: ToolRouter<Self>,
@@ -351,7 +373,7 @@ impl Detour {
     pub fn new(dir: PathBuf) -> Self {
         let preset = std::env::var("DETOUR_TOKEN").unwrap_or_default();
         let grants = preset.split([',', ' ']).filter(|t| !t.is_empty()).map(|t| Grant::new(t.to_string())).collect();
-        Self { dir, link: Arc::default(), grants: Arc::new(Mutex::new(grants)), files: Arc::default(), tool_router: Self::tool_router() }
+        Self { dir, link: Arc::default(), grants: Arc::new(Mutex::new(grants)), access_requests: Arc::default(), files: Arc::default(), tool_router: Self::tool_router() }
     }
 
     /// A call to the core, starting it (or reconnecting) when needed.
@@ -619,16 +641,59 @@ impl Detour {
         }
         let agent = peer.peer_info().map(|i| i.client_info.title.clone().unwrap_or_else(|| i.client_info.name.clone())).filter(|n| !n.is_empty()).unwrap_or_else(|| "AI agent".into());
         let r = self
-            .core("agent_request", json!({ "agent": agent, "hosts": a.hosts, "scopes": a.scopes, "ttl": a.duration, "reason": a.reason, "waitSecs": WAIT_SECS }))
+            .core("agent_request", json!({ "agent": agent, "hosts": a.hosts, "scopes": a.scopes, "ttl": a.duration, "reason": a.reason, "waitSecs": 0 }))
             .await
             .map_err(|e| explain(&e))?;
-        self.answered(r).await
+        self.access_response(r).await
     }
 
     #[tool(description = "Wait for the person's answer to a request_access that is still pending (up to 100 seconds).")]
     async fn wait_for_access(&self, Parameters(a): Parameters<RequestId>) -> Out {
-        let r = self.core("agent_wait", json!({ "requestId": a.request_id, "waitSecs": WAIT_SECS })).await.map_err(|e| explain(&e))?;
-        self.answered(r).await
+        let pending = self.access_requests.lock().unwrap().get(&a.request_id).filter(|p| p.started.elapsed().as_secs() < ACCESS_REQUEST_SECS).cloned();
+        if let Some(pending) = pending {
+            return pending.wait().await;
+        }
+        let r = self.core("agent_wait", json!({ "requestId": a.request_id, "waitSecs": 0 })).await.map_err(|e| explain(&e))?;
+        self.access_response(r).await
+    }
+
+    async fn access_response(&self, r: Value) -> Out {
+        if r["status"] != "pending" {
+            return self.answered(r).await;
+        }
+        let id = s(&r["requestId"]);
+        let message = self.answered(r).await?;
+        let pending = {
+            let mut requests = self.access_requests.lock().unwrap();
+            requests.retain(|_, p| p.started.elapsed().as_secs() < ACCESS_REQUEST_SECS);
+            requests.entry(id.clone()).or_insert_with(|| {
+                let (answer, rx) = watch::channel(None);
+                let this = self.clone();
+                // Keep receiving the approved token after a tool call stops waiting.
+                tokio::spawn(async move {
+                    let receive = async {
+                        loop {
+                            let r = match this.core("agent_wait", json!({ "requestId": id, "waitSecs": WAIT_SECS })).await {
+                                Ok(r) => r,
+                                Err(e) => {
+                                    this.access_requests.lock().unwrap().remove(&id);
+                                    return Err(explain(&e));
+                                }
+                            };
+                            if r["status"] != "pending" {
+                                return this.answered(r).await;
+                            }
+                        }
+                    };
+                    let result = tokio::time::timeout(std::time::Duration::from_secs(ACCESS_REQUEST_SECS), receive)
+                        .await
+                        .unwrap_or_else(|_| Err("The access request expired. Call request_access again.".into()));
+                    answer.send_replace(Some(result));
+                });
+                PendingAccess { answer: rx, pending: message, started: Instant::now() }
+            }).clone()
+        };
+        pending.wait().await
     }
 
     async fn answered(&self, r: Value) -> Out {
@@ -1062,6 +1127,10 @@ pub fn setup(action: crate::McpAction, dir: &Path, json: bool) -> crate::conn::R
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "mcp_access_tests.rs"]
+mod access_tests;
 
 #[cfg(test)]
 mod tests {
