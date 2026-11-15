@@ -237,10 +237,13 @@ pub async fn enable_git_sync(store: &Mutex<Store>, remote: GitRemote, trust_fing
     };
     let (empty, new_known) = Mirror::remote_is_empty(&r).await?;
     locked(store)?.pin_known_host(new_known)?;
-    if !empty {
-        return Err(Error::FolderNotEmpty);
-    }
     let mirror = Mirror::new(&staged);
+    if !empty {
+        // A synced vault there is this person's from another device, to join instead.
+        let synced = clone(&mirror, &r).await.is_ok() && TeamVault::inspect_personal(mirror.files()).is_ok();
+        let _ = std::fs::remove_dir_all(&staged);
+        return Err(if synced { Error::SyncExists } else { Error::FolderNotEmpty });
+    }
     let created = locked(store)?.sync_create_files(&mirror.files());
     let pushed = match created {
         Ok(()) => mirror.push(&r).await.map(|_| ()),

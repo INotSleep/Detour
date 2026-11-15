@@ -1201,6 +1201,9 @@ impl Store {
         if self.unlocked()?.vault.sync.is_some() {
             return Err(Error::AlreadyInitialized);
         }
+        if TeamVault::inspect_personal(path).is_ok() {
+            return Err(Error::SyncExists);
+        }
         let (me, device) = self.member()?;
         let t = TeamVault::create_personal(path, &me, &device)?;
         self.attach(t, remote)

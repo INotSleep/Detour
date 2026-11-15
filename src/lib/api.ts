@@ -41,7 +41,7 @@ export type CoreError =
   | { kind: "connect" | "io" | "internal"; message: string }
   | { kind: "invalidId"; reason: string }
   | { kind: "forbidden" | "notATeamVault" | "folderNotEmpty" | "rootChanged" | "alreadyMember" }
-  | { kind: "notASyncVault" | "invalidCode" | "codeExpired" | "syncHasTeams" }
+  | { kind: "notASyncVault" | "invalidCode" | "codeExpired" | "syncHasTeams" | "syncExists" }
   | { kind: "wrongFilePassword" | "notADetourFile" | "newerFile" }
   | { kind: "git"; message: string }
   | { kind: "portBusy" | "forwardRefused"; port: number }
@@ -90,6 +90,7 @@ export function errorText(e: unknown): string {
     case "notADetourFile": return t.notADetourFile;
     case "newerFile": return t.newerFile;
     case "syncHasTeams": return t.syncHasTeams;
+    case "syncExists": return t.syncExists;
     case "unavailable": return t.unavailable(e.path);
     case "git": return gitReason(e.message);
     case "portBusy": return t.portBusy(e.port);

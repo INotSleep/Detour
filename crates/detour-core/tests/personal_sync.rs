@@ -186,6 +186,18 @@ async fn wrong_codes_and_wrong_folders_are_refused() {
 }
 
 #[tokio::test]
+async fn turning_sync_on_where_it_already_is_asks_to_join() {
+    let (_laptop, folder) = laptop_in_sync();
+    let desktop = device("desktop");
+    assert!(matches!(desktop.lock().unwrap().sync_enable(&folder, None), Err(Error::SyncExists)));
+    // Something else in the folder is just not empty.
+    let other = temp_dir("other");
+    std::fs::write(other.join("notes.txt"), "x").unwrap();
+    assert!(matches!(desktop.lock().unwrap().sync_enable(&other.display().to_string(), None), Err(Error::FolderNotEmpty)));
+    assert!(!desktop.lock().unwrap().sync_status().unwrap().enabled);
+}
+
+#[tokio::test]
 async fn the_recovery_key_joins_without_another_device() {
     let (laptop, folder) = laptop_in_sync();
     let recovery = laptop.lock().unwrap().sync_recovery_key().unwrap();

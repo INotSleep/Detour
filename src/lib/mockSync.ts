@@ -24,6 +24,8 @@ export const demoSync = {
   },
   async enable(place: SyncPlace) {
     await wait(700);
+    // A place named so stands for one another device already syncs through.
+    if (("path" in place ? place.path : place.url).includes("existing")) throw { kind: "syncExists" } satisfies CoreError;
     state = placed(place);
     return state;
   },

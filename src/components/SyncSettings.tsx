@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ChevronRight, Copy, Download, FolderSync, GitBranch, Laptop, RotateCw, ShieldAlert } from "lucide-react";
+import { ChevronRight, Copy, Download, FolderSync, GitBranch, Laptop, Link2, RotateCw, ShieldAlert } from "lucide-react";
 import { api, errorText, isCoreError, type CoreError, type Pairing, type SyncInfo, type SyncPlace } from "../lib/api";
 import { locale, tr, useT } from "../i18n";
 import { copyText, formatAgo, useStore } from "../lib/store";
@@ -24,7 +24,7 @@ export function SyncSettings() {
   const { sync, setSync, refreshPersonal, toast } = useStore();
   const all = useT();
   const t = all.sync;
-  const [dialog, setDialog] = useState<"enable" | "join" | "device" | "recovery" | "disable" | "token" | "serverKey" | null>(null);
+  const [dialog, setDialog] = useState<"enable" | "device" | "recovery" | "disable" | "token" | "serverKey" | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [showProblems, setShowProblems] = useState(false);
 
@@ -51,12 +51,10 @@ export function SyncSettings() {
         <div className="setting">
           <span>{t.betweenDevices}</span>
           <div className="row-buttons">
-            <Button size="sm" onClick={() => setDialog("join")}>{all.common.connect}</Button>
             <Button size="sm" variant="primary" onClick={() => setDialog("enable")}>{t.enable}</Button>
           </div>
         </div>
         {dialog === "enable" && <EnableDialog onClose={() => setDialog(null)} />}
-        {dialog === "join" && <JoinDialog onClose={() => setDialog(null)} />}
       </section>
     );
   }
@@ -148,35 +146,64 @@ export function SyncSettings() {
 
 /* ---------- turning it on ---------- */
 
+/** Turns sync on in an empty folder or repository; where this person's vault already is,
+ *  the same dialog connects this device to it with a code instead. */
 function EnableDialog({ onClose }: { onClose: () => void }) {
-  const { setSync, toast } = useStore();
+  const { setSync, refreshPersonal, toast } = useStore();
   const all = useT();
   const t = all.sync;
   const [storage, setStorageRaw] = useStorage();
   const [serverKey, setServerKey] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ field: "code" | "storage"; text: string } | null>(null);
   const [enabled, setEnabled] = useState<SyncInfo | null>(null);
+  // The vault is there already: this device joins it.
+  const [joining, setJoining] = useState(false);
+  const [code, setCode] = useState("");
 
   const setStorage = (p: Partial<Storage>) => {
     setStorageRaw(p);
     setServerKey(null);
     setError(null);
+    setJoining(false);
   };
 
-  const submit = async () => {
-    if (busy || !storageReady(storage)) return;
-    setBusy(true);
-    setError(null);
+  const storageError = (e: unknown) =>
+    isCoreError(e) && e.kind === "folderNotEmpty" ? (storage.kind === "git" ? t.repoNotEmpty : t.folderNotEmpty) : isCoreError(e) && e.kind === "io" ? (storage.kind === "git" ? t.repoUnreachable : t.folderUnavailable) : errorText(e);
+
+  const turnOn = async () => {
     try {
       setEnabled(await api.syncEnable(placeOf(storage), serverKey ?? undefined));
     } catch (e) {
       const fp = unknownServerKey(e);
       if (fp) setServerKey(fp);
-      else setError(isCoreError(e) && e.kind === "folderNotEmpty" ? (storage.kind === "git" ? t.repoNotEmpty : t.folderNotEmpty) : isCoreError(e) && e.kind === "io" ? (storage.kind === "git" ? t.repoUnreachable : t.folderUnavailable) : errorText(e));
-    } finally {
-      setBusy(false);
+      else if (isCoreError(e) && e.kind === "syncExists") setJoining(true);
+      else setError({ field: "storage", text: storageError(e) });
     }
+  };
+
+  const join = async () => {
+    try {
+      const status = await api.syncJoin(placeOf(storage), code.trim(), serverKey ?? undefined);
+      setSync(status);
+      await refreshPersonal();
+      toast({ text: t.enabled, tone: "success" });
+      onClose();
+    } catch (e) {
+      const fp = unknownServerKey(e);
+      if (fp) return setServerKey(fp);
+      const onCode = isCoreError(e) && (e.kind === "invalidCode" || e.kind === "codeExpired");
+      setError({ field: onCode ? "code" : "storage", text: storageError(e) });
+    }
+  };
+
+  const ready = storageReady(storage) && (!joining || !!code.trim());
+  const submit = async () => {
+    if (busy || !ready) return;
+    setBusy(true);
+    setError(null);
+    await (joining ? join() : turnOn());
+    setBusy(false);
   };
 
   if (enabled) {
@@ -191,6 +218,7 @@ function EnableDialog({ onClose }: { onClose: () => void }) {
     );
   }
 
+  const label = joining ? (serverKey ? t.trustAndConnect : t.connect) : serverKey ? t.trustAndEnable : t.enable;
   return (
     <Modal
       title={t.enableTitle}
@@ -200,82 +228,33 @@ function EnableDialog({ onClose }: { onClose: () => void }) {
       footer={
         <>
           <Button type="button" variant="ghost" onClick={onClose}>{all.common.cancel}</Button>
-          <Button type="submit" variant="primary" loading={busy} disabled={!storageReady(storage)}>{serverKey ? t.trustAndEnable : t.enable}</Button>
+          <Button type="submit" variant="primary" loading={busy} disabled={!ready}>{label}</Button>
         </>
       }
     >
-      <StorageFields value={storage} set={setStorage} folderLabel={t.emptyFolder} folderPlaceholder={"D:\\Sync\\detour"} />
-      {serverKey && <ServerKeyCard url={storage.url} fingerprint={serverKey} />}
-      {error && <span className="field-error">{error}</span>}
-    </Modal>
-  );
-}
-
-/* ---------- joining from a new device ---------- */
-
-function JoinDialog({ onClose }: { onClose: () => void }) {
-  const { setSync, refreshPersonal, toast } = useStore();
-  const all = useT();
-  const t = all.sync;
-  const [storage, setStorageRaw] = useStorage();
-  const [code, setCode] = useState("");
-  const [serverKey, setServerKey] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<{ field: "code" | "storage"; text: string } | null>(null);
-
-  const setStorage = (p: Partial<Storage>) => {
-    setStorageRaw(p);
-    setServerKey(null);
-    setError(null);
-  };
-
-  const submit = async () => {
-    if (busy || !storageReady(storage) || !code.trim()) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const status = await api.syncJoin(placeOf(storage), code.trim(), serverKey ?? undefined);
-      setSync(status);
-      await refreshPersonal();
-      toast({ text: t.enabled, tone: "success" });
-      onClose();
-    } catch (e) {
-      setBusy(false);
-      const fp = unknownServerKey(e);
-      if (fp) return setServerKey(fp);
-      const onCode = isCoreError(e) && (e.kind === "invalidCode" || e.kind === "codeExpired");
-      const text = isCoreError(e) && e.kind === "io" ? (storage.kind === "git" ? t.repoUnreachable : t.folderUnavailable) : errorText(e);
-      setError({ field: onCode ? "code" : "storage", text });
-    }
-  };
-
-  return (
-    <Modal
-      title={t.joinTitle}
-      width={520}
-      onClose={onClose}
-      onSubmit={submit}
-      footer={
+      <StorageFields value={storage} set={setStorage} folderLabel={joining ? t.vaultFolder : t.emptyFolder} folderPlaceholder={"D:\Sync\detour"} />
+      {joining && (
         <>
-          <Button type="button" variant="ghost" onClick={onClose}>{all.common.cancel}</Button>
-          <Button type="submit" variant="primary" loading={busy} disabled={!storageReady(storage) || !code.trim()}>{serverKey ? t.trustAndConnect : t.connect}</Button>
+          <div className="banner info sync-found">
+            <Link2 size={16} />
+            <span>{storage.kind === "git" ? t.repoHasVault : t.folderHasVault}</span>
+          </div>
+          <Field label={t.code} error={error?.field === "code" ? error.text : null}>
+            <input
+              className={`input mono ${error?.field === "code" ? "invalid" : ""}`}
+              value={code}
+              onChange={(e) => {
+                setCode(e.target.value);
+                setError(null);
+              }}
+              placeholder="XXXX-XXXX-XXXX-XXXX"
+              spellCheck={false}
+              autoComplete="off"
+              autoFocus
+            />
+          </Field>
         </>
-      }
-    >
-      <StorageFields value={storage} set={setStorage} folderLabel={t.vaultFolder} folderPlaceholder={"D:\\Sync\\detour"} />
-      <Field label={t.code} error={error?.field === "code" ? error.text : null}>
-        <input
-          className={`input mono ${error?.field === "code" ? "invalid" : ""}`}
-          value={code}
-          onChange={(e) => {
-            setCode(e.target.value);
-            setError(null);
-          }}
-          placeholder="XXXX-XXXX-XXXX-XXXX"
-          spellCheck={false}
-          autoComplete="off"
-        />
-      </Field>
+      )}
       {serverKey && <ServerKeyCard url={storage.url} fingerprint={serverKey} />}
       {error?.field === "storage" && <span className="field-error">{error.text}</span>}
     </Modal>

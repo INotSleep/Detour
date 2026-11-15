@@ -120,6 +120,9 @@ pub enum Error {
     SyncHasTeams,
     #[error("the folder is not empty")]
     FolderNotEmpty,
+    /// Turning sync on where a synced personal vault already is: this device joins it instead.
+    #[error("a synced vault is already there")]
+    SyncExists,
     #[error("{path} is not available")]
     Unavailable { path: String },
     #[error("the team vault's creator key changed")]

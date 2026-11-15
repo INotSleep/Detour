@@ -555,7 +555,7 @@ mod stores {
         sync::enable_git_sync(&laptop, remote.clone(), None).await.unwrap();
         let st = laptop.lock().unwrap().sync_status().unwrap();
         assert!(st.enabled && st.git && !st.pending && st.error.is_none(), "{st:?}");
-        assert!(matches!(sync::enable_git_sync(&store("other").0, remote.clone(), None).await, Err(Error::FolderNotEmpty)));
+        assert!(matches!(sync::enable_git_sync(&store("other").0, remote.clone(), None).await, Err(Error::SyncExists)));
 
         let code = sync::add_device(&laptop).await.unwrap();
         let (desktop, _) = store("desktop");
