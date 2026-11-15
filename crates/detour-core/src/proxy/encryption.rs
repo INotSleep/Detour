@@ -98,7 +98,10 @@ pub fn parse(text: &str) -> Result<Option<Encryption>> {
 }
 
 /// `chance-min-max` parts, lengths and waits by turn; the first length at least 35 bytes.
-fn parse_padding(parts: &[&str]) -> Option<(Vec<[u32; 3]>, Vec<[u32; 3]>)> {
+/// `(chance %, min, max)` of a padding part's length or of a wait.
+type Draw = [u32; 3];
+
+fn parse_padding(parts: &[&str]) -> Option<(Vec<Draw>, Vec<Draw>)> {
     let (mut lens, mut gaps) = (Vec::new(), Vec::new());
     let mut most = 0u32;
     for (i, p) in parts.iter().enumerate() {

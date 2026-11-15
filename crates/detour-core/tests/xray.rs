@@ -225,3 +225,69 @@ async fn encryption_with_the_wrong_key_fails() {
     }
     assert!(ssh::session(&request(p)).await.is_err());
 }
+
+/// A relay to the server that counts the connections made through it.
+async fn counting_relay(to: u16) -> (u16, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let c = count.clone();
+    tokio::spawn(async move {
+        while let Ok((mut inbound, _)) = listener.accept().await {
+            c.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            tokio::spawn(async move {
+                if let Ok(mut out) = tokio::net::TcpStream::connect(("127.0.0.1", to)).await {
+                    let _ = tokio::io::copy_bidirectional(&mut inbound, &mut out).await;
+                }
+            });
+        }
+    });
+    (port, count)
+}
+
+/// Sessions one after another and side by side, through a relay that counts connections.
+async fn connections_for(extra: &'static str) -> usize {
+    let (port, count) = counting_relay(10012).await;
+    let mut v = sealed(10012, VlessSecurity::Tls, VlessTransport::Xhttp, true, "XRAY_ENC_NATIVE");
+    v.mode = "stream-one";
+    v.extra = extra;
+    let mut p = proxy(&v);
+    if let ProxyKind::Vless { port: pp, .. } = &mut p.kind {
+        *pp = port;
+    }
+    use tokio::io::AsyncReadExt;
+    let banner = |p: ProxyEntry| async move {
+        let mut s = detour_core::proxy::connect(&p, "sshd", 22).await.unwrap();
+        let mut b = [0u8; 8];
+        s.read_exact(&mut b).await.unwrap();
+        assert_eq!(&b, b"SSH-2.0-");
+        s
+    };
+    for _ in 0..4 {
+        drop(banner(p.clone()).await);
+    }
+    let held: Vec<_> = futures::future::join_all((0..6).map(|_| banner(p.clone()))).await;
+    drop(held);
+    count.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+#[tokio::test]
+#[ignore = "needs the test Xray server"]
+async fn encryption_over_xhttp_stream_one_under_tls() {
+    let mut v = sealed(10012, VlessSecurity::Tls, VlessTransport::Xhttp, true, "XRAY_ENC_NATIVE");
+    v.mode = "stream-one";
+    works(v).await;
+}
+
+#[tokio::test]
+#[ignore = "needs the test Xray server"]
+async fn sessions_share_http2_connections_as_xmux_says() {
+    // Xray's defaults: up to 3 connections, then shared.
+    let n = connections_for("").await;
+    assert!((1..=3).contains(&n), "{n} connections");
+    let n = connections_for(r#"{"xmux":{"maxConnections":"1","maxConcurrency":""}}"#).await;
+    assert_eq!(n, 1);
+    // Every session its own connection.
+    let n = connections_for(r#"{"xmux":{"cMaxReuseTimes":1}}"#).await;
+    assert_eq!(n, 10);
+}

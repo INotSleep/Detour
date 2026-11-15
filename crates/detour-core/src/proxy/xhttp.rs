@@ -7,16 +7,22 @@
 //! Every request carries random padding (by default an `x_padding` query in a Referer
 //! header) whose length the server checks. The VLESS stream itself is a local pipe whose
 //! other end these requests feed.
+//!
+//! HTTP/2 connections are kept and shared by the sessions through the same proxy, as
+//! Xray's `xmux` does: fewer new connections (and TLS handshakes) for the server to take.
 
+use std::collections::HashMap;
 use std::io;
-use std::time::Duration;
+use std::sync::atomic::{AtomicI64, AtomicU32, Ordering};
+use std::sync::{Arc, LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use http::{Method, Request, Uri, header};
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Empty, Full, StreamBody};
 use hyper::body::{Frame, Incoming};
-use hyper_util::rt::{TokioExecutor, TokioIo};
+use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use rand::RngExt;
 use serde::Deserialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -41,6 +47,8 @@ impl<'de> Deserialize<'de> for Range {
                 let n = n.as_u64().ok_or_else(bad)? as u32;
                 (n, n)
             }
+            // Xray takes "" for nothing.
+            serde_json::Value::String(s) if s.trim().is_empty() => (0, 0),
             serde_json::Value::String(s) => match s.split_once('-') {
                 Some((a, b)) => (a.trim().parse().map_err(|_| bad())?, b.trim().parse().map_err(|_| bad())?),
                 None => {
@@ -85,10 +93,43 @@ struct Extra {
     sc_max_each_post_bytes: Option<Range>,
     sc_min_posts_interval_ms: Option<Range>,
     download_settings: Option<serde_json::Value>,
+    xmux: Xmux,
     // Followed from the link itself unless set here.
     host: String,
     path: String,
     mode: String,
+}
+
+/// How HTTP/2 connections are shared (Xray's `xmux`); nothing set means Xray's defaults.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct Xmux {
+    /// Sessions on one connection at most, or
+    max_concurrency: Option<Range>,
+    /// connections to open before sharing them.
+    max_connections: Option<Range>,
+    /// Sessions a connection takes in all.
+    c_max_reuse_times: Option<Range>,
+    /// Requests a connection takes in all.
+    h_max_request_times: Option<Range>,
+    /// How long a connection takes new sessions.
+    h_max_reusable_secs: Option<Range>,
+    /// Seconds between pings of a connection.
+    h_keep_alive_period: Option<i64>,
+}
+
+impl Xmux {
+    fn normalized(self) -> Self {
+        let zero = |r: Option<Range>| r.is_none_or(|r| r == Range(0, 0));
+        if zero(self.max_concurrency) && zero(self.max_connections) && zero(self.c_max_reuse_times) && zero(self.h_max_request_times) && zero(self.h_max_reusable_secs) && self.h_keep_alive_period.unwrap_or(0) == 0 {
+            return Xmux { max_connections: Some(Range(3, 3)), h_max_request_times: Some(Range(600, 900)), h_max_reusable_secs: Some(Range(1800, 3000)), ..Self::default() };
+        }
+        self
+    }
+
+    fn pick(r: Option<Range>) -> u32 {
+        r.map(Range::pick).unwrap_or(0)
+    }
 }
 
 /// Everything about how requests are made.
@@ -252,6 +293,35 @@ enum Http {
 struct Dialer {
     p: ProxyEntry,
     http: Http,
+    xmux: Xmux,
+}
+
+/// A kept HTTP/2 connection and what it has left.
+struct Shared {
+    send: hyper::client::conn::http2::SendRequest<Body>,
+    running: Arc<AtomicU32>,
+    /// Sessions it may still take; negative: any number.
+    left_usage: i64,
+    left_requests: Arc<AtomicI64>,
+    reusable_until: Option<Instant>,
+}
+
+/// The connections of one proxy (Xray's `XmuxManager`).
+struct Pool {
+    concurrency: u32,
+    connections: u32,
+    shared: Vec<Shared>,
+}
+
+static POOLS: LazyLock<Mutex<HashMap<String, Pool>>> = LazyLock::new(Default::default);
+
+/// A session's hold on a connection: counted as running until it is dropped.
+pub(super) struct Running(Arc<AtomicU32>);
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 impl Dialer {
@@ -273,27 +343,98 @@ impl Dialer {
         })
     }
 
-    /// A connection to send requests on (HTTP/2: any number at once; 1.1: one after another).
-    async fn connect(&self) -> Result<Sender> {
-        let io = TokioIo::new(self.dial().await?);
-        match self.http {
-            Http::Two => {
-                let (send, conn) = hyper::client::conn::http2::handshake(TokioExecutor::new(), io).await.map_err(|_| failed("protocol"))?;
-                tokio::spawn(conn);
-                Ok(Sender::Two(send))
-            }
-            Http::One => {
-                let (send, conn) = hyper::client::conn::http1::handshake(io).await.map_err(|_| failed("protocol"))?;
-                tokio::spawn(conn);
-                Ok(Sender::One(send))
-            }
-        }
+    /// What makes connections of this proxy the same one to share.
+    fn key(&self) -> String {
+        let ProxyKind::Vless { address, port, security, sni, alpn, pinned_cert, public_key, short_id, .. } = &self.p.kind else { return String::new() };
+        format!("{address}|{port}|{security:?}|{sni}|{alpn:?}|{pinned_cert}|{public_key}|{short_id}")
     }
+
+    /// A new HTTP/2 connection, pinged so that one gone dead is noticed.
+    async fn dial_two(&self) -> Result<hyper::client::conn::http2::SendRequest<Body>> {
+        let io = TokioIo::new(self.dial().await?);
+        let period = match self.xmux.h_keep_alive_period {
+            Some(s) if s > 0 => Some(Duration::from_secs(s as u64)),
+            Some(s) if s < 0 => None,
+            _ => Some(Duration::from_secs(45)),
+        };
+        let mut b = hyper::client::conn::http2::Builder::new(TokioExecutor::new());
+        b.timer(TokioTimer::new()).keep_alive_interval(period).keep_alive_timeout(Duration::from_secs(20)).keep_alive_while_idle(true);
+        let (send, conn) = b.handshake(io).await.map_err(|_| failed("protocol"))?;
+        tokio::spawn(conn);
+        Ok(send)
+    }
+
+    /// A connection to send a session's requests on (HTTP/2: shared, any number at once;
+    /// 1.1: its own, one after another), and the session's hold on it.
+    async fn connect(&self) -> Result<(Sender, Option<Running>)> {
+        if let Http::One = self.http {
+            let io = TokioIo::new(self.dial().await?);
+            let (send, conn) = hyper::client::conn::http1::handshake(io).await.map_err(|_| failed("protocol"))?;
+            tokio::spawn(conn);
+            return Ok((Sender::One(send), None));
+        }
+        let key = self.key();
+        let found = take_shared(&key, self.xmux);
+        let (send, running, left) = match found {
+            Some(x) => x,
+            None => {
+                let send = self.dial_two().await?;
+                let x = self.xmux;
+                let shared = Shared {
+                    send: send.clone(),
+                    running: Arc::new(AtomicU32::new(0)),
+                    left_usage: match Xmux::pick(x.c_max_reuse_times) {
+                        0 => -1,
+                        n => n as i64 - 1,
+                    },
+                    left_requests: Arc::new(AtomicI64::new(match Xmux::pick(x.h_max_request_times) {
+                        0 => i64::MAX,
+                        n => n as i64,
+                    })),
+                    reusable_until: match Xmux::pick(x.h_max_reusable_secs) {
+                        0 => None,
+                        n => Some(Instant::now() + Duration::from_secs(n as u64)),
+                    },
+                };
+                let found = (send, shared.running.clone(), shared.left_requests.clone());
+                pool_of(&mut POOLS.lock().unwrap_or_else(|e| e.into_inner()), &key, x).shared.push(shared);
+                found
+            }
+        };
+        running.fetch_add(1, Ordering::Relaxed);
+        Ok((Sender::Two(send, left), Some(Running(running))))
+    }
+}
+
+fn pool_of<'a>(pools: &'a mut HashMap<String, Pool>, key: &str, x: Xmux) -> &'a mut Pool {
+    pools.entry(key.to_string()).or_insert_with(|| Pool { concurrency: Xmux::pick(x.max_concurrency), connections: Xmux::pick(x.max_connections), shared: Vec::new() })
+}
+
+/// A kept connection for one more session, as Xray picks it; none when a new one is due.
+fn take_shared(key: &str, x: Xmux) -> Option<(hyper::client::conn::http2::SendRequest<Body>, Arc<AtomicU32>, Arc<AtomicI64>)> {
+    let mut pools = POOLS.lock().unwrap_or_else(|e| e.into_inner());
+    let pool = pool_of(&mut pools, key, x);
+    let now = Instant::now();
+    // What can't take more is let go: it closes once its sessions end.
+    pool.shared.retain(|s| !s.send.is_closed() && s.left_usage != 0 && s.left_requests.load(Ordering::Relaxed) > 0 && s.reusable_until.is_none_or(|t| now < t));
+    if pool.shared.is_empty() || (pool.connections > 0 && pool.shared.len() < pool.connections as usize) {
+        return None;
+    }
+    let free: Vec<usize> = (0..pool.shared.len()).filter(|&i| pool.concurrency == 0 || pool.shared[i].running.load(Ordering::Relaxed) < pool.concurrency).collect();
+    if free.is_empty() {
+        return None;
+    }
+    let s = &mut pool.shared[free[rand::rng().random_range(0..free.len())]];
+    if s.left_usage > 0 {
+        s.left_usage -= 1;
+    }
+    Some((s.send.clone(), s.running.clone(), s.left_requests.clone()))
 }
 
 enum Sender {
     One(hyper::client::conn::http1::SendRequest<Body>),
-    Two(hyper::client::conn::http2::SendRequest<Body>),
+    /// With the requests its connection has left.
+    Two(hyper::client::conn::http2::SendRequest<Body>, Arc<AtomicI64>),
 }
 
 impl Sender {
@@ -308,8 +449,9 @@ impl Sender {
                 parts.headers.insert(header::HOST, host.parse().map_err(|_| failed("protocol"))?);
                 s.send_request(Request::from_parts(parts, body)).await
             }
-            Sender::Two(s) => {
+            Sender::Two(s, left) => {
                 s.ready().await.map_err(|_| failed("unreachable"))?;
+                left.fetch_sub(1, Ordering::Relaxed);
                 s.send_request(req).await
             }
         };
@@ -333,8 +475,10 @@ fn channel_body(rx: mpsc::Receiver<Bytes>) -> Body {
 }
 
 /// Copies a response body into the pipe until either ends.
-fn download(mut body: Incoming, mut to: tokio::io::WriteHalf<tokio::io::DuplexStream>) {
+/// Feeds a response body into the VLESS stream; the session holds its connection meanwhile.
+fn download(mut body: Incoming, mut to: tokio::io::WriteHalf<tokio::io::DuplexStream>, hold: Option<Running>) {
     tokio::spawn(async move {
+        let _hold = hold;
         while let Some(Ok(frame)) = body.frame().await {
             if let Ok(data) = frame.into_data()
                 && to.write_all(&data).await.is_err()
@@ -390,23 +534,23 @@ pub async fn connect(p: &ProxyEntry) -> Result<tokio::io::DuplexStream> {
     }
     let upload_method = if plan.extra.uplink_http_method.is_empty() { Method::POST } else { Method::from_bytes(plan.extra.uplink_http_method.as_bytes()).map_err(|_| failed("protocol"))? };
 
-    let dialer = Dialer { p: p.clone(), http };
+    let dialer = Dialer { p: p.clone(), http, xmux: plan.extra.xmux.normalized() };
     let (mine, theirs) = tokio::io::duplex(256 * 1024);
     let (mut up, down) = tokio::io::split(theirs);
 
     match mode.as_str() {
         "stream-one" => {
             let (tx, rx) = mpsc::channel::<Bytes>(16);
-            let mut send = dialer.connect().await?;
+            let (mut send, hold) = dialer.connect().await?;
             let req = plan.request(upload_method, "", None, channel_body(rx), true)?;
             pump_stream(up, tx);
-            download(send.send(req).await?.into_body(), down);
+            download(send.send(req).await?.into_body(), down, hold);
         }
         _ => {
             let session = session_id();
-            let mut downlink = dialer.connect().await?;
+            let (mut downlink, hold) = dialer.connect().await?;
             let res = downlink.send(plan.request(Method::GET, &session, None, empty(), false)?).await?;
-            download(res.into_body(), down);
+            download(res.into_body(), down, hold);
             if mode == "stream-up" {
                 let (tx, rx) = mpsc::channel::<Bytes>(16);
                 let mut send = downlink;
@@ -422,7 +566,7 @@ pub async fn connect(p: &ProxyEntry) -> Result<tokio::io::DuplexStream> {
             } else {
                 let mut posts = match http {
                     Http::Two => downlink,
-                    Http::One => dialer.connect().await?,
+                    Http::One => dialer.connect().await?.0,
                 };
                 let max = plan.extra.sc_max_each_post_bytes.unwrap_or(Range(1_000_000, 1_000_000)).pick().max(1) as usize;
                 let gap = plan.extra.sc_min_posts_interval_ms.unwrap_or(Range(30, 30));
