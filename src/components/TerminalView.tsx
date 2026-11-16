@@ -157,7 +157,8 @@ export function TerminalView({ host, active, initialCommand, attach, onStatus, o
     // Shown as `user@address` while connecting: the user it logs in as.
     const shown = { ...host, user: loginUser(ws, host) };
     if (api.usesCore(host.vaultId)) {
-      stop = runRealSession(term, shown, {
+      stop = runRealSession(term, host, {
+        user: shown.user,
         initialCommand,
         attach,
         onStatus: (s) => {

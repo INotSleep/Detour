@@ -6,6 +6,7 @@ import { api, errorText, isCoreError, trustMore, type Editor, type FileEntry, ty
 import { copyText, shortcutKey, uid, useStore } from "../lib/store";
 import { locale, tr, useT } from "../i18n";
 import type { Host } from "../lib/types";
+import { loginUser } from "../lib/groups";
 import type { SessionStatus } from "../lib/fakeShell";
 import { Button, Checkbox, ConfirmDialog, ContextMenu, Field, IconButton, Menu, Modal, PasswordInput, type MenuItem } from "./ui";
 import { HostChooser, LocalPane, lastPart } from "./LocalFiles";
@@ -1271,12 +1272,14 @@ function Gate({
   // A rejected password is typed again from scratch.
   useEffect(() => setValue(""), [phase]);
   const where = `${host.address}:${host.port}`;
+  // The user it logs in as: a group's or this person's own login, not the shared one.
+  const user = loginUser(ws, host);
 
   if (phase.kind === "connecting" || (phase.kind === "ready" && !listError)) {
     return (
       <div className="files-wait">
         <Loader2 size={18} className="spin" />
-        <span>{host.user}@{host.address}</span>
+        <span>{user}@{host.address}</span>
       </div>
     );
   }
@@ -1288,7 +1291,7 @@ function Gate({
           <ShieldAlert size={20} />
           <h2>{phase.kind === "failed" ? phase.error : listError}</h2>
         </div>
-        <div className="hostkey-host mono">{host.user}@{where}</div>
+        <div className="hostkey-host mono">{user}@{where}</div>
         <div className="hostkey-actions">
           <Button variant="ghost" onClick={onClose}>{t.common.close}</Button>
           <Button variant="primary" icon={RotateCw} autoFocus onClick={() => (phase.kind === "ready" ? retryList() : connect())}>{t.common.retry}</Button>
@@ -1298,7 +1301,7 @@ function Gate({
   }
 
   if (phase.kind === "secret") {
-    const label = phase.secret === "passphrase" ? t.files.gate.passphrase : t.files.gate.password(`${host.user}@${host.address}`);
+    const label = phase.secret === "passphrase" ? t.files.gate.passphrase : t.files.gate.password(`${user}@${host.address}`);
     return (
       <form
         className="hostkey-card"
