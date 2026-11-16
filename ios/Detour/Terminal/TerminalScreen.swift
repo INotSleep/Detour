@@ -3,6 +3,9 @@ import SwiftTerm
 import SwiftUI
 import UIKit
 
+/// SwiftTerm has a `Color` of its own.
+private typealias Color = SwiftUI.Color
+
 /// SwiftTerm's view for a session, with the key bar over the keyboard.
 struct TerminalHost: UIViewRepresentable {
     @ObservedObject var session: TerminalSession

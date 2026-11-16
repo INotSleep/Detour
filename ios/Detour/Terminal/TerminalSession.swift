@@ -127,7 +127,7 @@ final class TerminalSession: ObservableObject, Identifiable {
     }
 
     /// Ctrl with a key: its control code (Ctrl+C is 3).
-    static func control(_ b: UInt8) -> UInt8? {
+    nonisolated static func control(_ b: UInt8) -> UInt8? {
         switch b {
         case 0x61...0x7a: return b - 0x60
         case 0x41...0x5a: return b - 0x40
@@ -138,7 +138,7 @@ final class TerminalSession: ObservableObject, Identifiable {
         }
     }
 
-    static func describe(_ f: CoreFailure) -> String {
+    nonisolated static func describe(_ f: CoreFailure) -> String {
         switch f.kind {
         case "unreachable": return String(localized: "Can't reach \(f["endpoint"] ?? "the host")")
         case "authFailed": return String(localized: "The server didn't accept the login")
