@@ -1,0 +1,55 @@
+name: iOS
+
+on:
+  push:
+    branches: [ios]
+    paths: ["ios/**", "crates/**", "Cargo.toml", "Cargo.lock", ".github/workflows/ios.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: iOS app
+    runs-on: macos-latest
+    env:
+      # Ad hoc signing; without these the app is only built for the simulator.
+      IOS_CERTIFICATE_P12_BASE64: ${{ secrets.IOS_CERTIFICATE_P12_BASE64 }}
+      IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+      IOS_PROFILE_BASE64: ${{ secrets.IOS_PROFILE_BASE64 }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: XcodeGen
+        run: brew install xcodegen
+
+      - name: The core for iOS
+        run: ios/scripts/build-core.sh release
+
+      - name: Xcode project
+        run: cd ios && xcodegen
+
+      - name: Simulator build
+        run: |
+          xcodebuild -project ios/Detour.xcodeproj -scheme Detour -configuration Debug \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO build | xcbeautify --renderer github-actions
+
+      - name: Ad hoc build
+        if: env.IOS_PROFILE_BASE64 != ''
+        run: ios/scripts/sign-adhoc.sh
+
+      - uses: actions/upload-artifact@v7
+        if: env.IOS_PROFILE_BASE64 != ''
+        with:
+          name: Detour-ios-adhoc
+          path: ios/build/export/*.ipa
+          retention-days: 14

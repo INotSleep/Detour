@@ -252,6 +252,55 @@ async fn serve(data_dir: &Path, trust: Trust, tray: bool) -> std::io::Result<()>
     Ok(())
 }
 
+/// The core inside an app's own process (the iOS app, where nothing runs beside the app):
+/// no socket, and the app is its one client, trusted as the window is. What the core sends
+/// the app (events, terminal output, a session's end) goes to `deliver`.
+pub struct Embedded {
+    core: Arc<Core>,
+    id: u64,
+    out: mpsc::UnboundedSender<Frame>,
+}
+
+impl Embedded {
+    /// Opens the core of a vault folder. Must run inside a Tokio runtime.
+    pub fn start(data_dir: &Path, deliver: impl Fn(Frame) + Send + Sync + 'static) -> Self {
+        detour_core::logfile::init(data_dir, "app");
+        detour_core::logfile::info(&format!("Detour core {} started in the app ({} {})", detour_core::VERSION, std::env::consts::OS, std::env::consts::ARCH));
+        let core = Core::new(data_dir.to_path_buf(), Trust::App(None));
+        background::spawn(core.clone());
+        let id = core.next_conn.fetch_add(1, Ordering::Relaxed);
+        let (out, mut rx) = mpsc::unbounded_channel::<Frame>();
+        core.conns.lock().unwrap().insert(id, Conn { kind: ClientKind::Desktop, trusted: true, peer: trust::Peer::default(), out: out.clone() });
+        tokio::spawn(async move {
+            while let Some(frame) = rx.recv().await {
+                deliver(frame);
+            }
+        });
+        Self { core, id, out }
+    }
+
+    /// A call as a client makes it over the socket (`vault_unlock`, `session_open`, ...).
+    pub async fn call(&self, method: &str, params: Value) -> Result<Value, Value> {
+        let ctx = Ctx { id: self.id, out: self.out.clone() };
+        let r = rpc::call(&self.core, &ctx, method, params).await;
+        if let Err(e) = &r {
+            logged(method, e);
+        }
+        r
+    }
+
+    /// Ends the sessions, tunnels and file browsers (the app is going away).
+    pub fn stop(&self) {
+        self.core.tunnels.stop_all();
+        self.core.files.close_all();
+        for s in self.core.sessions.list() {
+            if let Some(s) = self.core.sessions.get(&s.id) {
+                s.close();
+            }
+        }
+    }
+}
+
 /// A call that failed, by its method and error (never its arguments). What is asked of the
 /// person on the way (a password, a key to trust, unlocking) is not an error.
 fn logged(method: &str, err: &Value) {

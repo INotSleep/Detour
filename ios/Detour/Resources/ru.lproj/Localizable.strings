@@ -1,0 +1,73 @@
+/* Unlocking */
+"Create your vault" = "Создайте хранилище";
+"Detour is locked" = "Detour заблокирован";
+"New master password" = "Новый мастер-пароль";
+"Master password" = "Мастер-пароль";
+"Repeat it" = "Ещё раз";
+"Create" = "Создать";
+"Unlock" = "Разблокировать";
+"Unlock with %@" = "Разблокировать через %@";
+"Unlock Detour" = "Разблокировать Detour";
+"At least 8 characters" = "Не меньше 8 символов";
+"The passwords differ" = "Пароли не совпадают";
+"Wrong master password" = "Неверный мастер-пароль";
+"Enter the master password" = "Введите мастер-пароль";
+"Unlock with %@ next time?" = "Разблокировать через %@ в следующий раз?";
+"Use %@" = "Включить %@";
+"Not now" = "Не сейчас";
+
+/* Hosts */
+"Hosts" = "Хосты";
+"No hosts" = "Хостов нет";
+"Connect to your vault" = "Подключить хранилище";
+"Key bar" = "Панель клавиш";
+"Settings" = "Настройки";
+"Lock" = "Заблокировать";
+"Version" = "Версия";
+"Turn on" = "Включить";
+"Cancel" = "Отмена";
+"Couldn't save it on this device" = "Не удалось сохранить на этом устройстве";
+
+/* Sync */
+"Repository" = "Репозиторий";
+"Login" = "Вход";
+"Token" = "Токен";
+"Access token" = "Токен доступа";
+"Sign in with GitHub" = "Войти через GitHub";
+"Open GitHub" = "Открыть GitHub";
+"Code from another device or recovery key" = "Код с другого устройства или ключ восстановления";
+"Connect" = "Подключить";
+"Wrong code" = "Неверный код";
+"The code has expired: make a new one on the other device" = "Код устарел: создайте новый на другом устройстве";
+"This repository has no synced vault" = "В этом репозитории нет синхронизированного хранилища";
+
+/* Terminal */
+"Connecting to %@@%@" = "Подключение к %1$@@%2$@";
+"Connection lost" = "Соединение потеряно";
+"Session ended" = "Сессия завершена";
+"Reconnect" = "Переподключить";
+"Password" = "Пароль";
+"New server key" = "Новый ключ сервера";
+"Trust and connect" = "Доверять и подключить";
+"Retry" = "Повторить";
+"Close" = "Закрыть";
+"Can't reach %@" = "Не удаётся подключиться к %@";
+"The server didn't accept the login" = "Сервер не принял вход";
+"The server's key changed. Check it on a computer before connecting." = "Ключ сервера изменился. Проверьте его на компьютере, прежде чем подключаться.";
+"This host logs in with ssh-agent, which the phone doesn't have" = "Этот хост входит через ssh-agent, а на телефоне его нет";
+"The proxy failed: %@" = "Прокси не сработал: %@";
+
+/* Key bar */
+"Show the key bar" = "Показывать панель клавиш";
+"Set name" = "Название набора";
+"Add key" = "Добавить клавишу";
+"Add set" = "Добавить набор";
+"Set %lld" = "Набор %lld";
+"Reset to default" = "Вернуть как было";
+"Keys" = "Клавиши";
+"Text to type" = "Текст, который набрать";
+"Button label (optional)" = "Подпись кнопки (необязательно)";
+"Add" = "Добавить";
+"Snippet" = "Сниппет";
+"\\n in the text presses Enter" = "\\n в тексте нажимает Enter";
+"Combination" = "Сочетание";

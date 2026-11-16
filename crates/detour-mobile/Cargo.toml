@@ -1,0 +1,27 @@
+[package]
+name = "detour-mobile"
+description = "Detour's core inside a phone app (iOS), for Swift through UniFFI."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["staticlib", "cdylib", "lib"]
+name = "detour_mobile"
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bindgen.rs"
+required-features = ["bindgen"]
+
+[features]
+bindgen = ["uniffi/cli"]
+
+[dependencies]
+detour-core.workspace = true
+detour-daemon = { path = "../detour-daemon" }
+detour-ipc = { path = "../detour-ipc" }
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "sync"] }
+uniffi = "0.32.2"

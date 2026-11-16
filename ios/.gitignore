@@ -1,0 +1,5 @@
+# Made by scripts/build-core.sh and xcodegen.
+/build/
+/Generated/
+/Frameworks/
+/Detour.xcodeproj/
