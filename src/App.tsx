@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeftRight, Bot, Code, FolderOpen, FolderPlus, KeyRound, Plus, Server, Settings as SettingsIcon, Shield, Users, X } from "lucide-react";
 import { LangContext, lang as currentLang, resolveLang, setLang, tr, useT } from "./i18n";
-import { api, errorText, fromView, type AgentRequest, type CoreInfo, type SyncInfo, type TeamView, type VaultView } from "./lib/api";
+import { api, errorText, fromView, isCoreError, type AgentRequest, type CoreInfo, type SyncInfo, type TeamView, type VaultView } from "./lib/api";
 import { shownSessions } from "./lib/realSession";
 import { applyTeamEntries, applyTeamView, dataOf, removeVault, writable } from "./lib/teams";
 import { mockWorkspace } from "./lib/mockData";
@@ -97,6 +97,7 @@ async function loadWorkspace(view: VaultView | null): Promise<Workspace> {
 
 export default function App() {
   const [phase, setPhase] = useState<Phase>("loading");
+  const [startError, setStartError] = useState<unknown>(null);
   // What each vault looked like when last saved to / read from detour-core.
   const lastSaved = useRef(new Map<string, string>());
   const [ws, setWs] = useState<Workspace | null>(null);
@@ -158,16 +159,24 @@ export default function App() {
 
   useEffect(() => {
     api.coreInfo().then(setCoreInfo).catch(() => setCoreInfo(null));
-    api.vaultStatus().then(async (st) => {
-      if (!st.initialized) return setPhase("setup");
-      if (!st.unlocked) return setPhase("locked");
-      const fresh = await loadWorkspace(null);
-      wsRef.current = fresh;
-      setWs(fresh);
-      setPhase("ready");
-      void restoreSessions();
-      void api.agentsPending().then(setAgentAsks).catch(() => {});
-    });
+    api
+      .vaultStatus()
+      .then(async (st) => {
+        if (!st.initialized) return setPhase("setup");
+        // A core another program started doesn't know this window: the master password vouches for it.
+        if (!st.unlocked || st.trusted === false) return setPhase("locked");
+        const fresh = await loadWorkspace(null);
+        wsRef.current = fresh;
+        setWs(fresh);
+        setPhase("ready");
+        void restoreSessions();
+        void api.agentsPending().then(setAgentAsks).catch(() => {});
+      })
+      .catch((e) => {
+        if (isCoreError(e) && e.kind === "notTrusted") return setPhase("locked");
+        // Anything else shows on the crash screen, not as an empty window.
+        setStartError(e);
+      });
   }, [restoreSessions]);
 
   const unlocked = async (view: VaultView | null) => {
@@ -413,7 +422,7 @@ export default function App() {
             break;
           case "disconnected":
             // The core went away; the next call starts a new one, locked.
-            void api.vaultStatus().then((st) => st.initialized && !st.unlocked && setPhase("locked")).catch(() => {});
+            void api.vaultStatus().then((st) => st.initialized && (!st.unlocked || st.trusted === false) && setPhase("locked")).catch(() => {});
             break;
         }
       }),
@@ -599,6 +608,7 @@ export default function App() {
     };
   }, [ws, vaultId, section, settings, themes, coreInfo, connect, openFiles, toaster.push, lock, applyView, sync, refreshPersonal, updateState, checkUpdate, installUpdate]);
 
+  if (startError) throw startError instanceof Error ? startError : new Error(errorText(startError));
   if (phase === "loading") return null;
   if (!store)
     return (

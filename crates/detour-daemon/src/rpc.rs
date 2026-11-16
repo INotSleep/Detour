@@ -189,9 +189,11 @@ pub(crate) async fn dispatch(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value
         "agents_pending" | "agents_list" | "agents_answer" | "agents_set" | "agents_revoke" => crate::agents::person(core, method, p).await,
 
         /* ---------- vault ---------- */
+        // `trusted`: whether this client may use what is unlocked. A window the core wasn't
+        // started for (another program started it) unlocks with the master password.
         "vault_status" => {
             let s = s!();
-            Ok(json!({ "initialized": s.is_initialized(), "unlocked": s.is_unlocked() }))
+            Ok(json!({ "initialized": s.is_initialized(), "unlocked": s.is_unlocked(), "trusted": core.is_trusted(ctx.id) }))
         }
         "vault_create" => {
             let a = args!(method, p, { master_password: String });

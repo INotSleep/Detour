@@ -47,7 +47,8 @@ export type CoreError =
   | { kind: "portBusy" | "forwardRefused"; port: number }
   | { kind: "unavailable"; path: string }
   | { kind: "sftp"; message: string }
-  | { kind: "cancelled" };
+  | { kind: "cancelled" }
+  | { kind: "notTrusted"; window?: boolean };
 
 export type SecretKind = "password" | "passphrase";
 
@@ -93,6 +94,7 @@ export function errorText(e: unknown): string {
     case "repoKeyMissing": return t.repoKeyMissing;
     case "syncHasTeams": return t.syncHasTeams;
     case "syncExists": return t.syncExists;
+    case "notTrusted": return t.notTrusted;
     case "unavailable": return t.unavailable(e.path);
     case "git": return gitReason(e.message);
     case "portBusy": return t.portBusy(e.port);
@@ -654,9 +656,10 @@ export const api = {
 
   /* vault */
 
-  async vaultStatus(): Promise<{ initialized: boolean; unlocked: boolean }> {
+  /** `trusted`: the core lets this window use the vault; when it doesn't, the master password does. */
+  async vaultStatus(): Promise<{ initialized: boolean; unlocked: boolean; trusted?: boolean }> {
     if (real) return invoke("vault_status");
-    return { initialized: !/[?&]setup\b/.test(location.search), unlocked: demoUnlocked() };
+    return { initialized: !/[?&]setup\b/.test(location.search), unlocked: demoUnlocked(), trusted: true };
   },
 
   async vaultCreate(masterPassword: string): Promise<VaultView | null> {
