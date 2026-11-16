@@ -35,6 +35,7 @@ echo "profile: $name, team $team, bundle $bundle"
 
 xcodebuild -project Detour.xcodeproj -scheme Detour -configuration Release \
   -destination 'generic/platform=iOS' -archivePath build/archive.xcarchive \
+  -skipPackagePluginValidation -skipMacroValidation \
   DEVELOPMENT_TEAM="$team" DETOUR_BUNDLE_ID="$bundle" \
   CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="Apple Distribution" PROVISIONING_PROFILE_SPECIFIER="$uuid" \
   OTHER_CODE_SIGN_FLAGS="--keychain $keychain" \
