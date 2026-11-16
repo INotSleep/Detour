@@ -10,9 +10,14 @@ struct DetourApp: App {
             RootView()
                 .environmentObject(app)
                 .task { await app.start() }
+                .onOpenURL { app.open(link: $0) }
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { app.resumed() }
+            switch phase {
+            case .active: app.resumed()
+            case .background: app.backgrounded()
+            default: break
+            }
         }
     }
 }

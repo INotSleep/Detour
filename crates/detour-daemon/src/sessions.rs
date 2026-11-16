@@ -94,6 +94,9 @@ impl Session {
     pub fn close(&self) {
         self.handle.close();
     }
+    pub async fn check(&self, wait: std::time::Duration) -> bool {
+        self.handle.check(wait).await
+    }
 
     /// Output for whoever watches, kept for whoever attaches later.
     pub fn output(&self, bytes: Vec<u8>) {

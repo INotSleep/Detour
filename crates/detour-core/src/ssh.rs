@@ -76,6 +76,8 @@ pub enum SessionEvent {
 enum Command {
     Input(Vec<u8>),
     Resize(u32, u32),
+    /// Is the connection still there? Answers within the time, else the session ends as dropped.
+    Check(Duration, tokio::sync::oneshot::Sender<bool>),
     Close,
 }
 
@@ -94,6 +96,15 @@ impl SessionHandle {
     }
     pub fn close(&self) {
         let _ = self.tx.send(Command::Close);
+    }
+    /// Asks the server for a reply (after the phone slept, say): `false` if none comes within
+    /// `wait`, and then the session ends as a dropped connection.
+    pub async fn check(&self, wait: Duration) -> bool {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        if self.tx.send(Command::Check(wait, tx)).is_err() {
+            return false;
+        }
+        rx.await.unwrap_or(false)
     }
 }
 
@@ -464,6 +475,11 @@ pub async fn connect(req: ConnectRequest, cols: u32, rows: u32) -> Result<Connec
                 cmd = cmd_rx.recv() => match cmd {
                     Some(Command::Input(bytes)) => { if channel.data(&bytes[..]).await.is_err() { break; } }
                     Some(Command::Resize(c, r)) => { let _ = channel.window_change(c, r, 0, 0).await; }
+                    Some(Command::Check(wait, reply)) => {
+                        let alive = matches!(tokio::time::timeout(wait, session.send_ping()).await, Ok(Ok(())));
+                        let _ = reply.send(alive);
+                        if !alive { break; }
+                    }
                     Some(Command::Close) | None => { let _ = channel.close().await; break; }
                 },
                 msg = channel.wait() => match msg {

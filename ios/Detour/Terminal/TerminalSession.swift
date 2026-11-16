@@ -26,6 +26,8 @@ final class TerminalSession: ObservableObject, Identifiable {
     private var stream: UInt64?
     private var pending: [UInt8] = []
     private var userClosed = false
+    /// A check found the connection gone: connect again as soon as the core ends the session.
+    private var reconnectWhenEnded = false
     weak var view: TerminalView? {
         didSet { flush() }
     }
@@ -78,12 +80,36 @@ final class TerminalSession: ObservableObject, Identifiable {
         sessionId = nil
         guard !userClosed else { return }
         // An exit status means the shell ended; none means the connection went away.
-        state = .closed(dropped: info["exitStatus"] == nil || info["exitStatus"] is NSNull)
+        let dropped = info["exitStatus"] == nil || info["exitStatus"] is NSNull
+        if dropped && reconnectWhenEnded {
+            reconnectWhenEnded = false
+            reconnect()
+            return
+        }
+        state = .closed(dropped: dropped)
     }
 
-    /// Connects again after the connection dropped (the app slept, the network changed).
-    func reconnectIfDropped() {
-        if case .closed(dropped: true) = state { reconnect() }
+    /// After the phone slept or changed networks: a connection that no longer answers is
+    /// replaced at once, instead of after the keepalives give up on it (minutes).
+    func checkConnection() {
+        switch state {
+        case .closed(dropped: true):
+            reconnect()
+        case .connected:
+            guard let id = sessionId else { return }
+            Task {
+                let r = try? await Core.shared.call("session_check", ["sessionId": id, "timeoutMs": 5000]) as? [String: Any]
+                guard (r?["alive"] as? Bool) == false, !userClosed else { return }
+                if case .closed(dropped: true) = state { reconnect() } else { reconnectWhenEnded = true }
+            }
+        default:
+            break
+        }
+    }
+
+    func toggleKeyboard(shown: Bool) {
+        guard let view else { return }
+        if shown { _ = view.resignFirstResponder() } else { _ = view.becomeFirstResponder() }
     }
 
     func reconnect() {

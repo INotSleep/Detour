@@ -65,7 +65,7 @@ fn git_remote(url: String, auth: Auth, token: Option<String>, github: Option<boo
 pub(crate) const READ_ONLY: &[&str] = &[
     "hello", "core_info", "vault_status", "vault_get", "ssh_import_preview", "sync_status", "teams_pending", "sync_recovery_key", "sync_add_device",
     "host_password", "key_export", "my_id", "id_inspect", "recovery_key_new", "teams_list", "team_inspect", "team_inspect_git",
-    "github_user", "github_start", "github_repo_access", "session_input", "session_resize", "session_attach", "session_detach", "sessions_list", "session_runs",
+    "github_user", "github_start", "github_repo_access", "session_input", "session_resize", "session_check", "session_attach", "session_detach", "sessions_list", "session_runs",
     "files_open", "files_list", "files_resolve", "files_cancel", "files_close", "tunnels_status", "tunnel_start", "tunnel_stop", "proxy_check", "proxy_parse", "proxy_export", "settings_get",
     "settings_set", "activity", "log_write", "log_tail", "quit", "trust_request", "trust_answer", "trust_with_password", "hosts_export",
     "hosts_file_counts", "hosts_file_export", "hosts_file_open",
@@ -599,6 +599,14 @@ pub(crate) async fn dispatch(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value
             let a = args!(method, p, { session_id: String, cols: u32, rows: u32 });
             core.sessions.get(&a.session_id).ok_or_else(|| err(Error::NotFound { what: "session".into() }))?.resize(a.cols, a.rows);
             Ok(Value::Null)
+        }
+        // Whether the session's connection still answers (the phone woke up): one that doesn't
+        // within `timeoutMs` ends as dropped.
+        "session_check" => {
+            let a = args!(method, p, { session_id: String, timeout_ms: Option<u64> });
+            let Some(s) = core.sessions.get(&a.session_id) else { return Ok(json!({ "alive": false })) };
+            let wait = std::time::Duration::from_millis(a.timeout_ms.unwrap_or(5000).clamp(500, 30_000));
+            Ok(json!({ "alive": s.check(wait).await }))
         }
         "session_close" => {
             let a = args!(method, p, { session_id: String });

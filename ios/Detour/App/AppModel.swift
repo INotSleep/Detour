@@ -1,4 +1,5 @@
 import Foundation
+import Network
 import SwiftUI
 
 /// What the app shows and holds: the vault's state, its hosts, the open terminals.
@@ -14,9 +15,20 @@ final class AppModel: ObservableObject {
     @Published var showTerminals = false
     /// Offer Face ID once, after the first unlock with the password.
     @Published var offerBiometry = false
+    /// A `detour://join` link (the other device's QR, scanned with the camera) waiting for the
+    /// join form.
+    @Published var pendingJoin: JoinLink?
     private var lastPassword: String?
+    private let network = NWPathMonitor()
+    private var lastNetwork: [Bool]?
+    private var background: UIBackgroundTaskIdentifier = .invalid
 
     init() {
+        network.pathUpdateHandler = { [weak self] path in
+            let now = [path.status == .satisfied, path.usesInterfaceType(.wifi), path.usesInterfaceType(.cellular), path.usesInterfaceType(.wiredEthernet)]
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.networkChanged(now) } }
+        }
+        network.start(queue: .global(qos: .utility))
         Core.shared.onEvent { [weak self] name, _ in
             guard let self else { return }
             switch name {
@@ -119,9 +131,36 @@ final class AppModel: ObservableObject {
         if terminals.isEmpty { showTerminals = false }
     }
 
-    /// Back in front: sessions that dropped while the app slept connect again.
+    /// Back in front: sessions whose connection went while the app slept connect again.
     func resumed() {
+        endBackground()
         guard phase == .ready else { return }
-        for t in terminals { t.reconnectIfDropped() }
+        for t in terminals { t.checkConnection() }
+    }
+
+    /// To the background: iOS gives the app some time before suspending it, so a quick look at
+    /// another app doesn't cost the sessions.
+    func backgrounded() {
+        guard background == .invalid, !terminals.isEmpty else { return }
+        background = UIApplication.shared.beginBackgroundTask(withName: "sessions") { [weak self] in
+            MainActor.assumeIsolated { self?.endBackground() }
+        }
+    }
+
+    private func endBackground() {
+        guard background != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(background)
+        background = .invalid
+    }
+
+    /// Another network (Wi-Fi to cellular, say): connections over the old one are likely gone.
+    private func networkChanged(_ now: [Bool]) {
+        defer { lastNetwork = now }
+        guard let last = lastNetwork, last != now, now[0], phase == .ready else { return }
+        for t in terminals { t.checkConnection() }
+    }
+
+    func open(link url: URL) {
+        if let link = JoinLink(url.absoluteString) { pendingJoin = link }
     }
 }

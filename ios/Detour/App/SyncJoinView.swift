@@ -15,6 +15,8 @@ struct SyncJoinView: View {
     @State private var code = ""
     @State private var github: String?
     @State private var signIn: (code: String, uri: String)?
+    @State private var copies = 0
+    @State private var scanning = false
     @State private var busy = false
     @State private var error: String?
 
@@ -39,7 +41,20 @@ struct SyncJoinView: View {
                         if let github {
                             Label(github, systemImage: "checkmark.circle.fill").foregroundStyle(.green)
                         } else if let signIn {
-                            Text(signIn.code).font(.title2.monospaced().bold()).textSelection(.enabled)
+                            Button {
+                                UIPasteboard.general.string = signIn.code
+                                copies += 1
+                            } label: {
+                                HStack {
+                                    Text(signIn.code).font(.title2.monospaced().bold())
+                                    Spacer()
+                                    Image(systemName: copies > 0 ? "checkmark" : "doc.on.doc")
+                                        .foregroundStyle(copies > 0 ? Color.green : Color.accentColor)
+                                }
+                            }
+                            .foregroundStyle(.primary)
+                            .accessibilityLabel("Copy")
+                            .sensoryFeedback(.success, trigger: copies)
                             Button("Open GitHub") { openURL(URL(string: signIn.uri)!) }
                         } else {
                             Button("Sign in with GitHub") { Task { await startGithub() } }
@@ -49,10 +64,17 @@ struct SyncJoinView: View {
                     }
                 }
                 Section {
-                    TextField("XXXX-XXXX-XXXX-XXXX", text: $code)
-                        .textInputAutocapitalization(.characters)
-                        .autocorrectionDisabled()
-                        .font(.body.monospaced())
+                    HStack {
+                        TextField("XXXX-XXXX-XXXX-XXXX", text: $code)
+                            .textInputAutocapitalization(.characters)
+                            .autocorrectionDisabled()
+                            .font(.body.monospaced())
+                        if JoinScanSheet.supported {
+                            Button { scanning = true } label: { Image(systemName: "qrcode.viewfinder").font(.title3) }
+                                .buttonStyle(.borderless)
+                                .accessibilityLabel("Scan the code")
+                        }
+                    }
                 } header: {
                     Text("Code from another device or recovery key")
                 }
@@ -69,7 +91,18 @@ struct SyncJoinView: View {
                 }
             }
             .task { github = try? await Core.shared.call("github_user") as? String }
+            .sheet(isPresented: $scanning) { JoinScanSheet { apply($0) } }
+            .onAppear { apply(app.pendingJoin) }
+            .onChange(of: app.pendingJoin) { _, link in apply(link) }
         }
+    }
+
+    /// Fills the form from the other device's QR.
+    private func apply(_ link: JoinLink?) {
+        guard let link else { return }
+        code = link.code
+        if let repo = link.repo { url = repo }
+        app.pendingJoin = nil
     }
 
     private var ready: Bool {

@@ -40,6 +40,10 @@
 "Wrong code" = "Неверный код";
 "The code has expired: make a new one on the other device" = "Код устарел: создайте новый на другом устройстве";
 "This repository has no synced vault" = "В этом репозитории нет синхронизированного хранилища";
+"Copy" = "Скопировать";
+"Scan the code" = "Сканировать код";
+"No access to the camera" = "Нет доступа к камере";
+"Open Settings" = "Открыть Настройки";
 
 /* Terminal */
 "Connecting to %@@%@" = "Подключение к %1$@@%2$@";
@@ -51,6 +55,8 @@
 "Trust and connect" = "Доверять и подключить";
 "Retry" = "Повторить";
 "Close" = "Закрыть";
+"Hide keyboard" = "Скрыть клавиатуру";
+"Show keyboard" = "Показать клавиатуру";
 "Can't reach %@" = "Не удаётся подключиться к %@";
 "The server didn't accept the login" = "Сервер не принял вход";
 "The server's key changed. Check it on a computer before connecting." = "Ключ сервера изменился. Проверьте его на компьютере, прежде чем подключаться.";

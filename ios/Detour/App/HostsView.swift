@@ -44,7 +44,15 @@ struct HostsView: View {
                 }
             }
             .sheet(isPresented: $joining) { SyncJoinView() }
+            .onAppear { joinIfLinked() }
+            .onChange(of: app.pendingJoin) { joinIfLinked() }
         }
+    }
+
+    /// A join link opened the app: the form, filled in from it.
+    private func joinIfLinked() {
+        guard app.pendingJoin != nil else { return }
+        if app.sync?.enabled == true { app.pendingJoin = nil } else { joining = true }
     }
 
     private var filtered: [HostSection] {

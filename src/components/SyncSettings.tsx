@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { renderSVG } from "uqr";
 import { ChevronRight, Copy, Download, FolderSync, GitBranch, Laptop, Link2, RotateCw, ShieldAlert } from "lucide-react";
 import { api, errorText, isCoreError, type CoreError, type Pairing, type SyncInfo, type SyncPlace } from "../lib/api";
 import { locale, tr, useT } from "../i18n";
@@ -110,7 +111,7 @@ export function SyncSettings() {
         <Button size="sm" variant="ghost" className="danger-text" onClick={() => setDialog("disable")}>{t.disable}</Button>
       </div>
 
-      {dialog === "device" && <AddDeviceDialog onClose={() => setDialog(null)} />}
+      {dialog === "device" && <AddDeviceDialog repo={sync.location} onClose={() => setDialog(null)} />}
       {dialog === "recovery" && <RecoveryDialog onClose={() => setDialog(null)} />}
       {dialog === "token" && <TokenDialog repoUrl={sync.location ?? ""} onClose={() => setDialog(null)} onSaved={(go) => run(go)} />}
       {dialog === "serverKey" && sync.error?.kind === "hostKeyChanged" && (
@@ -263,7 +264,14 @@ function EnableDialog({ onClose }: { onClose: () => void }) {
 
 /* ---------- adding a device ---------- */
 
-function AddDeviceDialog({ onClose }: { onClose: () => void }) {
+/** What the phone scans: the code, and the repository when sync goes through one (a folder means nothing to it). */
+function joinLink(code: string, repo: string | null): string {
+  const q = new URLSearchParams({ code });
+  if (repo && /^(https?:\/\/|ssh:\/\/|git@)/.test(repo)) q.set("repo", repo);
+  return `detour://join?${q}`;
+}
+
+function AddDeviceDialog({ repo, onClose }: { repo: string | null; onClose: () => void }) {
   const { toast } = useStore();
   const all = useT();
   const t = all.sync;
@@ -274,6 +282,7 @@ function AddDeviceDialog({ onClose }: { onClose: () => void }) {
     api.syncAddDevice().then(setPairing).catch((e) => setError(errorText(e)));
   }, []);
 
+  const qr = useMemo(() => (pairing ? renderSVG(joinLink(pairing.code, repo), { ecc: "L", border: 2, whiteColor: "#fff", blackColor: "#000" }) : ""), [pairing, repo]);
   const until = pairing ? new Date(pairing.expiresAt).toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit" }) : "";
   return (
     <Modal
@@ -298,6 +307,7 @@ function AddDeviceDialog({ onClose }: { onClose: () => void }) {
       ) : (
         <div className={`pair-code mono ${pairing ? "" : "loading"}`}>{pairing?.code ?? "••••-••••-••••-••••"}</div>
       )}
+      {pairing && <div className="pair-qr" dangerouslySetInnerHTML={{ __html: qr }} />}
       {pairing && <div className="muted small center">{t.validUntil(until)}</div>}
     </Modal>
   );

@@ -1,4 +1,3 @@
-import GameController
 import SwiftTerm
 import SwiftUI
 import UIKit
@@ -6,10 +5,10 @@ import UIKit
 /// SwiftTerm has a `Color` of its own.
 private typealias Color = SwiftUI.Color
 
-/// SwiftTerm's view for a session, with the key bar over the keyboard.
+/// SwiftTerm's view for a session. Its own bar over the keyboard is off: ours sits in the
+/// layout under the terminal, where it can be used with the keyboard hidden too.
 struct TerminalHost: UIViewRepresentable {
     @ObservedObject var session: TerminalSession
-    @ObservedObject var keys = KeyBarStore.shared
 
     func makeCoordinator() -> Coordinator { Coordinator(session: session) }
 
@@ -20,8 +19,7 @@ struct TerminalHost: UIViewRepresentable {
         tv.nativeBackgroundColor = .black
         tv.nativeForegroundColor = UIColor(white: 0.9, alpha: 1)
         tv.font = UIFont.monospacedSystemFont(ofSize: 13, weight: .regular)
-        context.coordinator.view = tv
-        context.coordinator.updateBar()
+        tv.inputAccessoryView = nil
         session.view = tv
         DispatchQueue.main.async { _ = tv.becomeFirstResponder() }
         return tv
@@ -32,51 +30,15 @@ struct TerminalHost: UIViewRepresentable {
             context.coordinator.session = session
             session.view = tv
         }
-        context.coordinator.updateBar()
     }
 
     @MainActor
     final class Coordinator: NSObject, TerminalViewDelegate {
         var session: TerminalSession
-        weak var view: TerminalView?
-        private var barHost: UIHostingController<KeyBarView>?
-        private var keyboards: [NSObjectProtocol] = []
 
         init(session: TerminalSession) {
             self.session = session
             super.init()
-            // A hardware keyboard (iPad) needs no bar.
-            for name in [NSNotification.Name.GCKeyboardDidConnect, .GCKeyboardDidDisconnect] {
-                keyboards.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                    MainActor.assumeIsolated { self?.updateBar() }
-                })
-            }
-        }
-
-        func updateBar() {
-            guard let view else { return }
-            let store = KeyBarStore.shared
-            if store.hidden || GCKeyboard.coalesced != nil {
-                if view.inputAccessoryView != nil {
-                    view.inputAccessoryView = nil
-                    view.reloadInputViews()
-                }
-                return
-            }
-            let bar = KeyBarView(store: store, session: session)
-            if let host = barHost {
-                host.rootView = bar
-            } else {
-                let host = UIHostingController(rootView: bar)
-                host.view.frame = CGRect(x: 0, y: 0, width: 320, height: 46)
-                host.view.autoresizingMask = [.flexibleWidth]
-                host.view.backgroundColor = .clear
-                barHost = host
-            }
-            if view.inputAccessoryView !== barHost?.view {
-                view.inputAccessoryView = barHost?.view
-                view.reloadInputViews()
-            }
         }
 
         nonisolated func send(source: TerminalView, data: ArraySlice<UInt8>) {
@@ -123,6 +85,7 @@ struct TerminalsView: View {
                 }
             }
             .background(Color.black)
+            .ignoresSafeArea(.keyboard)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button { dismiss() } label: { Image(systemName: "chevron.down") }
@@ -177,17 +140,35 @@ private struct TabChip: View {
     }
 }
 
-/// A session's screen, with what it waits for over it.
+/// A session's screen, with what it waits for over it and the key bar under it.
 private struct SessionScreen: View {
     @ObservedObject var session: TerminalSession
+    @ObservedObject private var keyboard = KeyboardObserver.shared
+    @ObservedObject private var keys = KeyBarStore.shared
     @State private var password = ""
 
     var body: some View {
-        ZStack {
-            TerminalHost(session: session)
-                .ignoresSafeArea(.container, edges: .bottom)
-            overlay
+        GeometryReader { geo in
+            // How far the keyboard reaches into this screen.
+            let lift = keyboard.shown ? max(0, geo.frame(in: .global).maxY - keyboard.top) : 0
+            let bar = keyboard.hardware || keys.hidden ? 0 : TerminalBar.height
+            ZStack(alignment: .bottom) {
+                // The terminal takes its new size at once rather than following the keyboard's
+                // animation: resizing it on every frame is what made it jump.
+                TerminalHost(session: session)
+                    .padding(.bottom, lift + bar)
+                    .transaction { $0.animation = nil }
+                overlay
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(.bottom, lift + bar)
+                if !keyboard.hardware {
+                    TerminalBar(session: session, showKeys: !keys.hidden, keyboardShown: keyboard.shown)
+                        .padding(.bottom, lift)
+                        .animation(.easeOut(duration: keyboard.duration), value: lift)
+                }
+            }
         }
+        .ignoresSafeArea(.keyboard)
     }
 
     @ViewBuilder private var overlay: some View {
@@ -235,5 +216,43 @@ private struct SessionScreen: View {
             .frame(maxWidth: 340)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
             .padding()
+    }
+}
+
+/// Under the terminal: the key bar and the button that shows or hides the keyboard (alone, in
+/// a corner, when the key bar is turned off).
+private struct TerminalBar: View {
+    static let height: CGFloat = 46
+    @ObservedObject var session: TerminalSession
+    let showKeys: Bool
+    let keyboardShown: Bool
+
+    var body: some View {
+        if showKeys {
+            HStack(spacing: 0) {
+                KeyBarView(store: .shared, session: session)
+                Divider().frame(height: 26)
+                toggle.frame(width: 48, height: Self.height)
+            }
+            .frame(height: Self.height)
+            .background(.bar)
+        } else {
+            toggle
+                .frame(width: 44, height: 44)
+                .background(.regularMaterial, in: Circle())
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+    }
+
+    private var toggle: some View {
+        Button { session.toggleKeyboard(shown: keyboardShown) } label: {
+            Image(systemName: keyboardShown ? "keyboard.chevron.compact.down" : "keyboard")
+                .font(.system(size: 17))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(keyboardShown ? "Hide keyboard" : "Show keyboard")
     }
 }
