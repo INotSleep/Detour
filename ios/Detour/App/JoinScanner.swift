@@ -1,6 +1,5 @@
 import AVFoundation
 import SwiftUI
-import VisionKit
 
 /// A code for joining sync, as another device shows it: `detour://join?code=…&repo=…` (its QR)
 /// or the code alone.
@@ -30,8 +29,11 @@ struct JoinScanSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     @State private var access: Bool?
+    /// A QR that isn't Detour's was in view a moment ago.
+    @State private var foreign = false
+    @State private var foreignSince = Date.distantPast
 
-    static var supported: Bool { DataScannerViewController.isSupported }
+    static var supported: Bool { AVCaptureDevice.default(for: .video) != nil }
 
     var body: some View {
         NavigationStack {
@@ -40,11 +42,26 @@ struct JoinScanSheet: View {
                 case nil:
                     ProgressView()
                 case true?:
-                    QRScanner { link in
-                        found(link)
-                        dismiss()
-                    }
-                    .ignoresSafeArea()
+                    QRScanner(seen: seen)
+                        .ignoresSafeArea()
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 20)
+                                .stroke(.white.opacity(0.8), lineWidth: 3)
+                                .frame(width: 240, height: 240)
+                                .allowsHitTesting(false)
+                        }
+                        .overlay(alignment: .bottom) {
+                            if foreign {
+                                Text("This isn't a Detour code")
+                                    .font(.subheadline.weight(.medium))
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 10)
+                                    .background(.regularMaterial, in: Capsule())
+                                    .padding(.bottom, 40)
+                                    .transition(.opacity)
+                            }
+                        }
+                        .animation(.easeOut(duration: 0.2), value: foreign)
                 case false?:
                     ContentUnavailableView {
                         Label("No access to the camera", systemImage: "camera")
@@ -70,42 +87,93 @@ struct JoinScanSheet: View {
             }
         }
     }
+
+    private func seen(_ text: String) {
+        if let link = JoinLink(text) {
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            found(link)
+            dismiss()
+            return
+        }
+        // Said once while that QR stays in view, gone a little after it leaves.
+        if !foreign { UINotificationFeedbackGenerator().notificationOccurred(.warning) }
+        foreign = true
+        let at = Date()
+        foreignSince = at
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            if foreignSince == at { foreign = false }
+        }
+    }
 }
 
-private struct QRScanner: UIViewControllerRepresentable {
-    let found: (JoinLink) -> Void
+/// The camera's picture with QR codes read from it: AVFoundation's own detector, light enough
+/// for older phones.
+private struct QRScanner: UIViewRepresentable {
+    let seen: (String) -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator(found: found) }
-
-    func makeUIViewController(context: Context) -> DataScannerViewController {
-        let vc = DataScannerViewController(recognizedDataTypes: [.barcode(symbologies: [.qr])], qualityLevel: .balanced, isHighlightingEnabled: true)
-        vc.delegate = context.coordinator
-        return vc
+    final class Preview: UIView {
+        override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
+        var preview: AVCaptureVideoPreviewLayer { layer as! AVCaptureVideoPreviewLayer }
     }
 
-    func updateUIViewController(_ vc: DataScannerViewController, context: Context) {
-        if !vc.isScanning { try? vc.startScanning() }
+    func makeCoordinator() -> Coordinator { Coordinator(seen: seen) }
+
+    func makeUIView(context: Context) -> Preview {
+        let v = Preview()
+        v.backgroundColor = .black
+        v.preview.videoGravity = .resizeAspectFill
+        context.coordinator.start(in: v)
+        return v
     }
 
-    @MainActor
-    final class Coordinator: NSObject, DataScannerViewControllerDelegate {
-        let found: (JoinLink) -> Void
+    func updateUIView(_ v: Preview, context: Context) {
+        context.coordinator.seen = seen
+    }
+
+    static func dismantleUIView(_ v: Preview, coordinator: Coordinator) {
+        coordinator.stop()
+    }
+
+    final class Coordinator: NSObject, AVCaptureMetadataOutputObjectsDelegate, @unchecked Sendable {
+        private let session = AVCaptureSession()
+        private let queue = DispatchQueue(label: "detour.qr")
+        var seen: (String) -> Void
         private var done = false
 
-        init(found: @escaping (JoinLink) -> Void) { self.found = found }
+        init(seen: @escaping (String) -> Void) { self.seen = seen }
 
-        nonisolated func dataScanner(_ dataScanner: DataScannerViewController, didAdd addedItems: [RecognizedItem], allItems: [RecognizedItem]) {
-            MainActor.assumeIsolated {
-                guard !done else { return }
-                for item in addedItems {
-                    if case .barcode(let b) = item, let s = b.payloadStringValue, let link = JoinLink(s) {
-                        done = true
-                        dataScanner.stopScanning()
-                        UINotificationFeedbackGenerator().notificationOccurred(.success)
-                        found(link)
-                        return
-                    }
+        func start(in view: Preview) {
+            guard let device = AVCaptureDevice.default(for: .video), let input = try? AVCaptureDeviceInput(device: device) else { return }
+            session.beginConfiguration()
+            session.sessionPreset = .high
+            if session.canAddInput(input) { session.addInput(input) }
+            let output = AVCaptureMetadataOutput()
+            if session.canAddOutput(output) {
+                session.addOutput(output)
+                output.setMetadataObjectsDelegate(self, queue: .main)
+                output.metadataObjectTypes = [.qr]
+            }
+            session.commitConfiguration()
+            view.preview.session = session
+            let s = session
+            queue.async { s.startRunning() }
+        }
+
+        func stop() {
+            let s = session
+            queue.async { s.stopRunning() }
+        }
+
+        func metadataOutput(_ output: AVCaptureMetadataOutput, didOutput objects: [AVMetadataObject], from connection: AVCaptureConnection) {
+            guard !done else { return }
+            for o in objects {
+                guard let text = (o as? AVMetadataMachineReadableCodeObject)?.stringValue else { continue }
+                if JoinLink(text) != nil {
+                    done = true
+                    stop()
                 }
+                MainActor.assumeIsolated { seen(text) }
+                return
             }
         }
     }

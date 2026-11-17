@@ -43,6 +43,7 @@
 "Copy" = "Скопировать";
 "Scan the code" = "Сканировать код";
 "No access to the camera" = "Нет доступа к камере";
+"This isn't a Detour code" = "Это не код Detour";
 "Open Settings" = "Открыть Настройки";
 
 /* Terminal */

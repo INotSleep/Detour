@@ -135,12 +135,14 @@ struct KeyBarView: View {
         TabView(selection: $page) {
             ForEach(Array(store.sets.enumerated()), id: \.element.id) { i, set in
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
+                    // Tight enough that the main set, arrows included, fits a 375-point phone
+                    // beside the keyboard button.
+                    HStack(spacing: 4) {
                         ForEach(set.keys) { key in
                             KeyButton(key: key, on: on(key)) { press(key) }
                         }
                     }
-                    .padding(.horizontal, 8)
+                    .padding(.horizontal, 6)
                 }
                 .tag(i)
             }
@@ -189,8 +191,8 @@ private struct KeyButton: View {
             Text(key.title)
                 .font(.system(size: 15, weight: .medium, design: .monospaced))
                 .lineLimit(1)
-                .padding(.horizontal, 12)
-                .frame(minWidth: 40, minHeight: 34)
+                .padding(.horizontal, 8)
+                .frame(minWidth: 34, minHeight: 34)
                 .background(on ? Color.accentColor : Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 7))
                 .foregroundStyle(on ? Color.white : Color.primary)
         }

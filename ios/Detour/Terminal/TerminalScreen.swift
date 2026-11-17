@@ -232,7 +232,7 @@ private struct TerminalBar: View {
             HStack(spacing: 0) {
                 KeyBarView(store: .shared, session: session)
                 Divider().frame(height: 26)
-                toggle.frame(width: 48, height: Self.height)
+                toggle.frame(width: 44, height: Self.height)
             }
             .frame(height: Self.height)
             .background(.bar)
