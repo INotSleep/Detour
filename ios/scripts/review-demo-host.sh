@@ -18,7 +18,8 @@ fi
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-password=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 16)
+# (Not `tr < /dev/urandom | head`: head closing the pipe kills tr, and pipefail the script.)
+password=$(openssl rand -base64 18 | tr -dc 'A-Za-z0-9')
 
 cat > "$work/Dockerfile" <<'EOF'
 FROM alpine:3.20
