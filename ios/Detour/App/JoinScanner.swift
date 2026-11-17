@@ -44,12 +44,6 @@ struct JoinScanSheet: View {
                 case true?:
                     QRScanner(seen: seen)
                         .ignoresSafeArea()
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 20)
-                                .stroke(.white.opacity(0.8), lineWidth: 3)
-                                .frame(width: 240, height: 240)
-                                .allowsHitTesting(false)
-                        }
                         .overlay(alignment: .bottom) {
                             if foreign {
                                 Text("This isn't a Detour code")
@@ -144,6 +138,20 @@ private struct QRScanner: UIViewRepresentable {
 
         func start(in view: Preview) {
             guard let device = AVCaptureDevice.default(for: .video), let input = try? AVCaptureDeviceInput(device: device) else { return }
+            // Focus close, the way a code on a screen is held; on phones whose main camera can't
+            // focus that close, zoom in a little instead (Apple's advice for code scanning).
+            if (try? device.lockForConfiguration()) != nil {
+                if device.isAutoFocusRangeRestrictionSupported { device.autoFocusRangeRestriction = .near }
+                if device.isFocusModeSupported(.continuousAutoFocus) { device.focusMode = .continuousAutoFocus }
+                // How far a 3 cm code (a QR on a laptop screen) is when it fills half the view.
+                let halfAngle = device.activeFormat.videoFieldOfView / 2 * .pi / 180
+                let distance = (30 / 0.5) / tan(halfAngle)
+                let minFocus = Float(device.minimumFocusDistance)
+                if minFocus > distance {
+                    device.videoZoomFactor = min(CGFloat(minFocus / distance), device.activeFormat.videoMaxZoomFactor, 3)
+                }
+                device.unlockForConfiguration()
+            }
             session.beginConfiguration()
             session.sessionPreset = .high
             if session.canAddInput(input) { session.addInput(input) }
