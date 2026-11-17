@@ -140,7 +140,10 @@ pub struct TeamView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteView {
+    /// The repository's URL, or the drive's folder ("OneDrive: Detour/Team").
     pub url: String,
+    /// `git`, `onedrive`, `gdrive` or `dropbox`.
+    pub kind: String,
     /// Local changes the repository doesn't have yet.
     pub pending: bool,
     /// Why the last attempt to reach the repository failed (a serialized `Error`).

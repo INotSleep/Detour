@@ -135,8 +135,15 @@ pub struct DriveListing {
     pub folders: Vec<DriveFolder>,
 }
 
+/// Folders served from memory instead of a real drive, by folder id (tests only).
+#[doc(hidden)]
+pub static FAKES: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, fake::FakeDrive>>> = std::sync::LazyLock::new(Default::default);
+
 /// Talks to one provider's API with a signed-in token.
 pub fn storage(remote: &DriveRemote, token: &str) -> Result<Box<dyn Storage>> {
+    if let Some(f) = FAKES.lock().unwrap_or_else(|e| e.into_inner()).get(&remote.id) {
+        return Ok(Box::new(f.folder()));
+    }
     Ok(match remote.provider {
         Provider::OneDrive => Box::new(onedrive::Folder::new(token, remote)?),
         Provider::GoogleDrive => Box::new(gdrive::Folder::new(token, remote)?),

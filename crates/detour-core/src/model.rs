@@ -663,6 +663,9 @@ pub struct TeamLink {
     /// The repository is reached with each device's own GitHub sign-in.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub github: bool,
+    /// The folder of a team in a cloud drive; each device signs in to the drive itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drive: Option<crate::drive::DriveRemote>,
 }
 
 /// A team vault this person has joined.
@@ -676,6 +679,34 @@ pub struct TeamRef {
     /// Set for a team kept in a Git repository; `path` is then its local copy.
     #[serde(default)]
     pub remote: Option<crate::team::git::GitRemote>,
+    /// Set for a team kept in a cloud drive's folder; `path` is then its local copy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drive: Option<crate::drive::DriveRemote>,
+}
+
+impl TeamRef {
+    /// Kept elsewhere (a repository or a drive), `path` being only a local copy of it.
+    pub fn mirrored(&self) -> bool {
+        self.remote.is_some() || self.drive.is_some()
+    }
+
+    /// What kind of storage it is: `folder`, `git`, or the drive (`onedrive`, `gdrive`, `dropbox`).
+    pub fn storage(&self) -> &'static str {
+        match (&self.remote, &self.drive) {
+            (Some(_), _) => "git",
+            (_, Some(d)) => d.provider.id(),
+            _ => "folder",
+        }
+    }
+
+    /// Where it is, as a person reads it: the folder, the repository's URL or the drive's folder.
+    pub fn location(&self) -> String {
+        match (&self.remote, &self.drive) {
+            (Some(g), _) => g.url.clone(),
+            (_, Some(d)) => d.display(),
+            _ => self.path.clone(),
+        }
+    }
 }
 
 /// What a UI sees of a vault: no secrets.

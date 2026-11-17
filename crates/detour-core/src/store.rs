@@ -19,6 +19,7 @@ use crate::model::*;
 use crate::personal::{self, SyncRecord};
 use crate::team::log::Head;
 use crate::team::state::{Coll, Level, Role};
+use crate::sync::Place;
 use crate::team::git::{GitRemote, HttpRemote, HttpUrl, Mirror, Remote, SshUrl};
 use crate::team::{AccessChange, ProblemView, RemoteView, TeamCache, TeamVault, TeamView, VaultInfo};
 use crate::{Error, Result, SecretKind, keys, ssh};
@@ -61,9 +62,11 @@ pub struct Store {
 #[serde(rename_all = "camelCase")]
 pub struct SyncStatus {
     pub enabled: bool,
-    /// The folder, or the repository's URL.
+    /// The folder, the repository's URL, or the drive's folder.
     pub location: Option<String>,
     pub git: bool,
+    /// `folder`, `git`, `onedrive`, `gdrive` or `dropbox`.
+    pub storage: Option<String>,
     /// Changes the repository doesn't have yet.
     pub pending: bool,
     /// Why the last sync failed (a serialized `Error`).
@@ -594,10 +597,10 @@ impl Store {
         }
         view.layout = v.layouts.get(id).cloned();
         if let Some(r) = v.teams.iter().find(|t| t.id == id)
-            && let Some(remote) = &r.remote
+            && r.mirrored()
         {
             let (error, synced_at) = self.git_status.get(id).cloned().unwrap_or_default();
-            view.remote = Some(RemoteView { url: remote.url.clone(), pending: mirror_of(r).pending().unwrap_or(false), error, synced_at });
+            view.remote = Some(RemoteView { url: r.location(), kind: r.storage().into(), pending: pending_of(r), error, synced_at });
         }
         Ok(view)
     }
@@ -659,9 +662,10 @@ impl Store {
         }
     }
 
-    fn add_team(&mut self, t: TeamVault, remote: Option<GitRemote>) -> Result<TeamView> {
+    fn add_team(&mut self, t: TeamVault, place: Option<Place>) -> Result<TeamView> {
         let id = t.id().to_string();
-        let r = TeamRef { id: id.clone(), path: t.path().display().to_string(), root: t.root().to_string(), remote };
+        let (remote, drive) = Place::split(place);
+        let r = TeamRef { id: id.clone(), path: t.path().display().to_string(), root: t.root().to_string(), remote, drive };
         self.vault_mut()?.teams.push(r);
         self.teams.insert(id.clone(), t);
         self.save()?;
@@ -685,8 +689,8 @@ impl Store {
         self.team_errors.remove(id);
         self.git_status.remove(id);
         self.drop_cache(id);
-        // A Git team's local copy is only a cache of the repository.
-        for r in gone.iter().filter(|r| r.remote.is_some()) {
+        // A Git or drive team's local copy is only a cache of where it is kept.
+        for r in gone.iter().filter(|r| r.mirrored()) {
             let _ = std::fs::remove_dir_all(mirror_of(r).files().parent().unwrap_or(Path::new(&r.path)));
         }
         Ok(())
@@ -1107,7 +1111,7 @@ impl Store {
     }
 
     fn sync_is_git(&self) -> bool {
-        self.sync_ref().is_some_and(|r| r.remote.is_some())
+        self.sync_ref().is_some_and(|r| r.mirrored())
     }
 
     fn open_sync(&mut self) {
@@ -1179,9 +1183,10 @@ impl Store {
         let (error, synced_at) = self.sync_state.clone();
         Ok(SyncStatus {
             enabled: r.is_some(),
-            location: r.as_ref().map(|r| r.remote.as_ref().map_or_else(|| r.path.clone(), |g| g.url.clone())),
+            location: r.as_ref().map(TeamRef::location),
             git: r.as_ref().is_some_and(|r| r.remote.is_some()),
-            pending: r.as_ref().filter(|r| r.remote.is_some()).is_some_and(|r| mirror_of(r).pending().unwrap_or(false)),
+            storage: r.as_ref().map(|r| r.storage().to_string()),
+            pending: r.as_ref().is_some_and(pending_of),
             error: if r.is_some() { error } else { None },
             synced_at,
             problems: self.personal.as_ref().map(|t| t.view().problems).unwrap_or_default(),
@@ -1217,7 +1222,7 @@ impl Store {
     }
 
     /// Starts syncing through an empty folder (or a new repository's local copy).
-    pub fn sync_enable(&mut self, path: &str, remote: Option<GitRemote>) -> Result<()> {
+    pub fn sync_enable(&mut self, path: &str, place: Option<Place>) -> Result<()> {
         if self.unlocked()?.vault.sync.is_some() {
             return Err(Error::AlreadyInitialized);
         }
@@ -1226,7 +1231,7 @@ impl Store {
         }
         let (me, device) = self.member()?;
         let t = TeamVault::create_personal(path, &me, &device)?;
-        self.attach(t, remote)
+        self.attach(t, place)
     }
 
     /// Creates a synced copy in `files` (a staging copy of a repository), keeping nothing open.
@@ -1239,7 +1244,7 @@ impl Store {
     /// Starts syncing with a vault this person's other devices use. `identity`
     /// came from a pairing code or the recovery key and is the vault's creator.
     /// This device's records join the ones already there.
-    pub fn sync_join(&mut self, path: &str, identity: &Identity, remote: Option<GitRemote>) -> Result<()> {
+    pub fn sync_join(&mut self, path: &str, identity: &Identity, place: Option<Place>) -> Result<()> {
         let v = &self.unlocked()?.vault;
         if v.sync.is_some() {
             return Err(Error::AlreadyInitialized);
@@ -1253,17 +1258,18 @@ impl Store {
         let meta = TeamVault::inspect_personal(path)?;
         let t = TeamVault::open(path, &meta.root, identity, &device, self.known_heads(&meta.id))?;
         self.vault_mut()?.member_identity = Some(identity.to_stored());
-        self.attach(t, remote)
+        self.attach(t, place)
     }
 
-    /// Starts syncing with a vault this device just created elsewhere (a repository's staging copy).
-    pub fn sync_open(&mut self, path: &str, remote: GitRemote) -> Result<()> {
+    /// Starts syncing with a vault this device just created elsewhere (a repository's or drive's staging copy).
+    pub fn sync_open(&mut self, path: &str, place: Place) -> Result<()> {
         let me = self.member()?.0;
-        self.sync_join(path, &me, Some(remote))
+        self.sync_join(path, &me, Some(place))
     }
 
-    fn attach(&mut self, t: TeamVault, remote: Option<GitRemote>) -> Result<()> {
-        let r = TeamRef { id: t.id().to_string(), path: t.path().display().to_string(), root: t.root().to_string(), remote };
+    fn attach(&mut self, t: TeamVault, place: Option<Place>) -> Result<()> {
+        let (remote, drive) = Place::split(place);
+        let r = TeamRef { id: t.id().to_string(), path: t.path().display().to_string(), root: t.root().to_string(), remote, drive };
         let v = self.vault_mut()?;
         v.sync = Some(r);
         v.sync_base.clear();
@@ -1300,19 +1306,16 @@ impl Store {
         self.sync_state = (None, None);
         self.drop_cache(&r.id);
         self.write_vault()?;
-        if r.remote.is_some() {
+        if r.mirrored() {
             let _ = std::fs::remove_dir_all(mirror_of(&r).files().parent().unwrap_or(Path::new(&r.path)));
         }
         Ok(())
     }
 
-    /// The local copy and remote of a synced vault kept in Git; `None` for a folder.
-    pub fn sync_git_job(&self, trust_fingerprint: Option<String>) -> Result<Option<(Mirror, Remote)>> {
+    /// Where the synced vault is kept and its local copy's directory; `None` for a folder.
+    pub fn sync_place(&self) -> Result<Option<(PathBuf, Place)>> {
         let r = self.sync_ref().ok_or_else(|| not_found("sync"))?;
-        match &r.remote {
-            None => Ok(None),
-            Some(remote) => Ok(Some((mirror_of(&r), self.git_remote(remote, trust_fingerprint)?))),
-        }
+        Ok(place_of(&r))
     }
 
     /// Forgets the pinned key of the sync repository's server, so a new one can be trusted.
@@ -1378,7 +1381,30 @@ impl Store {
 
 /// The local copy of a Git team: `path` is its `files` directory.
 fn mirror_of(r: &TeamRef) -> Mirror {
-    Mirror::new(Path::new(&r.path).parent().unwrap_or(Path::new(&r.path)))
+    Mirror::new(copy_dir(r))
+}
+
+/// The directory of a Git or drive team's local copy (`path` is its `files`).
+fn copy_dir(r: &TeamRef) -> PathBuf {
+    Path::new(&r.path).parent().unwrap_or(Path::new(&r.path)).to_path_buf()
+}
+
+/// Where a team (or the synced vault) is kept, with its local copy's directory; `None` for a folder.
+fn place_of(r: &TeamRef) -> Option<(PathBuf, Place)> {
+    match (&r.remote, &r.drive) {
+        (Some(g), _) => Some((copy_dir(r), Place::Git(g.clone()))),
+        (_, Some(d)) => Some((copy_dir(r), Place::Drive(d.clone()))),
+        _ => None,
+    }
+}
+
+/// Local changes the repository or drive doesn't have yet.
+fn pending_of(r: &TeamRef) -> bool {
+    match (&r.remote, &r.drive) {
+        (Some(_), _) => mirror_of(r).pending().unwrap_or(false),
+        (_, Some(_)) => crate::drive::Mirror::new(copy_dir(r)).pending().unwrap_or(false),
+        _ => false,
+    }
 }
 
 impl Store {
@@ -1440,13 +1466,10 @@ impl Store {
         Ok(Remote::Ssh { request: ssh::ConnectRequest { host, key, secret: None, known, trust_fingerprint, route: ssh::Route::Direct }, path: url.path })
     }
 
-    /// The local copy and remote of a Git team; `None` for a team in a folder.
-    pub fn git_job(&self, id: &str, trust_fingerprint: Option<String>) -> Result<Option<(Mirror, Remote)>> {
+    /// Where a team is kept and its local copy's directory; `None` for a team in a folder.
+    pub fn team_place(&self, id: &str) -> Result<Option<(PathBuf, Place)>> {
         let r = self.unlocked()?.vault.teams.iter().find(|t| t.id == id).cloned().ok_or_else(|| not_found("team"))?;
-        match &r.remote {
-            None => Ok(None),
-            Some(remote) => Ok(Some((mirror_of(&r), self.git_remote(remote, trust_fingerprint)?))),
-        }
+        Ok(place_of(&r))
     }
 
     /// Pins a server key the user agreed to trust.
@@ -1506,8 +1529,8 @@ impl Store {
         Ok(())
     }
 
-    /// Makes a staged copy of a repository a joined team. `root` is the creator the user confirmed.
-    pub fn add_git_team(&mut self, staged: &Path, root: &str, remote: GitRemote) -> Result<TeamView> {
+    /// Makes a staged copy of a repository or drive folder a joined team. `root` is the creator the user confirmed.
+    pub fn add_remote_team(&mut self, staged: &Path, root: &str, place: Place) -> Result<TeamView> {
         let info = TeamVault::inspect(staged.join("files"))?;
         if self.teams.contains_key(&info.id) || self.unlocked()?.vault.teams.iter().any(|t| t.id == info.id) {
             return Err(Error::AlreadyMember);
@@ -1520,7 +1543,7 @@ impl Store {
         let files = dir.join("files");
         let (me, device) = self.member()?;
         let t = TeamVault::open(&files, root, &me, &device, self.known_heads(&info.id))?;
-        self.add_team(t, Some(remote))
+        self.add_team(t, Some(place))
     }
 }
 
@@ -2091,6 +2114,8 @@ pub struct PendingTeam {
     pub root: String,
     /// The repository of a team in Git, which is joined here by itself; otherwise a folder is asked for.
     pub url: Option<String>,
+    /// The drive folder of a team in a cloud drive: joined here by itself once this device is signed in to the drive.
+    pub drive: Option<crate::drive::DriveRemote>,
     /// Why joining it here failed (a serialized `Error`).
     pub error: Option<serde_json::Value>,
 }
@@ -2112,6 +2137,7 @@ impl Store {
                 auth: t.remote.as_ref().map(|r| r.auth.clone()),
                 token: t.remote.as_ref().and_then(|r| r.token.clone()),
                 github: t.remote.as_ref().is_some_and(|r| r.github),
+                drive: t.drive.clone(),
             };
             match old {
                 Some(i) if v.team_links[i] != link => v.team_links[i] = link,
@@ -2127,7 +2153,7 @@ impl Store {
         Ok(v.team_links
             .iter()
             .filter(|l| !v.teams.iter().any(|t| t.id == l.team_id))
-            .map(|l| PendingTeam { team_id: l.team_id.clone(), name: l.name.clone(), root: l.root.clone(), url: l.url.clone(), error: self.link_errors.get(&l.team_id).cloned() })
+            .map(|l| PendingTeam { team_id: l.team_id.clone(), name: l.name.clone(), root: l.root.clone(), url: l.url.clone(), drive: l.drive.clone(), error: self.link_errors.get(&l.team_id).cloned() })
             .collect())
     }
 
@@ -2139,6 +2165,23 @@ impl Store {
             .filter(|l| !v.teams.iter().any(|t| t.id == l.team_id))
             .filter_map(|l| Some((l.team_id.clone(), l.root.clone(), GitRemote { url: l.url.clone()?, auth: l.auth.clone().unwrap_or(Auth::Agent), token: l.token.clone(), github: l.github })))
             .collect())
+    }
+
+    /// The drive folder and creator of a team in a drive to join here, from its link, when
+    /// this device is signed in to that drive.
+    pub fn pending_drive_teams(&self) -> Result<Vec<(String, String, crate::drive::DriveRemote)>> {
+        let v = &self.unlocked()?.vault;
+        Ok(v.team_links
+            .iter()
+            .filter(|l| !v.teams.iter().any(|t| t.id == l.team_id))
+            .filter_map(|l| Some((l.team_id.clone(), l.root.clone(), l.drive.clone()?)))
+            .filter(|(_, _, d)| v.drives.iter().any(|x| x.provider == d.provider && !x.access_token.is_empty()))
+            .collect())
+    }
+
+    /// A team joined on another device, its link with this device's creator to check against.
+    pub fn team_link(&self, team_id: &str) -> Result<TeamLink> {
+        self.unlocked()?.vault.team_links.iter().find(|l| l.team_id == team_id).cloned().ok_or_else(|| not_found("team"))
     }
 
     pub fn note_link_error(&mut self, team_id: &str, e: Option<&Error>) {

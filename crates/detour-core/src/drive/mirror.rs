@@ -30,7 +30,7 @@ pub struct Listing {
 }
 
 /// One drive's API, on the vault's folder. Blocking: called off the async threads.
-pub trait Storage: Send {
+pub trait Storage: Send + Sync {
     fn list(&self) -> Result<Listing>;
     fn download(&self, item: &Item) -> Result<Vec<u8>>;
     /// Creates a file in a folder (`None`: the vault's folder). `Ok(None)`: one with that
@@ -69,6 +69,7 @@ pub struct Synced {
     pub pushed: bool,
 }
 
+#[derive(Clone)]
 pub struct Mirror {
     dir: PathBuf,
 }
