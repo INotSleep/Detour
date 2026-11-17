@@ -23,10 +23,16 @@ for _ in $(seq 1 20); do
   sleep 1
 done
 
-xcodebuild -project Detour.xcodeproj -scheme Detour -configuration Debug \
-  -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath build/sim \
-  -skipPackagePluginValidation -skipMacroValidation CODE_SIGNING_ALLOWED=NO build | xcbeautify --renderer github-actions
-app=$(find build/sim/Build/Products -maxdepth 2 -name Detour.app | head -1)
+# The debug build for the simulator (the workflow's simulator build made it already).
+find_app() { find ~/Library/Developer/Xcode/DerivedData -maxdepth 6 -path '*/Build/Products/Debug-iphonesimulator/Detour.app' 2>/dev/null | head -1; }
+app=$(find_app)
+if [ -z "$app" ]; then
+  xcodebuild -project Detour.xcodeproj -scheme Detour -configuration Debug \
+    -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+    -skipPackagePluginValidation -skipMacroValidation CODE_SIGNING_ALLOWED=NO build | xcbeautify --renderer github-actions
+  app=$(find_app)
+fi
+echo "app: $app"
 
 # The newest 6.9" iPhone there is.
 dev=$(xcrun simctl list devices available -j | python3 -c '
