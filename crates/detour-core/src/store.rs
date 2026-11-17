@@ -1330,6 +1330,25 @@ impl Store {
         Ok(self.unlocked()?.vault.github.clone())
     }
 
+    /// This device's sign-in to a drive.
+    pub fn drive_login(&self, p: crate::drive::Provider) -> Result<Option<crate::drive::DriveLogin>> {
+        Ok(self.unlocked()?.vault.drives.iter().find(|l| l.provider == p).cloned())
+    }
+
+    /// Keeps this device's sign-in to a drive, in place of an earlier one.
+    pub fn set_drive_login(&mut self, login: crate::drive::DriveLogin) -> Result<()> {
+        let v = self.vault_mut()?;
+        v.drives.retain(|l| l.provider != login.provider);
+        v.drives.push(login);
+        self.write_vault()
+    }
+
+    /// Forgets this device's sign-in to a drive.
+    pub fn drive_sign_out(&mut self, p: crate::drive::Provider) -> Result<()> {
+        self.vault_mut()?.drives.retain(|l| l.provider != p);
+        self.write_vault()
+    }
+
     /// Keeps (or with `None` forgets) this device's GitHub sign-in.
     pub fn set_github_login(&mut self, login: Option<crate::github::GithubLogin>) -> Result<()> {
         self.vault_mut()?.github = login;

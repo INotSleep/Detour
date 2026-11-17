@@ -637,6 +637,9 @@ pub struct VaultData {
     /// This device's GitHub sign-in; never syncs (see `github`).
     #[serde(default)]
     pub github: Option<crate::github::GithubLogin>,
+    /// This device's sign-ins to cloud drives; never sync (see `drive`).
+    #[serde(default)]
+    pub drives: Vec<crate::drive::DriveLogin>,
     /// AI agents' tokens on this device; never syncs (see `tokens`).
     #[serde(default)]
     pub agents: Vec<crate::tokens::AgentToken>,

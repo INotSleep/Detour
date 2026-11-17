@@ -7,6 +7,7 @@
 
 pub mod agent;
 pub mod bundle;
+pub mod drive;
 pub mod export;
 pub mod github;
 pub mod identity;
@@ -44,6 +45,15 @@ pub enum SecretKind {
 #[derive(Debug, thiserror::Error, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Error {
+    /// A cloud drive refused or failed (`provider`: onedrive, gdrive, dropbox).
+    #[error("{provider}: {message}")]
+    Drive { provider: String, message: String },
+    /// Signing in to the drive is needed (never signed in here, or the sign-in ran out).
+    #[error("sign in to {provider}")]
+    DriveSignIn { provider: String },
+    /// The drive's account has no access to the folder.
+    #[error("{provider}: no access to the folder")]
+    DriveNoAccess { provider: String },
     #[error("vault is locked")]
     Locked,
     #[error("vault is already set up")]
