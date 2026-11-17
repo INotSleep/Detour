@@ -5,6 +5,11 @@ on:
     branches: [ios]
     paths: ["ios/**", "crates/**", "Cargo.toml", "Cargo.lock", ".github/workflows/ios.yml"]
   workflow_dispatch:
+    inputs:
+      appstore:
+        description: Also upload to App Store Connect
+        type: boolean
+        default: false
 
 concurrency:
   group: ios-${{ github.ref }}
@@ -19,6 +24,11 @@ jobs:
       IOS_CERTIFICATE_P12_BASE64: ${{ secrets.IOS_CERTIFICATE_P12_BASE64 }}
       IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
       IOS_PROFILE_BASE64: ${{ secrets.IOS_PROFILE_BASE64 }}
+      # App Store: its provisioning profile and an App Store Connect API key (Key ID, Issuer ID, .p8 in base64).
+      IOS_APPSTORE_PROFILE_BASE64: ${{ secrets.IOS_APPSTORE_PROFILE_BASE64 }}
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
     steps:
       - uses: actions/checkout@v7
 
@@ -51,7 +61,7 @@ jobs:
 
       - name: Ad hoc build
         if: env.IOS_PROFILE_BASE64 != ''
-        run: ios/scripts/sign-adhoc.sh
+        run: ios/scripts/sign.sh
 
       - uses: actions/upload-artifact@v7
         if: env.IOS_PROFILE_BASE64 != ''
@@ -59,3 +69,11 @@ jobs:
           name: Detour-ios-adhoc
           path: ios/build/export/*.ipa
           retention-days: 14
+
+      - name: App Store build and upload
+        if: inputs.appstore && env.IOS_APPSTORE_PROFILE_BASE64 != '' && env.ASC_KEY_ID != ''
+        run: |
+          IOS_PROFILE_BASE64="$IOS_APPSTORE_PROFILE_BASE64" IOS_EXPORT_METHOD=app-store-connect ios/scripts/sign.sh
+          mkdir -p ~/.appstoreconnect/private_keys
+          echo "$ASC_KEY_P8_BASE64" | base64 --decode > ~/.appstoreconnect/private_keys/AuthKey_$ASC_KEY_ID.p8
+          xcrun altool --upload-app --type ios --file ios/build/export/*.ipa --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"

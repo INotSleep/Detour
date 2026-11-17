@@ -51,7 +51,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(DETOUR_BUNDLE_ID)
         DETOUR_BUNDLE_ID: dev.detour.ios
-        # Signing of this target only (scripts/sign-adhoc.sh sets these; packages stay unsigned).
+        # Signing of this target only (scripts/sign.sh sets these; packages stay unsigned).
         DETOUR_SIGN_STYLE: Automatic
         DETOUR_SIGN_IDENTITY: Apple Development
         CODE_SIGN_STYLE: $(DETOUR_SIGN_STYLE)

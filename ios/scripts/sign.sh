@@ -1,6 +1,7 @@
 #!/bin/bash
-# An ad hoc build for the devices in a provisioning profile, signed with a distribution
-# certificate. In CI from secrets (base64):
+# A signed build with a distribution certificate and a provisioning profile: ad hoc for the
+# profile's devices (IOS_EXPORT_METHOD=release-testing, the default) or for App Store Connect
+# (app-store-connect). In CI from secrets (base64):
 #   IOS_CERTIFICATE_P12_BASE64, IOS_CERTIFICATE_PASSWORD, IOS_PROFILE_BASE64
 # The app takes the profile's bundle id (or dev.detour.ios under a wildcard one) and team.
 set -euo pipefail
@@ -45,7 +46,7 @@ cat > "$work/export.plist" <<EOF
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>method</key><string>release-testing</string>
+  <key>method</key><string>${IOS_EXPORT_METHOD:-release-testing}</string>
   <key>teamID</key><string>$team</string>
   <key>signingStyle</key><string>manual</string>
   <key>provisioningProfiles</key><dict><key>$bundle</key><string>$uuid</string></dict>
