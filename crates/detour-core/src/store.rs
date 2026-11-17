@@ -189,7 +189,7 @@ impl Store {
             return Err(Error::NotInitialized);
         }
         let sealed = std::fs::read(self.dir.join(IDENTITY_FILE))?;
-        let scrypt = age::scrypt::Identity::new(SecretString::from(master_password.to_owned()));
+        let scrypt = crate::scrypt_identity(master_password);
         let plain = age::decrypt(&scrypt, &sealed).map_err(|_| Error::WrongMasterPassword)?;
         let text = String::from_utf8(plain).map_err(|_| Error::WrongMasterPassword)?;
         let identity = age::x25519::Identity::from_str(text.trim()).map_err(|e| Error::Internal { message: e.to_string() })?;
@@ -228,14 +228,14 @@ impl Store {
     /// Is this the master password? (A client proves it is the person without unlocking again.)
     pub fn check_master_password(&self, master_password: &str) -> Result<()> {
         let sealed = std::fs::read(self.dir.join(IDENTITY_FILE))?;
-        let scrypt = age::scrypt::Identity::new(SecretString::from(master_password.to_owned()));
+        let scrypt = crate::scrypt_identity(master_password);
         age::decrypt(&scrypt, &sealed).map(|_| ()).map_err(|_| Error::WrongMasterPassword)
     }
 
     pub fn change_master_password(&mut self, current: &str, new: &str) -> Result<()> {
         let identity = {
             let sealed = std::fs::read(self.dir.join(IDENTITY_FILE))?;
-            let scrypt = age::scrypt::Identity::new(SecretString::from(current.to_owned()));
+            let scrypt = crate::scrypt_identity(current);
             let plain = age::decrypt(&scrypt, &sealed).map_err(|_| Error::WrongMasterPassword)?;
             age::x25519::Identity::from_str(String::from_utf8_lossy(&plain).trim()).map_err(|e| Error::Internal { message: e.to_string() })?
         };

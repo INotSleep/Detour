@@ -105,7 +105,7 @@ pub fn open(text: &[u8], password: &str) -> Result<Bundle> {
     if !decryptor.is_scrypt() {
         return Err(not_ours());
     }
-    let identity = age::scrypt::Identity::new(SecretString::from(password.to_owned()));
+    let identity = crate::scrypt_identity(password);
     let mut r = decryptor.decrypt(std::iter::once(&identity as &dyn age::Identity)).map_err(|_| Error::WrongFilePassword)?;
     let mut plain = Vec::new();
     r.read_to_end(&mut plain).map_err(|_| not_ours())?;

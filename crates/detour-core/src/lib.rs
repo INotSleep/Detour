@@ -185,6 +185,17 @@ impl From<serde_json::Error> for Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Opens what a passphrase sealed, on any of this person's devices. age caps the scrypt work
+/// factor it accepts by timing this device right now, which turns down a file sealed on a
+/// faster device, or at a moment this one was less busy (a pairing code made on a desktop and
+/// typed on a phone, a vault unlocked under load). The cap is fixed instead: 2^22, as far as
+/// age advises.
+pub(crate) fn scrypt_identity(secret: &str) -> age::scrypt::Identity {
+    let mut id = age::scrypt::Identity::new(age::secrecy::SecretString::from(secret.to_owned()));
+    id.set_max_work_factor(22);
+    id
+}
+
 pub fn new_id() -> String {
     uuid::Uuid::new_v4().simple().to_string()
 }

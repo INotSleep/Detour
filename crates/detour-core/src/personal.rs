@@ -280,7 +280,7 @@ pub fn redeem(vault: &Path, meta: &VaultMeta, code: &str) -> Result<Identity> {
             return Err(Error::InvalidCode);
         }
         let file = offer_file(vault, &code[..LOCATOR]).ok_or(Error::InvalidCode)?;
-        let id = age::scrypt::Identity::new(SecretString::from(code[LOCATOR..].to_string()));
+        let id = crate::scrypt_identity(&code[LOCATOR..]);
         let plain = age::decrypt(&id, &std::fs::read(file)?).map_err(|_| Error::InvalidCode)?;
         let offer: Offer = serde_json::from_slice(&plain).map_err(|_| Error::InvalidCode)?;
         if offer.vault != meta.id {
