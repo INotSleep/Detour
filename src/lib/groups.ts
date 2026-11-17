@@ -155,9 +155,17 @@ export function fromGroups(ws: Workspace, host: Host): FromGroups {
   return out;
 }
 
-/** The user a host is logged in as: a group's login of this person's, else their own login, else the host's. */
+/** The host as it logs in: user and auth from a group's login of this person's, else their own
+ *  login while it is on, else the host's (what the core's `login_in` picks). */
+export function asLoggedIn(ws: Workspace, host: Host): Host {
+  const g = fromGroups(ws, host).login?.prefs;
+  const own = host.own?.active ? host.own : undefined;
+  return { ...host, user: g?.user || own?.user || host.user, auth: g?.auth ?? own?.auth ?? host.auth, own: undefined };
+}
+
+/** The user a host is logged in as. */
 export function loginUser(ws: Workspace, host: Host): string {
-  return fromGroups(ws, host).login?.prefs.user || (host.own?.active ? host.own.user : host.user);
+  return asLoggedIn(ws, host).user;
 }
 
 /* ---------- this person's own grouping of a team's hosts ---------- */

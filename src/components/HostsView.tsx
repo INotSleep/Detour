@@ -6,7 +6,7 @@ import { sshCommand } from "../lib/sshConfig";
 import type { Host } from "../lib/types";
 import { HostIcon, authLabel, groupLabel, isNoGroup } from "./common";
 import { atLeast, canManage, writable } from "../lib/teams";
-import { addGroup, fromGroups, layoutFrom, listGroups, listMine, mineAdd, mineMoveGroup, mineMoveHost, mineRemove, mineRename, moveGroup, moveHost, removeGroup, renameGroup, type ListedGroup } from "../lib/groups";
+import { addGroup, asLoggedIn, fromGroups, layoutFrom, listGroups, listMine, mineAdd, mineMoveGroup, mineMoveHost, mineRemove, mineRename, moveGroup, moveHost, removeGroup, renameGroup, type ListedGroup } from "../lib/groups";
 import { GroupSettingsDialog, groupPrefsKey } from "./GroupSettings";
 import type { Layout } from "../lib/types";
 import { OwnLoginSection, SavedPassword } from "./HostLogin";
@@ -138,7 +138,7 @@ export function HostsView() {
   };
 
   const copyCmd = async (h: Host) => {
-    const ok = await copyText(sshCommand(h, ws.hosts));
+    const ok = await copyText(sshCommand(asLoggedIn(ws, h), ws.hosts.map((x) => asLoggedIn(ws, x))));
     toast(ok ? { text: t.hosts.sshCommandCopied, tone: "success" } : { text: t.common.copyFailed, tone: "error" });
   };
 

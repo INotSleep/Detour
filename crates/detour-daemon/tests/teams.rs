@@ -85,6 +85,14 @@ async fn team_flow_over_the_socket() {
     let view = ok(&bob, "team_own_login_set", json!({ "id": id, "hostId": "h1", "login": { "user": "bob", "auth": { "type": "password" }, "newPassword": "bobs" } })).await;
     assert_eq!(view["data"]["hosts"][0]["own"]["hasPassword"], true);
     assert_eq!(ok(&bob, "host_password", json!({ "vaultId": id, "hostId": "h1", "own": true })).await, "bobs");
+    // Exports show the login it really uses: his own while it is on, the shared one once it's off.
+    let config = |v: Value| v["config"].as_str().unwrap().to_string();
+    let exported = config(ok(&bob, "hosts_export", json!({ "vaultId": id, "hostIds": ["h1"] })).await);
+    assert!(exported.contains("User bob"), "{exported}");
+    ok(&bob, "team_own_login_set", json!({ "id": id, "hostId": "h1", "login": { "user": "bob", "auth": { "type": "password" }, "active": false } })).await;
+    let exported = config(ok(&bob, "hosts_export", json!({ "vaultId": id, "hostIds": ["h1"] })).await);
+    assert!(exported.contains("User deploy"), "{exported}");
+    ok(&bob, "team_own_login_set", json!({ "id": id, "hostId": "h1", "login": { "user": "bob", "auth": { "type": "password" }, "active": true } })).await;
 
     // The matrix: Alice gives Bob Edit on the host.
     let view = ok(&alice, "team_access_set", json!({ "id": id, "changes": [{ "record": "h1", "member": bob_member, "level": "edit" }] })).await;

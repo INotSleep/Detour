@@ -10,7 +10,7 @@ const arg = (s: string) => (/\s/.test(s) ? `"${s}"` : s);
 
 /** Who logs in: a team host may have your own login instead of the shared one. */
 function login(h: Host): { user: string; auth: Auth } {
-  return h.own ? { user: h.own.user, auth: h.own.auth } : { user: h.user, auth: h.auth };
+  return h.own?.active ? { user: h.own.user, auth: h.own.auth } : { user: h.user, auth: h.auth };
 }
 
 /** The keys these hosts log in with. */

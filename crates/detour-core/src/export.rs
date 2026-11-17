@@ -54,8 +54,8 @@ fn arg(s: &str) -> String {
 /// Who logs in: a team host may have this person's own login instead of the shared one.
 fn login(h: &HostView) -> (&str, &Auth) {
     match &h.own {
-        Some(o) => (&o.user, &o.auth),
-        None => (&h.user, &h.auth),
+        Some(o) if o.active => (&o.user, &o.auth),
+        _ => (&h.user, &h.auth),
     }
 }
 

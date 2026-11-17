@@ -643,10 +643,17 @@ pub(crate) async fn dispatch(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value
             let a = args!(method, p, { vault_id: String, host_ids: Option<Vec<String>>, key_dir: Option<String> });
             let s = s!();
             let personal = s.view().map_err(err)?;
-            let (hosts, mut keys, proxies) = if a.vault_id == PERSONAL { (personal.hosts, personal.keys.clone(), personal.proxies) } else {
+            let (mut hosts, mut keys, proxies) = if a.vault_id == PERSONAL { (personal.hosts, personal.keys.clone(), personal.proxies) } else {
                 let team = s.team_view(&a.vault_id).map_err(err)?;
                 (team.data.hosts, team.data.keys, team.data.proxies)
             };
+            // Each host as it logs in: a group's login of this person's or their own login (while
+            // it is on) stands in for the shared one.
+            for h in &mut hosts {
+                if let Ok((user, auth)) = s.login_as(&a.vault_id, &h.id) {
+                    (h.user, h.auth, h.own) = (user, auth, None);
+                }
+            }
             // An own login for a team host uses a personal key.
             if a.vault_id != PERSONAL {
                 keys.extend(personal.keys);

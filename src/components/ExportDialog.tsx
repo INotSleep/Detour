@@ -4,6 +4,7 @@ import { api, errorText, type FileCounts, type FileInclude } from "../lib/api";
 import { copyText, useStore } from "../lib/store";
 import { keyFileName, keysOf, sshConfig, withJumps } from "../lib/sshConfig";
 import type { Host } from "../lib/types";
+import { asLoggedIn, loginUser } from "../lib/groups";
 import { Button, Checkbox, Field, Modal, PasswordInput, Segmented } from "./ui";
 import { useT } from "../i18n";
 
@@ -24,11 +25,13 @@ export function ExportDialog({ hosts, initial, onClose }: { hosts: Host[]; initi
   const [repeat, setRepeat] = useState("");
   const [tried, setTried] = useState(false);
 
-  const picked = hosts.filter((h) => chosen.has(h.id));
-  const keys = useMemo(() => keysOf(withJumps(picked, ws.hosts), ws.keys), [picked, ws.hosts, ws.keys]);
+  // Hosts as they log in (a group's or this person's own login), as the core's export has them.
+  const loggedIn = useMemo(() => ws.hosts.map((h) => asLoggedIn(ws, h)), [ws]);
+  const picked = hosts.filter((h) => chosen.has(h.id)).map((h) => asLoggedIn(ws, h));
+  const keys = useMemo(() => keysOf(withJumps(picked, loggedIn), ws.keys), [picked, loggedIn, ws.keys]);
   // The app's export is the core's, the same as `detour hosts export`; the demo makes its own.
   const ids = picked.map((h) => h.id).join(",");
-  const demoText = useMemo(() => (!api.real && picked.length ? sshConfig(picked, ws.hosts, ws.keys, ws.proxies) : ""), [picked, ws.hosts, ws.keys, ws.proxies]);
+  const demoText = useMemo(() => (!api.real && picked.length ? sshConfig(picked, loggedIn, ws.keys, ws.proxies) : ""), [picked, loggedIn, ws.keys, ws.proxies]);
   const [coreText, setCoreText] = useState("");
   useEffect(() => {
     if (!api.real || !ids) return setCoreText("");
@@ -40,9 +43,9 @@ export function ExportDialog({ hosts, initial, onClose }: { hosts: Host[]; initi
   useEffect(() => {
     if (format !== "file" || !ids) return setCounts(null);
     if (!api.real) {
-      const all = withJumps(picked, ws.hosts);
+      const withJ = withJumps(picked, loggedIn);
       const distinct = (xs: (string | undefined | null)[]) => new Set(xs.filter(Boolean)).size;
-      return setCounts({ hosts: all.length, passwords: all.filter((h) => h.hasPassword).length, keys: keys.length, proxies: distinct(all.map((h) => h.proxyId)), knownHosts: all.length, groups: distinct(all.map((h) => h.group)) });
+      return setCounts({ hosts: withJ.length, passwords: withJ.filter((h) => h.hasPassword).length, keys: keys.length, proxies: distinct(withJ.map((h) => h.proxyId)), knownHosts: withJ.length, groups: distinct(withJ.map((h) => h.group)) });
     }
     let live = true;
     api.hostsFileCounts(hosts[0]!.vaultId, ids.split(",")).then((c) => live && setCounts(c)).catch(() => {});
@@ -89,7 +92,7 @@ export function ExportDialog({ hosts, initial, onClose }: { hosts: Host[]; initi
           const where = await api.keyFilesSave(dir, keys.map((key) => ({ key, name: keyFileName(key.name) })));
           keys.forEach((k, i) => (paths[k.id] = where[i]));
         }
-        await api.writeTextFile(path, sshConfig(picked, ws.hosts, ws.keys, ws.proxies, paths));
+        await api.writeTextFile(path, sshConfig(picked, loggedIn, ws.keys, ws.proxies, paths));
       }
       toast({ text: saveKeys ? t.hosts.export.savedWithKeys(path, t.common.keyCount(keys.length)) : t.hosts.export.saved(path), tone: "success" });
       onClose();
@@ -153,7 +156,7 @@ export function ExportDialog({ hosts, initial, onClose }: { hosts: Host[]; initi
               <span className="import-main">
                 <span className="import-alias">{h.label}</span>
                 <span className="import-addr mono">
-                  {h.own?.user ?? h.user}@{h.address}{h.port !== 22 && `:${h.port}`}
+                  {loginUser(ws, h)}@{h.address}{h.port !== 22 && `:${h.port}`}
                   {via && (
                     <>
                       {" "}

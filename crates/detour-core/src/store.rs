@@ -966,6 +966,13 @@ impl Store {
 
     /// Everything a connection to a host needs: its login, its pinned key, and the way
     /// to it (a jump host of the same vault, with its own login, or a proxy).
+    /// The user and login a host is reached with: this person's group settings, then their own
+    /// login while it is on, then the host's (as `ssh` and exports should show it).
+    pub fn login_as(&self, vault: &str, host_id: &str) -> Result<(String, Auth)> {
+        let (host, _, _) = self.login_in(vault, host_id)?;
+        Ok((host.user, host.auth))
+    }
+
     pub fn connect_request_in(&self, vault: &str, host_id: &str, secret: Option<String>, trust_fingerprint: Option<String>) -> Result<ssh::ConnectRequest> {
         self.request_via(vault, host_id, secret, trust_fingerprint, &mut Vec::new())
     }
