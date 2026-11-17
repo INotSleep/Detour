@@ -274,6 +274,24 @@ fn host_changes(base: &Value, next: &Value) -> (Vec<String>, Vec<String>) {
     (touched, added)
 }
 
+/// The hosts the tunnels an agent changes go through: as it saw them, as it wants them and as
+/// they are saved (what it says it saw is not taken on trust).
+fn tunnel_vias(base: &Value, next: &Value, saved: &[detour_core::model::Tunnel]) -> BTreeSet<String> {
+    let ids = |v: &Value| -> HashMap<String, Value> { v["tunnels"].as_array().into_iter().flatten().map(|t| (str_arg(t, "id").to_string(), t.clone())).collect() };
+    let (before, after) = (ids(base), ids(next));
+    let changed = before.keys().chain(after.keys()).filter(|id| before.get(*id) != after.get(*id));
+    let mut vias = BTreeSet::new();
+    for id in changed {
+        for t in [before.get(id), after.get(id)].into_iter().flatten() {
+            vias.insert(str_arg(t, "viaHostId").to_string());
+        }
+        if let Some(t) = saved.iter().find(|t| t.id == *id) {
+            vias.insert(t.via_host_id.clone());
+        }
+    }
+    vias
+}
+
 /// The agent's own session; another one's is refused as if it didn't exist.
 fn own_session(core: &Core, t: &AgentToken, id: &str) -> Result<Arc<crate::sessions::Session>, Value> {
     core.sessions.get(id).filter(|s| s.info.owner.token_id() == Some(t.id.as_str())).ok_or_else(|| json!({ "kind": "notYourSession" }))
@@ -344,6 +362,24 @@ pub(crate) async fn call(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value) ->
                 })
                 .collect();
             Ok(json!(hosts))
+        }
+        // The person's tunnels and their teams', like the hosts: each as saved, with where it is.
+        "agent_tunnels" => {
+            let s = core.store.lock().map_err(poisoned)?;
+            if !s.is_unlocked() {
+                return Err(err(Error::Locked));
+            }
+            let hosts = all_hosts(&s)?;
+            let mut vaults = vec![(PERSONAL.to_string(), None, s.view().map_err(err)?.tunnels)];
+            vaults.extend(s.teams().into_iter().filter_map(|t| t.view.map(|v| (t.id, Some(v.name), v.data.tunnels))));
+            let mut out = Vec::new();
+            for (vault_id, team, tunnels) in vaults {
+                for t in tunnels {
+                    let via = hosts.iter().find(|(l, _)| l.vault_id == vault_id && l.host_id == t.via_host_id).map(|(l, _)| l.label.clone());
+                    out.push(json!({ "vaultId": vault_id, "team": team, "via": via, "tunnel": t }));
+                }
+            }
+            Ok(json!(out))
         }
         "agent_request" => {
             let a = a!({ agent: String, hosts: Vec<String>, scopes: Vec<Scope>, ttl: Option<Ttl>, reason: Option<String>, wait_secs: Option<u64> });
@@ -544,6 +580,7 @@ pub(crate) async fn call(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value) ->
                     }
                 }
                 // A team's hosts: only those it reaches change; new ones only with the whole team.
+                // Its tunnels: only through hosts it reaches, before and after.
                 "team_put" => {
                     need(&t, Scope::VaultEdit)?;
                     let team = str_arg(&params, "id").to_string();
@@ -551,7 +588,7 @@ pub(crate) async fn call(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value) ->
                     if !base.is_object() || !update.is_object() {
                         return Err(json!({ "kind": "badArguments", "message": "base" }));
                     }
-                    for key in ["keys", "snippets", "tunnels", "proxies", "groups"] {
+                    for key in ["keys", "snippets", "proxies", "groups"] {
                         if update.get(key) != base.get(key) {
                             return Err(json!({ "kind": "forbidden" }));
                         }
@@ -563,6 +600,10 @@ pub(crate) async fn call(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value) ->
                     }
                     if !added.is_empty() && !t.reaches_vault(&team) {
                         return Err(json!({ "kind": "agentHost" }));
+                    }
+                    let saved = s.team_view(&team).map_err(err)?.data.tunnels;
+                    for via in tunnel_vias(&base, &update, &saved) {
+                        need_host(&s, &t, &team, &via)?;
                     }
                 }
                 "key_generate" | "key_import" => {

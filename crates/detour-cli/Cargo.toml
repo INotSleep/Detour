@@ -25,5 +25,10 @@ schemars = "1"
 vt100 = "0.18"
 base64 = "0.22"
 
+[dev-dependencies]
+russh = { version = "0.64.1", default-features = false, features = ["ring", "rsa", "flate2"] }
+rand = { version = "0.10.3", features = ["thread_rng"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_System_Console", "Win32_Foundation"] }

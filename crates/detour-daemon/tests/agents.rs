@@ -356,3 +356,46 @@ async fn an_agent_changes_a_teams_hosts_only_where_its_rule_reaches() {
     assert_eq!((user("a"), user("b")), (json!("broglie"), json!("root")));
     let _ = std::fs::remove_dir_all(&shared);
 }
+
+#[tokio::test]
+async fn an_agent_changes_a_teams_tunnels_only_through_hosts_its_rule_reaches() {
+    let socket = start("team-tunnels").await;
+    let me = person(&socket).await;
+    let agent = hello(&socket, "mcp").await;
+    let shared = std::env::temp_dir().join(format!("detour-agents-tunnels-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    let recovery = ok(&me, "recovery_key_new", json!({})).await;
+    let team = ok(&me, "team_create", json!({ "path": shared.display().to_string(), "name": "Acme", "myName": "Me", "recoveryKey": recovery })).await;
+    let tid = team["id"].as_str().unwrap().to_string();
+    let h = |id: &str, group: &str| json!({ "id": id, "group": group, "label": id, "address": "10.0.0.1", "port": 22, "user": "root", "auth": { "type": "agent" }, "tags": [], "hasPassword": false });
+    let tun = |id: &str, via: &str, port: u16| json!({ "id": id, "name": id, "kind": "local", "bindPort": port, "viaHostId": via, "target": "localhost:443" });
+    let with = |tunnels: Vec<Value>| json!({ "hosts": [], "keys": [], "snippets": [], "tunnels": tunnels });
+    let update = json!({ "hosts": [h("a", "Prod"), h("b", "Stage")], "keys": [], "snippets": [], "tunnels": [tun("ta", "a", 1000), tun("tb", "b", 2000)] });
+    ok(&me, "team_put", json!({ "id": tid, "update": update })).await;
+
+    // Everyone sees the team's tunnels with where they are, as the hosts.
+    let listed = ok(&agent, "agent_tunnels", json!({})).await;
+    let names: Vec<(Value, Value, Value)> = listed.as_array().unwrap().iter().map(|t| (t["team"].clone(), t["via"].clone(), t["tunnel"]["name"].clone())).collect();
+    assert_eq!(names, vec![(json!("Acme"), json!("a"), json!("ta")), (json!("Acme"), json!("b"), json!("tb"))]);
+
+    let made = rule(&me, None, json!([{ "type": "group", "vaultId": tid, "name": "Prod" }]), json!(["vault:edit"])).await;
+    let token = made["token"].as_str().unwrap().to_string();
+    let put = |next: Value, base: Value| json!({ "token": token, "method": "team_put", "params": { "id": tid, "update": next, "base": base } });
+    let seen = with(vec![tun("ta", "a", 1000), tun("tb", "b", 2000)]);
+
+    // Through `a` (in its group): added and changed. Through `b`, or moved to `b`: refused.
+    assert_eq!(kind(agent.call("agent_call", put(with(vec![tun("ta", "a", 1001), tun("tb", "b", 2000), tun("tc", "a", 3000)]), seen.clone())).await), "ok");
+    let seen = with(vec![tun("ta", "a", 1001), tun("tb", "b", 2000), tun("tc", "a", 3000)]);
+    assert_eq!(kind(agent.call("agent_call", put(with(vec![tun("ta", "a", 1001), tun("tb", "b", 2001), tun("tc", "a", 3000)]), seen.clone())).await), "agentHost");
+    assert_eq!(kind(agent.call("agent_call", put(with(vec![tun("ta", "a", 1001), tun("tb", "b", 2000), tun("tc", "b", 3000)]), seen.clone())).await), "agentHost");
+    assert_eq!(kind(agent.call("agent_call", put(with(vec![tun("ta", "a", 1001), tun("tc", "a", 3000)]), seen.clone())).await), "agentHost");
+    // Saying `tb` went through `a` doesn't make it so: what is saved counts.
+    let lie = with(vec![tun("ta", "a", 1001), tun("tb", "a", 2000), tun("tc", "a", 3000)]);
+    assert_eq!(kind(agent.call("agent_call", put(with(vec![tun("ta", "a", 1001), tun("tb", "a", 2001), tun("tc", "a", 3000)]), lie.clone())).await), "agentHost");
+    assert_eq!(kind(agent.call("agent_call", put(with(vec![tun("ta", "a", 1001), tun("tc", "a", 3000)]), lie)).await), "agentHost");
+
+    let teams = ok(&me, "teams_list", json!({})).await;
+    let mut ports: Vec<(String, u64)> = teams[0]["view"]["data"]["tunnels"].as_array().unwrap().iter().map(|t| (t["id"].as_str().unwrap().to_string(), t["bindPort"].as_u64().unwrap())).collect();
+    ports.sort();
+    assert_eq!(ports, vec![("ta".into(), 1001), ("tb".into(), 2000), ("tc".into(), 3000)]);
+    let _ = std::fs::remove_dir_all(&shared);
+}

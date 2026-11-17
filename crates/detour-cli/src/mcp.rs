@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration as Span, Instant};
 
+use detour_core::model::{Tunnel, TunnelKind};
 use detour_ipc::Client;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -55,7 +56,7 @@ enum Scope {
     /// Start and stop the person's saved tunnels through the host.
     #[serde(rename = "tunnels")]
     Tunnels,
-    /// Add and change hosts, snippets and keys in the person's vault, and change a team's hosts.
+    /// Add and change hosts, snippets, tunnels and keys in the person's vault, and change a team's hosts.
     #[serde(rename = "vault:edit")]
     VaultEdit,
     /// Accept the key of a server no one has connected to yet (a changed key is never accepted).
@@ -241,6 +242,144 @@ struct AddSnippet {
     name: String,
     /// The command it runs.
     command: String,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+enum Kind {
+    /// `ssh -L`: a port on this computer leads to `target` as the host sees it.
+    Local,
+    /// `ssh -R`: a port on the host leads to `target` as this computer sees it.
+    Remote,
+    /// `ssh -D`: a SOCKS5 proxy on this computer that goes out through the host.
+    Dynamic,
+}
+
+impl From<Kind> for TunnelKind {
+    fn from(k: Kind) -> Self {
+        match k {
+            Kind::Local => TunnelKind::Local,
+            Kind::Remote => TunnelKind::Remote,
+            Kind::Dynamic => TunnelKind::Dynamic,
+        }
+    }
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct AddTunnel {
+    name: String,
+    kind: Kind,
+    /// The host it goes through: a host of the person's vault, by name.
+    via: String,
+    /// The port it listens on: on this computer (local, dynamic) or on the host (remote). For local, default: the target's port.
+    port: Option<u16>,
+    /// host:port it leads to (local, remote). Not for dynamic.
+    target: Option<String>,
+    /// Start it right away (needs the tunnels scope on the host). Default false.
+    start: Option<bool>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct UpdateTunnel {
+    /// The tunnel to change.
+    tunnel: String,
+    name: Option<String>,
+    /// Changing it to dynamic drops the target.
+    kind: Option<Kind>,
+    via: Option<String>,
+    port: Option<u16>,
+    target: Option<String>,
+}
+
+/// A host among agent_hosts by id, name or `team/name`.
+fn find_host<'a>(all: &'a Value, host: &str) -> std::result::Result<&'a Value, String> {
+    let n = host.to_lowercase();
+    let found: Vec<&Value> = all
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|h| s(&h["id"]) == host || s(&h["name"]).to_lowercase() == n || h["team"].as_str().is_some_and(|t| format!("{}/{}", t.to_lowercase(), s(&h["name"]).to_lowercase()) == n))
+        .collect();
+    match found.as_slice() {
+        [h] => Ok(h),
+        [] => Err(format!("No host called {host}.")),
+        _ => Err(format!("Several hosts are called {host}: use team/name.")),
+    }
+}
+
+/// A tunnel's name as list_tunnels shows it (`team/name` for a team's).
+fn tunnel_label(t: &Value) -> String {
+    match t["team"].as_str() {
+        Some(team) => format!("{team}/{}", s(&t["tunnel"]["name"])),
+        None => s(&t["tunnel"]["name"]),
+    }
+}
+
+/// A tunnel among agent_tunnels by id, name or `team/name`.
+fn find_tunnel<'a>(all: &'a [Value], name: &str) -> std::result::Result<&'a Value, String> {
+    let n = name.to_lowercase();
+    let mut found: Vec<&Value> = all.iter().filter(|t| t["tunnel"]["id"] == name || tunnel_label(t).to_lowercase() == n).collect();
+    if found.is_empty() && !n.contains('/') {
+        found = all.iter().filter(|t| s(&t["tunnel"]["name"]).to_lowercase() == n).collect();
+    }
+    match found.as_slice() {
+        [t] => Ok(t),
+        [] => Err(format!("No tunnel called {name} (list_tunnels shows them).")),
+        _ => Err(format!("Several tunnels are called {name}: {}. Use one of these names.", found.iter().map(|t| tunnel_label(t)).collect::<Vec<_>>().join(", "))),
+    }
+}
+
+/// The saved tunnels of one vault, as they are stored.
+fn tunnels_in(all: &[Value], vault: &str) -> Vec<Value> {
+    all.iter().filter(|t| t["vaultId"] == vault).map(|t| t["tunnel"].clone()).collect()
+}
+
+/// A tunnel's name, free among the other tunnels of its vault (they are found by name).
+fn tunnel_name(tunnels: &[Value], name: &str, own_id: Option<&str>) -> std::result::Result<String, String> {
+    let name = name.trim();
+    if name.is_empty() || name.contains('/') {
+        return Err("Give the tunnel a name, without '/'.".into());
+    }
+    let taken = tunnels.iter().any(|t| s(&t["name"]).eq_ignore_ascii_case(name) && own_id.is_none_or(|id| t["id"] != id));
+    if taken {
+        return Err(format!("There is already a tunnel called {name} there."));
+    }
+    Ok(name.to_string())
+}
+
+/// A tunnel as the core will run it, or what is wrong with it.
+fn checked(t: Tunnel) -> std::result::Result<Value, String> {
+    match (t.kind, &t.target) {
+        (TunnelKind::Dynamic, Some(_)) => return Err("A dynamic tunnel takes no target: it is a SOCKS5 proxy to anywhere.".into()),
+        (TunnelKind::Dynamic, None) => {}
+        (_, None) => return Err("This kind of tunnel needs a target: host:port.".into()),
+        (_, Some(x)) => {
+            detour_core::tunnel::parse_target(x).map_err(|_| format!("{x} is not host:port."))?;
+        }
+    }
+    if t.bind_port == 0 {
+        return Err(match t.kind {
+            TunnelKind::Remote => "Give port: the port to open on the host.",
+            TunnelKind::Dynamic => "Give port: the port of the SOCKS5 proxy on this computer (1080 is usual).",
+            TunnelKind::Local => "Give port: the port to open on this computer.",
+        }
+        .into());
+    }
+    serde_json::to_value(t).map_err(|e| e.to_string())
+}
+
+/// Where a running tunnel is reached, in a sentence.
+fn tunnel_reach(t: &Value, via: &str) -> String {
+    let (port, target) = (s(&t["bindPort"]), s(&t["target"]));
+    match t["kind"].as_str() {
+        Some("remote") => format!("port {port} on {via} leads to {target} on this computer"),
+        Some("dynamic") => format!("a SOCKS5 proxy at localhost:{port} goes out through {via}"),
+        _ => format!("localhost:{port} leads to {target} through {via}"),
+    }
+}
+
+fn some_text(v: Option<String>) -> Option<String> {
+    v.map(|x| x.trim().to_string()).filter(|x| !x.is_empty())
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -445,7 +584,7 @@ impl Detour {
                     if e["kind"] == "tokenInvalid" {
                         self.grants.lock().unwrap().retain(|x| x.secret != g.secret);
                     }
-                    let worth = !matches!(e["kind"].as_str(), Some("agentScope" | "agentHost" | "tokenInvalid" | "notYourSession" | "notYourFiles"));
+                    let worth = !matches!(e["kind"].as_str(), Some("agentScope" | "agentHost" | "tokenInvalid" | "notYourSession" | "notYourFiles" | "notYourTunnel"));
                     last = e;
                     if worth {
                         break;
@@ -545,18 +684,7 @@ impl Detour {
     /// The vault a host to change is in, and that vault's hosts: a host by name, `team/name` or id.
     async fn hosts_of(&self, host: &str) -> Result<(String, Value), String> {
         let all = self.core("agent_hosts", json!({})).await.map_err(|e| explain(&e))?;
-        let n = host.to_lowercase();
-        let found: Vec<&Value> = all
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|h| s(&h["id"]) == host || s(&h["name"]).to_lowercase() == n || h["team"].as_str().is_some_and(|t| format!("{}/{}", t.to_lowercase(), s(&h["name"]).to_lowercase()) == n))
-            .collect();
-        let vault = match found.as_slice() {
-            [h] => s(&h["vaultId"]),
-            [] => return Err(format!("No host called {host}.")),
-            _ => return Err(format!("Several hosts are called {host}: use team/name.")),
-        };
+        let vault = s(&find_host(&all, host)?["vaultId"]);
         Ok((vault.clone(), self.vault_hosts(&vault).await?))
     }
 
@@ -886,18 +1014,61 @@ impl Detour {
 
     /* ---------- tunnels and snippets ---------- */
 
-    #[tool(description = "The person's saved tunnels and whether they run.")]
+    /// The person's tunnels and their teams' (see `agent_tunnels`).
+    async fn all_tunnels(&self) -> Result<Vec<Value>, String> {
+        let r = self.core("agent_tunnels", json!({})).await.map_err(|e| explain(&e))?;
+        Ok(r.as_array().cloned().unwrap_or_default())
+    }
+
+    /// The tunnels running now (empty without the tunnels scope).
+    async fn tunnel_states(&self) -> Value {
+        self.with_tokens(|_| true, "agent_call", |token| json!({ "token": token, "method": "tunnels_status" })).await.map(|r| r.1).unwrap_or(json!([]))
+    }
+
+    async fn tunnel_on(&self, vault: &str, id: &str) -> bool {
+        self.tunnel_states().await.as_array().into_iter().flatten().any(|x| x["key"] == format!("{vault}/{id}") && x["state"] == "on")
+    }
+
+    /// Starts or stops a tunnel of a vault.
+    async fn tunnel_call(&self, vault: &str, id: &str, method: &str) -> Result<Value, String> {
+        let params = json!({ "vaultId": vault, "tunnelId": id });
+        Ok(self.with_tokens(|_| true, "agent_call", |token| json!({ "token": token, "method": method, "params": params })).await?.1)
+    }
+
+    async fn tunnel(&self, name: &str, method: &str) -> Result<Value, String> {
+        let all = self.all_tunnels().await?;
+        let t = find_tunnel(&all, name)?;
+        self.tunnel_call(&s(&t["vaultId"]), &s(&t["tunnel"]["id"]), method).await
+    }
+
+    /// Saves changed tunnels of a vault: the personal one, or a team (only the tunnels change).
+    async fn put_tunnels(&self, vault: &str, base: Vec<Value>, next: Vec<Value>) -> Result<(), String> {
+        if vault == detour_core::store::PERSONAL {
+            let all = self.vault().await?;
+            let (mut b, mut n) = (all.clone(), all);
+            (b["tunnels"], n["tunnels"]) = (json!(base), json!(next));
+            return self.put(&b, &n).await;
+        }
+        let with = |tunnels: &Vec<Value>| json!({ "hosts": [], "keys": [], "snippets": [], "tunnels": tunnels });
+        self.with_tokens(|_| true, "agent_call", |token| json!({ "token": token, "method": "team_put", "params": { "id": vault, "update": with(&next), "base": with(&base) } })).await?;
+        Ok(())
+    }
+
+    #[tool(description = "The person's saved tunnels and their teams', and whether they run.")]
     async fn list_tunnels(&self) -> Out {
-        let d = self.vault().await?;
-        let status = self.with_tokens(|_| true, "agent_call", |token| json!({ "token": token, "method": "tunnels_status" })).await.map(|r| r.1).unwrap_or(json!([]));
-        let list: Vec<Value> = d["tunnels"]
-            .as_array()
-            .into_iter()
-            .flatten()
+        let all = self.all_tunnels().await?;
+        let status = self.tunnel_states().await;
+        let list: Vec<Value> = all
+            .iter()
             .map(|t| {
-                let state = status.as_array().into_iter().flatten().find(|x| x["key"] == format!("personal/{}", s(&t["id"]))).map(|x| x["state"].clone()).unwrap_or(json!("off"));
-                let via = d["hosts"].as_array().into_iter().flatten().find(|h| h["id"] == t["viaHostId"]).map(|h| h["label"].clone()).unwrap_or_default();
-                json!({ "name": t["name"], "kind": t["kind"], "port": t["bindPort"], "target": t["target"], "via": via, "state": state })
+                let x = &t["tunnel"];
+                let key = format!("{}/{}", s(&t["vaultId"]), s(&x["id"]));
+                let state = status.as_array().into_iter().flatten().find(|st| st["key"] == key).map(|st| st["state"].clone()).unwrap_or(json!("off"));
+                let via = match t["team"].as_str() {
+                    Some(team) => format!("{team}/{}", s(&t["via"])),
+                    None => s(&t["via"]),
+                };
+                json!({ "name": tunnel_label(t), "kind": x["kind"], "port": x["bindPort"], "target": x["target"], "via": via, "state": state })
             })
             .collect();
         Ok(serde_json::to_string_pretty(&list).unwrap_or_default())
@@ -915,11 +1086,91 @@ impl Detour {
         Ok("Stopped.".into())
     }
 
-    async fn tunnel(&self, name: &str, method: &str) -> Result<Value, String> {
-        let d = self.vault().await?;
-        let t = d["tunnels"].as_array().into_iter().flatten().find(|t| s(&t["name"]).eq_ignore_ascii_case(name) || t["id"] == name).cloned().ok_or_else(|| format!("No tunnel called {name}."))?;
-        let params = json!({ "vaultId": "personal", "tunnelId": t["id"] });
-        Ok(self.with_tokens(|_| true, "agent_call", |token| json!({ "token": token, "method": method, "params": params })).await?.1)
+    #[tool(description = "Save a tunnel through a host (needs vault:edit; for a team's host, one your access reaches): \
+        local (ssh -L), remote (ssh -R) or dynamic (SOCKS5, ssh -D).")]
+    async fn add_tunnel(&self, Parameters(a): Parameters<AddTunnel>) -> Out {
+        let hosts = self.core("agent_hosts", json!({})).await.map_err(|e| explain(&e))?;
+        let via = find_host(&hosts, &a.via)?;
+        let vault = s(&via["vaultId"]);
+        let all = self.all_tunnels().await?;
+        let base = tunnels_in(&all, &vault);
+        let name = tunnel_name(&base, &a.name, None)?;
+        let target = some_text(a.target);
+        let kind = TunnelKind::from(a.kind);
+        let from_target = || target.as_deref().and_then(|x| detour_core::tunnel::parse_target(x).ok()).map(|x| x.1);
+        let port = a.port.or_else(|| if kind == TunnelKind::Local { from_target() } else { None }).unwrap_or(0);
+        let t = Tunnel { id: detour_core::new_id(), name: name.clone(), kind, bind_port: port, via_host_id: s(&via["id"]), target };
+        let id = t.id.clone();
+        let t = checked(t)?;
+        let reach = tunnel_reach(&t, &a.via);
+        let mut next = base.clone();
+        next.push(t);
+        self.put_tunnels(&vault, base, next).await?;
+        let label = match via["team"].as_str() {
+            Some(team) => format!("{team}/{name}"),
+            None => name,
+        };
+        if a.start != Some(true) {
+            return Ok(format!("Added {label}. Start it with start_tunnel."));
+        }
+        match self.tunnel_call(&vault, &id, "tunnel_start").await {
+            Ok(_) => Ok(format!("Added and started {label}: {reach}.")),
+            Err(e) => Err(format!("Added {label}, but it did not start: {e}")),
+        }
+    }
+
+    #[tool(description = "Change a saved tunnel (needs vault:edit; for a team's, through a host your access reaches).")]
+    async fn update_tunnel(&self, Parameters(a): Parameters<UpdateTunnel>) -> Out {
+        let all = self.all_tunnels().await?;
+        let found = find_tunnel(&all, &a.tunnel)?;
+        let vault = s(&found["vaultId"]);
+        let base = tunnels_in(&all, &vault);
+        let mut t: Tunnel = serde_json::from_value(found["tunnel"].clone()).map_err(|e| e.to_string())?;
+        if let Some(n) = &a.name {
+            t.name = tunnel_name(&base, n, Some(&t.id))?;
+        }
+        if let Some(k) = a.kind {
+            t.kind = k.into();
+            if t.kind == TunnelKind::Dynamic && a.target.is_none() {
+                t.target = None;
+            }
+        }
+        if let Some(v) = &a.via {
+            let hosts = self.core("agent_hosts", json!({})).await.map_err(|e| explain(&e))?;
+            let h = find_host(&hosts, v)?;
+            if h["vaultId"] != vault.as_str() {
+                return Err(format!("{v} is not where {} is: a tunnel goes through a host of its own vault (or team).", a.tunnel));
+            }
+            t.via_host_id = s(&h["id"]);
+        }
+        if let Some(p) = a.port {
+            t.bind_port = p;
+        }
+        if a.target.is_some() {
+            t.target = some_text(a.target);
+        }
+        let id = t.id.clone();
+        let t = checked(t)?;
+        let next: Vec<Value> = base.iter().map(|x| if x["id"] == id.as_str() { t.clone() } else { x.clone() }).collect();
+        self.put_tunnels(&vault, base, next).await?;
+        if self.tunnel_on(&vault, &id).await {
+            return Ok("Saved. It is running with the old settings until it is started again (stop_tunnel, then start_tunnel).".into());
+        }
+        Ok("Saved.".into())
+    }
+
+    #[tool(description = "Remove a saved tunnel (needs vault:edit; for a team's, through a host your access reaches). A tunnel you started is stopped first.")]
+    async fn remove_tunnel(&self, Parameters(a): Parameters<NameArg>) -> Out {
+        let all = self.all_tunnels().await?;
+        let found = find_tunnel(&all, &a.name)?;
+        let (vault, id) = (s(&found["vaultId"]), s(&found["tunnel"]["id"]));
+        if self.tunnel_on(&vault, &id).await && self.tunnel_call(&vault, &id, "tunnel_stop").await.is_err() {
+            return Err(format!("{} is running and you didn't start it: ask the person to stop it first.", tunnel_label(found)));
+        }
+        let base = tunnels_in(&all, &vault);
+        let next = base.iter().filter(|x| x["id"] != id.as_str()).cloned().collect();
+        self.put_tunnels(&vault, base, next).await?;
+        Ok("Removed.".into())
     }
 
     #[tool(description = "The person's saved snippets: named commands.")]
@@ -1297,5 +1548,174 @@ mod tests {
         let core = Core::start().await;
         assert_eq!(core.wait("missing").await, Err("Not found: request.".into()));
         assert!(core.agent.grants.lock().unwrap().is_empty());
+    }
+
+    /// An SSH server that lets `u` in with `pw` and does nothing else: enough for a tunnel to start.
+    #[derive(Clone)]
+    struct Sshd;
+
+    impl russh::server::Server for Sshd {
+        type Handler = Self;
+        fn new_client(&mut self, _: Option<std::net::SocketAddr>) -> Self {
+            self.clone()
+        }
+    }
+
+    impl russh::server::Handler for Sshd {
+        type Error = russh::Error;
+
+        async fn auth_password(&mut self, user: &str, password: &str) -> Result<russh::server::Auth, Self::Error> {
+            Ok(if user == "u" && password == "pw" { russh::server::Auth::Accept } else { russh::server::Auth::reject() })
+        }
+    }
+
+    async fn sshd() -> u16 {
+        use russh::server::Server as _;
+        let config = Arc::new(russh::server::Config {
+            keys: vec![russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519).unwrap()],
+            auth_rejection_time: Span::from_millis(10),
+            auth_rejection_time_initial: Some(Span::from_millis(0)),
+            ..Default::default()
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let _ = Sshd.run_on_socket(config, &listener).await;
+        });
+        port
+    }
+
+    fn free_port() -> u16 {
+        std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+    }
+
+    impl Core {
+        /// The agent with every right on all hosts, as the person allowed it.
+        async fn granted(&self) {
+            let id = self.request().await;
+            self.answer(&id, true).await;
+            assert!(self.wait(&id).await.unwrap().starts_with("Allowed:"));
+        }
+
+        async fn tunnels(&self) -> Vec<Value> {
+            serde_json::from_str(&self.agent.list_tunnels().await.unwrap()).unwrap()
+        }
+
+        async fn add(&self, name: &str, kind: Kind, via: &str, port: Option<u16>, target: Option<&str>) -> Out {
+            let a = AddTunnel { name: name.into(), kind, via: via.into(), port, target: target.map(Into::into), start: None };
+            self.agent.add_tunnel(Parameters(a)).await
+        }
+    }
+
+    fn update(tunnel: &str) -> UpdateTunnel {
+        UpdateTunnel { tunnel: tunnel.into(), name: None, kind: None, via: None, port: None, target: None }
+    }
+
+    #[tokio::test]
+    async fn an_agent_saves_starts_lists_and_removes_a_tunnel() {
+        let core = Core::start().await;
+        // `jump` is a real server: a tunnel through it starts.
+        let mut jump = json!({ "id": "jump", "label": "jump", "group": "", "address": "127.0.0.1", "port": sshd().await, "user": "u", "auth": { "type": "password" }, "tags": [], "hasPassword": false, "newPassword": "pw" });
+        let base = core.me.call("vault_get", json!({})).await.unwrap();
+        let mut hosts = base["hosts"].as_array().unwrap().clone();
+        hosts.push(jump.take());
+        core.me.call("vault_put", json!({ "update": { "hosts": hosts, "keys": [], "snippets": [], "tunnels": [] } })).await.unwrap();
+        core.granted().await;
+
+        let port = free_port();
+        let a = AddTunnel { name: "proxy".into(), kind: Kind::Dynamic, via: "jump".into(), port: Some(port), target: None, start: Some(true) };
+        let added = core.agent.add_tunnel(Parameters(a)).await.unwrap();
+        assert_eq!(added, format!("Added and started proxy: a SOCKS5 proxy at localhost:{port} goes out through jump."));
+        tokio::net::TcpStream::connect(("127.0.0.1", port)).await.expect("the proxy listens");
+
+        let list = core.tunnels().await;
+        assert_eq!(list, vec![json!({ "name": "proxy", "kind": "dynamic", "port": port, "target": null, "via": "jump", "state": "on" })]);
+        // The person sees it in their vault.
+        assert_eq!(core.me.call("vault_get", json!({})).await.unwrap()["tunnels"][0]["name"], "proxy");
+
+        // Changed while it runs: saved, and the agent is told it runs as it was.
+        let mut u = update("proxy");
+        u.name = Some("socks".into());
+        assert!(core.agent.update_tunnel(Parameters(u)).await.unwrap().starts_with("Saved. It is running"));
+
+        // Removed: stopped first, gone from the vault.
+        assert_eq!(core.agent.remove_tunnel(Parameters(NameArg { name: "socks".into() })).await.unwrap(), "Removed.");
+        assert!(core.tunnels().await.is_empty());
+        let status = core.me.call("tunnels_status", json!({})).await.unwrap();
+        assert!(status.as_array().unwrap().iter().all(|x| x["state"] != "on"), "{status}");
+    }
+
+    #[tokio::test]
+    async fn tunnel_arguments_are_checked_before_anything_is_saved() {
+        let core = Core::start().await;
+        core.granted().await;
+        let err = |r: Out| r.unwrap_err();
+
+        assert_eq!(err(core.add("pg", Kind::Local, "web", None, None).await), "This kind of tunnel needs a target: host:port.");
+        assert_eq!(err(core.add("pg", Kind::Local, "web", None, Some("db")).await), "db is not host:port.");
+        assert_eq!(err(core.add("pg", Kind::Local, "web", Some(5432), Some("db:0")).await), "db:0 is not host:port.");
+        assert_eq!(err(core.add("s", Kind::Dynamic, "web", Some(1080), Some("db:22")).await), "A dynamic tunnel takes no target: it is a SOCKS5 proxy to anywhere.");
+        assert_eq!(err(core.add("s", Kind::Dynamic, "web", None, None).await), "Give port: the port of the SOCKS5 proxy on this computer (1080 is usual).");
+        assert_eq!(err(core.add("r", Kind::Remote, "web", None, Some("localhost:3000")).await), "Give port: the port to open on the host.");
+        assert_eq!(err(core.add("pg", Kind::Local, "nowhere", None, Some("db:5432")).await), "No host called nowhere.");
+        assert_eq!(err(core.add(" ", Kind::Local, "web", None, Some("db:5432")).await), "Give the tunnel a name, without '/'.");
+        assert!(core.tunnels().await.is_empty());
+
+        // A local tunnel listens on the target's port unless told otherwise.
+        assert_eq!(core.add("pg", Kind::Local, "web", None, Some(" db:5432 ")).await.unwrap(), "Added pg. Start it with start_tunnel.");
+        assert_eq!(err(core.add("PG", Kind::Remote, "db", Some(8080), Some("localhost:80")).await), "There is already a tunnel called PG there.");
+        let t = &core.tunnels().await[0];
+        assert_eq!((t["port"].clone(), t["target"].clone(), t["via"].clone(), t["state"].clone()), (json!(5432), json!("db:5432"), json!("web"), json!("off")));
+
+        // A change that would break it is refused and nothing changes; dynamic drops the target.
+        let mut u = update("pg");
+        u.port = Some(0);
+        assert_eq!(err(core.agent.update_tunnel(Parameters(u)).await), "Give port: the port to open on this computer.");
+        let mut u = update("pg");
+        u.kind = Some(Kind::Dynamic);
+        u.via = Some("db".into());
+        assert_eq!(core.agent.update_tunnel(Parameters(u)).await.unwrap(), "Saved.");
+        let t = &core.tunnels().await[0];
+        assert_eq!((t["kind"].clone(), t["target"].clone(), t["via"].clone()), (json!("dynamic"), Value::Null, json!("db")));
+        let mut u = update("pg");
+        u.kind = Some(Kind::Remote);
+        assert_eq!(err(core.agent.update_tunnel(Parameters(u)).await), "This kind of tunnel needs a target: host:port.");
+        assert_eq!(err(core.agent.update_tunnel(Parameters(update("nope"))).await), "No tunnel called nope (list_tunnels shows them).");
+        assert_eq!(err(core.agent.remove_tunnel(Parameters(NameArg { name: "nope".into() })).await), "No tunnel called nope (list_tunnels shows them).");
+    }
+
+    #[tokio::test]
+    async fn a_teams_tunnels_are_listed_and_changed_as_team_name() {
+        let core = Core::start().await;
+        let shared = core.dir.join("team");
+        let recovery = core.me.call("recovery_key_new", json!({})).await.unwrap();
+        let team = core.me.call("team_create", json!({ "path": shared.display().to_string(), "name": "Acme", "myName": "Me", "recoveryKey": recovery })).await.unwrap();
+        let tid = team["id"].clone();
+        let host = json!({ "id": "a", "group": "", "label": "gitlab-box", "address": "10.0.0.1", "port": 22, "user": "root", "auth": { "type": "agent" }, "tags": [], "hasPassword": false });
+        // The person saved a tunnel in the team, before the agent came.
+        let tunnel = json!({ "id": "t1", "name": "gitlab", "kind": "local", "bindPort": 8443, "viaHostId": "a", "target": "localhost:443" });
+        core.me.call("team_put", json!({ "id": tid, "update": { "hosts": [host], "keys": [], "snippets": [], "tunnels": [tunnel] } })).await.unwrap();
+        core.granted().await;
+
+        let list = core.tunnels().await;
+        assert_eq!(list, vec![json!({ "name": "Acme/gitlab", "kind": "local", "port": 8443, "target": "localhost:443", "via": "Acme/gitlab-box", "state": "off" })]);
+
+        // One of the same name in the personal vault: `gitlab` is that one, the team's is `Acme/gitlab`.
+        assert_eq!(core.add("gitlab", Kind::Local, "web", Some(9443), Some("localhost:443")).await.unwrap(), "Added gitlab. Start it with start_tunnel.");
+        assert_eq!(core.add("ui", Kind::Local, "Acme/gitlab-box", None, Some("localhost:3000")).await.unwrap(), "Added Acme/ui. Start it with start_tunnel.");
+        let mut u = update("Acme/gitlab");
+        u.port = Some(8444);
+        assert_eq!(core.agent.update_tunnel(Parameters(u)).await.unwrap(), "Saved.");
+        let mut u = update("Acme/gitlab");
+        u.via = Some("web".into());
+        assert_eq!(core.agent.update_tunnel(Parameters(u)).await.unwrap_err(), "web is not where Acme/gitlab is: a tunnel goes through a host of its own vault (or team).");
+        assert_eq!(core.agent.remove_tunnel(Parameters(NameArg { name: "gitlab".into() })).await.unwrap(), "Removed.");
+
+        let teams = core.me.call("teams_list", json!({})).await.unwrap();
+        let saved = teams[0]["view"]["data"]["tunnels"].as_array().unwrap().clone();
+        let mut ports: Vec<(String, u64)> = saved.iter().map(|t| (s(&t["name"]), t["bindPort"].as_u64().unwrap())).collect();
+        ports.sort();
+        assert_eq!(ports, vec![("gitlab".into(), 8444), ("ui".into(), 3000)]);
+        assert!(core.me.call("vault_get", json!({})).await.unwrap()["tunnels"].as_array().unwrap().is_empty());
     }
 }
