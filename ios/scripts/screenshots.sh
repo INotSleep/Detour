@@ -23,23 +23,6 @@ for _ in $(seq 1 20); do
   sleep 1
 done
 
-# The debug build for the simulator (the workflow's simulator build made it already).
-find_app() { find ~/Library/Developer/Xcode/DerivedData -maxdepth 6 -path '*/Build/Products/Debug-iphonesimulator/Detour.app' 2>/dev/null | head -1; }
-app=$(find_app)
-if [ -z "$app" ]; then
-  xcodebuild -project Detour.xcodeproj -scheme Detour -configuration Debug \
-    -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
-    -skipPackagePluginValidation -skipMacroValidation CODE_SIGNING_ALLOWED=NO build | xcbeautify --renderer github-actions
-  app=$(find_app)
-fi
-echo "app: $app"
-plutil -p "$app/Info.plist" | grep -E 'CFBundle(Identifier|Executable|ShortVersion)' || true
-# The simulator wants the bundle id and at least an ad hoc signature.
-if ! plutil -extract CFBundleIdentifier raw "$app/Info.plist" > /dev/null 2>&1; then
-  plutil -replace CFBundleIdentifier -string dev.detour.ios "$app/Info.plist"
-fi
-codesign --force --sign - --timestamp=none --deep "$app"
-
 # The newest 6.9" iPhone there is.
 dev=$(xcrun simctl list devices available -j | python3 -c '
 import json, sys
@@ -49,8 +32,13 @@ print(pro[-1]["udid"])')
 xcrun simctl boot "$dev" 2>/dev/null || true
 xcrun simctl bootstatus "$dev" -b
 xcrun simctl ui "$dev" appearance dark
-xcrun simctl status_bar "$dev" override --time 9:41 --dataNetwork wifi --wifiMode active --wifiBars 3 \
-  --cellularMode active --cellularBars 4 --batteryState charged --batteryLevel 100
+xcrun simctl status_bar "$dev" override --time 9:41 --dataNetwork wifi --wifiMode active --wifiBars 3   --cellularMode active --cellularBars 4 --batteryState charged --batteryLevel 100
+
+# The debug app, built for that simulator.
+xcodebuild -project Detour.xcodeproj -scheme Detour -configuration Debug -destination "id=$dev"   -skipPackagePluginValidation -skipMacroValidation build | xcbeautify --renderer github-actions
+app=$(find ~/Library/Developer/Xcode/DerivedData -maxdepth 6 -path '*/Build/Products/Debug-iphonesimulator/Detour.app' -newer "$key" 2>/dev/null | head -1)
+echo "app: $app"
+ls "$app" | head -20
 xcrun simctl install "$dev" "$app"
 
 export SIMCTL_CHILD_DETOUR_SHOTS_KEY="$(cat "$key")"
