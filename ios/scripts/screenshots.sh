@@ -57,6 +57,9 @@ print(pro[-1]["udid"])')
 xcrun simctl boot "$dev" 2>/dev/null || true
 xcrun simctl bootstatus "$dev" -b
 xcrun simctl ui "$dev" appearance dark
+# No keyboard tips over the shots.
+xcrun simctl spawn "$dev" defaults write com.apple.Preferences DidShowContinuousPathIntroduction -bool true
+xcrun simctl spawn "$dev" defaults write com.apple.keyboard.preferences DidShowContinuousPathIntroduction -bool true
 xcrun simctl status_bar "$dev" override --time 9:41 --dataNetwork wifi --wifiMode active --wifiBars 3   --cellularMode active --cellularBars 4 --batteryState charged --batteryLevel 100
 
 # The debug app, built for that simulator.

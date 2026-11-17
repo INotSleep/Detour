@@ -133,7 +133,7 @@ struct HostsView: View {
             app.terminals.first?.run(Shots.terminalCommands)
             // The terminal whole, without the keyboard.
             try? await Task.sleep(for: .seconds(2))
-            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            app.terminals.first?.toggleKeyboard(shown: true)
         case "files": filesHost = local
         case "snippets": snippets = true
         case "keys": shotKeys = true
