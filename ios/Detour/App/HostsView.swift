@@ -5,6 +5,13 @@ struct HostsView: View {
     @EnvironmentObject var app: AppModel
     @State private var query = ""
     @State private var joining = false
+    /// The host editor: a host's id, or "" for a new one.
+    @State private var editing: EditTarget?
+    /// A host just deleted, for Undo.
+    @State private var deleted: (host: PersonalVault.JSON, label: String)?
+    @State private var deletedAt = Date.distantPast
+
+    private struct EditTarget: Identifiable { let id: String }
 
     var body: some View {
         NavigationStack {
@@ -13,11 +20,27 @@ struct HostsView: View {
                     Section(section.title) {
                         ForEach(section.hosts) { host in
                             Button { app.open(host) } label: { HostRow(host: host) }
+                                .swipeActions(edge: .trailing) {
+                                    if host.vaultId == "personal" {
+                                        Button(role: .destructive) { Task { await delete(host) } } label: { Label("Delete", systemImage: "trash") }
+                                        Button { editing = EditTarget(id: host.id) } label: { Label("Edit", systemImage: "pencil") }
+                                            .tint(.accentColor)
+                                    }
+                                }
+                                .contextMenu {
+                                    Button { app.open(host) } label: { Label("Connect", systemImage: "terminal") }
+                                    Button { UIPasteboard.general.string = sshCommand(host) } label: { Label("Copy ssh command", systemImage: "doc.on.doc") }
+                                    if host.vaultId == "personal" {
+                                        Button { editing = EditTarget(id: host.id) } label: { Label("Edit", systemImage: "pencil") }
+                                        Button(role: .destructive) { Task { await delete(host) } } label: { Label("Delete", systemImage: "trash") }
+                                    }
+                                }
                         }
                     }
                 }
             }
             .overlay { empty }
+            .overlay(alignment: .bottom) { undoBar }
             .searchable(text: $query)
             .refreshable { await app.syncNow() }
             .navigationTitle("Hosts")
@@ -31,10 +54,15 @@ struct HostsView: View {
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
+                    Button { editing = EditTarget(id: "") } label: { Image(systemName: "plus") }
+                        .accessibilityLabel("New host")
+                }
+                ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         if app.sync?.enabled != true {
                             Button { joining = true } label: { Label("Connect to your vault", systemImage: "arrow.triangle.2.circlepath") }
                         }
+                        NavigationLink { KeysView() } label: { Label("SSH keys", systemImage: "key") }
                         NavigationLink { KeyBarEditor() } label: { Label("Key bar", systemImage: "keyboard") }
                         NavigationLink { SettingsView() } label: { Label("Settings", systemImage: "gearshape") }
                         Button { Task { await app.lock() } } label: { Label("Lock", systemImage: "lock") }
@@ -44,9 +72,46 @@ struct HostsView: View {
                 }
             }
             .sheet(isPresented: $joining) { SyncJoinView() }
+            .sheet(item: $editing) { t in HostEditor(hostId: t.id.isEmpty ? nil : t.id, saved: { await app.reload() }) }
             .onAppear { joinIfLinked() }
             .onChange(of: app.pendingJoin) { joinIfLinked() }
         }
+    }
+
+    private func delete(_ host: Host) async {
+        guard let removed = try? await PersonalVault.remove(host: host.id) else { return }
+        await app.reload()
+        withAnimation { deleted = (removed, host.label) }
+        let at = Date()
+        deletedAt = at
+        try? await Task.sleep(for: .seconds(5))
+        if deletedAt == at { withAnimation { deleted = nil } }
+    }
+
+    private func undo() async {
+        guard let d = deleted else { return }
+        withAnimation { deleted = nil }
+        try? await PersonalVault.save(host: d.host)
+        await app.reload()
+    }
+
+    @ViewBuilder private var undoBar: some View {
+        if let d = deleted {
+            HStack {
+                Text("Deleted \(d.label)").lineLimit(1)
+                Spacer()
+                Button("Undo") { Task { await undo() } }.bold()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+            .padding()
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+
+    private func sshCommand(_ h: Host) -> String {
+        "ssh " + (h.port == 22 ? "" : "-p \(h.port) ") + "\(h.login)@\(h.address)"
     }
 
     /// A join link opened the app: the form, filled in from it.
@@ -95,6 +160,7 @@ private struct HostRow: View {
 
 /// Face ID, the key bar, the version.
 struct SettingsView: View {
+    @ObservedObject private var terminal = TerminalSettings.shared
     @State private var biometry = Keychain.isSaved
     @State private var askPassword = false
     @State private var password = ""
@@ -110,7 +176,16 @@ struct SettingsView: View {
                     if let error { Text(error).foregroundStyle(.red).font(.footnote) }
                 }
             }
-            Section {
+            Section("Terminal") {
+                NavigationLink {
+                    ThemePicker()
+                } label: {
+                    LabeledContent("Theme", value: terminal.themeId == TerminalSettings.system ? String(localized: "As the system") : TerminalTheme.named(terminal.themeId)?.name ?? "")
+                }
+                Stepper(value: $terminal.fontSize, in: 9...24, step: 1) {
+                    LabeledContent("Font size", value: "\(Int(terminal.fontSize))")
+                }
+                Toggle("Highlight output", isOn: $terminal.highlight)
                 NavigationLink("Key bar") { KeyBarEditor() }
             }
             Section {
@@ -135,6 +210,55 @@ struct SettingsView: View {
             error = biometry ? nil : String(localized: "Couldn't save it on this device")
         } catch {
             self.error = String(localized: "Wrong master password")
+        }
+    }
+}
+
+/// The terminal's themes, each shown in its own colours.
+private struct ThemePicker: View {
+    @ObservedObject private var settings = TerminalSettings.shared
+
+    var body: some View {
+        List {
+            row(id: TerminalSettings.system, name: String(localized: "As the system"), theme: nil)
+            ForEach(TerminalTheme.all) { t in row(id: t.id, name: t.name, theme: t) }
+        }
+        .navigationTitle("Theme")
+    }
+
+    private func row(id: String, name: String, theme: TerminalTheme?) -> some View {
+        Button {
+            settings.themeId = id
+        } label: {
+            HStack(spacing: 12) {
+                swatch(theme)
+                Text(name).foregroundStyle(.primary)
+                Spacer()
+                if settings.themeId == id { Image(systemName: "checkmark").foregroundStyle(Color.accentColor) }
+            }
+        }
+    }
+
+    /// The background with a prompt in the theme's own colours.
+    @ViewBuilder private func swatch(_ theme: TerminalTheme?) -> some View {
+        if let theme {
+            HStack(spacing: 0) {
+                Text("$ ").foregroundStyle(Color(uiColor: theme.foreground))
+                Text("~").foregroundStyle(Color(uiColor: UIColor(hex: theme.c[8])))
+                Text(" ok").foregroundStyle(Color(uiColor: UIColor(hex: theme.c[6])))
+            }
+            .font(.system(size: 13, design: .monospaced))
+            .frame(width: 64, height: 32)
+            .background(Color(uiColor: theme.background), in: RoundedRectangle(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
+        } else {
+            HStack(spacing: 0) {
+                Color(uiColor: TerminalTheme.all[0].background)
+                Color(uiColor: TerminalTheme.all[1].background)
+            }
+            .frame(width: 64, height: 32)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
         }
     }
 }

@@ -37,6 +37,11 @@ jobs:
       - name: Xcode project
         run: cd ios && xcodegen
 
+      - name: Output highlighting check
+        run: |
+          swiftc -O ios/Detour/Terminal/Highlight.swift ios/Tests/HighlightCheck/main.swift -o "$RUNNER_TEMP/highlight-check"
+          "$RUNNER_TEMP/highlight-check"
+
       - name: Simulator build
         run: |
           xcodebuild -project ios/Detour.xcodeproj -scheme Detour -configuration Debug \

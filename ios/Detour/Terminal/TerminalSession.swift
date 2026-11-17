@@ -65,8 +65,14 @@ final class TerminalSession: ObservableObject, Identifiable {
         }
     }
 
+    /// Output with the highlights the desktop app adds (when they're on).
+    private lazy var shown = HighlightedOutput(deliver: { [weak self] bytes in self?.show(bytes) }, enabled: { TerminalSettings.shared.highlight })
+
     private func output(_ data: Data) {
-        let bytes = [UInt8](data)
+        shown.write([UInt8](data))
+    }
+
+    private func show(_ bytes: [UInt8]) {
         if let view { view.feed(byteArray: bytes[...]) } else { pending += bytes }
     }
 

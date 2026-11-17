@@ -24,6 +24,11 @@
 "Settings" = "Настройки";
 "Lock" = "Заблокировать";
 "Version" = "Версия";
+"Terminal" = "Терминал";
+"Theme" = "Тема";
+"As the system" = "Как в системе";
+"Font size" = "Размер шрифта";
+"Highlight output" = "Подсветка вывода";
 "Turn on" = "Включить";
 "Cancel" = "Отмена";
 "Couldn't save it on this device" = "Не удалось сохранить на этом устройстве";
@@ -78,3 +83,45 @@
 "Snippet" = "Сниппет";
 "\\n in the text presses Enter" = "\\n в тексте нажимает Enter";
 "Combination" = "Сочетание";
+
+/* Hosts: adding and editing */
+"New host" = "Новый хост";
+"Edit host" = "Изменить хост";
+"Address" = "Адрес";
+"User" = "Пользователь";
+"Port" = "Порт";
+"Name" = "Название";
+"Group" = "Группа";
+"Key" = "Ключ";
+"Saved; type to change" = "Сохранён; введите, чтобы заменить";
+"Ask when connecting" = "Спросить при подключении";
+"Save" = "Сохранить";
+"Edit" = "Изменить";
+"Delete" = "Удалить";
+"Copy ssh command" = "Скопировать команду ssh";
+"Deleted %@" = "Удалён %@";
+"Undo" = "Вернуть";
+
+/* SSH keys */
+"SSH keys" = "SSH-ключи";
+"No keys" = "Ключей нет";
+"New key" = "Новый ключ";
+"Import a key" = "Импортировать ключ";
+"passphrase" = "с паролем";
+"Copied" = "Скопировано";
+"Copy the public key" = "Скопировать публичный ключ";
+"Share" = "Поделиться";
+"Public key" = "Публичный ключ";
+"Type" = "Тип";
+"Fingerprint" = "Отпечаток";
+"Delete the key" = "Удалить ключ";
+"Delete %@?" = "Удалить %@?";
+"Hosts log in with this key: %@" = "Через этот ключ входят хосты: %@";
+"Done" = "Готово";
+"Private key" = "Приватный ключ";
+"Paste" = "Вставить";
+"From Files" = "Из Файлов";
+"Passphrase" = "Пароль ключа";
+"Import" = "Импортировать";
+"Wrong passphrase" = "Неверный пароль ключа";
+"This isn't a private key" = "Это не приватный ключ";

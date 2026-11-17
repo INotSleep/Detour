@@ -9,16 +9,15 @@ private typealias Color = SwiftUI.Color
 /// layout under the terminal, where it can be used with the keyboard hidden too.
 struct TerminalHost: UIViewRepresentable {
     @ObservedObject var session: TerminalSession
+    @ObservedObject private var settings = TerminalSettings.shared
+    @Environment(\.colorScheme) private var scheme
 
     func makeCoordinator() -> Coordinator { Coordinator(session: session) }
 
     func makeUIView(context: Context) -> TerminalView {
         let tv = TerminalView(frame: .zero)
         tv.terminalDelegate = context.coordinator
-        tv.backgroundColor = .black
-        tv.nativeBackgroundColor = .black
-        tv.nativeForegroundColor = UIColor(white: 0.9, alpha: 1)
-        tv.font = UIFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        tv.apply(settings.theme(dark: scheme == .dark), fontSize: settings.fontSize)
         tv.inputAccessoryView = nil
         session.view = tv
         DispatchQueue.main.async { _ = tv.becomeFirstResponder() }
@@ -26,6 +25,11 @@ struct TerminalHost: UIViewRepresentable {
     }
 
     func updateUIView(_ tv: TerminalView, context: Context) {
+        let theme = settings.theme(dark: scheme == .dark)
+        if context.coordinator.theme != theme.id || tv.font.pointSize != CGFloat(settings.fontSize) {
+            context.coordinator.theme = theme.id
+            tv.apply(theme, fontSize: settings.fontSize)
+        }
         if context.coordinator.session !== session {
             context.coordinator.session = session
             session.view = tv
@@ -35,6 +39,7 @@ struct TerminalHost: UIViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, TerminalViewDelegate {
         var session: TerminalSession
+        var theme = ""
 
         init(session: TerminalSession) {
             self.session = session
@@ -74,6 +79,8 @@ struct TerminalHost: UIViewRepresentable {
 struct TerminalsView: View {
     @EnvironmentObject var app: AppModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var scheme
+    @ObservedObject private var settings = TerminalSettings.shared
 
     var body: some View {
         NavigationStack {
@@ -84,7 +91,7 @@ struct TerminalsView: View {
                         .id(t.id)
                 }
             }
-            .background(Color.black)
+            .background(Color(uiColor: settings.theme(dark: scheme == .dark).background))
             .ignoresSafeArea(.keyboard)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
