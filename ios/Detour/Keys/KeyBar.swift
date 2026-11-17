@@ -145,7 +145,22 @@ struct KeyBarView: View {
                 .tag(i)
             }
         }
-        .tabViewStyle(.page(indexDisplayMode: store.sets.count > 1 ? .automatic : .never))
+        // The system's page dots take taps (one moves to the next set) and cover the keys'
+        // lower half, so they are drawn here instead, for looking only.
+        .tabViewStyle(.page(indexDisplayMode: .never))
+        .overlay(alignment: .bottom) {
+            if store.sets.count > 1 {
+                HStack(spacing: 4) {
+                    ForEach(store.sets.indices, id: \.self) { i in
+                        Circle()
+                            .fill(i == page ? Color.primary : Color.secondary.opacity(0.4))
+                            .frame(width: 4, height: 4)
+                    }
+                }
+                .padding(.bottom, 1)
+                .allowsHitTesting(false)
+            }
+        }
         .frame(height: 46)
         .background(.bar)
     }
