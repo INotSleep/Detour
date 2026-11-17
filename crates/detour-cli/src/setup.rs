@@ -2,7 +2,9 @@
 //! the person's other devices, signing in with GitHub, creating, joining and recovering
 //! teams. A server without a desktop gets the person's vault this way.
 //!
-//! A place is a folder, or a Git repository's URL (`ssh://`, `git@host:path`, `https://`).
+//! A place is a folder, a Git repository's URL (`ssh://`, `git@host:path`, `https://`), or a
+//! cloud drive's folder: `onedrive:Detour/Team`, `gdrive:Detour/Team`, `dropbox:/Detour/Team`,
+//! or a share link to it.
 //! Over SSH Detour logs in with a key of the vault (`--key`) or ssh-agent; over https with
 //! a token (asked) or by signing in with GitHub (`--github`). A server seen for the first
 //! time shows its key fingerprint and is trusted only when the person says so.
@@ -39,10 +41,49 @@ fn s(v: &Value) -> String {
     }
 }
 
-/// A folder, or a repository with how to log in to it (the core's `url`, `auth`, `token`, `github`).
+/// A folder, a repository with how to log in to it (the core's `url`, `auth`, `token`,
+/// `github`), or a drive folder (the core's `DriveRemote`).
 enum Place {
     Folder(String),
     Git(Value),
+    Drive(Value),
+}
+
+/// `onedrive:path`, `gdrive:path`, `dropbox:/path`, or a share link: the drive and what follows.
+fn drive_place(arg: &str) -> Option<(detour_core::drive::Provider, Option<&str>)> {
+    let arg = arg.trim();
+    if let Some(p) = detour_core::drive::link::provider_of(arg) {
+        return Some((p, None));
+    }
+    let (name, rest) = arg.split_once(':')?;
+    // `C:\folder` is a folder, not a drive.
+    if name.len() < 2 {
+        return None;
+    }
+    Some((detour_core::drive::Provider::parse(name)?, Some(rest)))
+}
+
+/// Finds a drive folder by its path from the top of the drive, signing in first if needed.
+async fn drive_folder(c: &Client, provider: detour_core::drive::Provider, path: Option<&str>, url: &str) -> Res<Value> {
+    let id = provider.id();
+    let accounts = c.call("drive_accounts", json!({})).await?;
+    if !accounts.as_array().into_iter().flatten().any(|a| a["provider"] == id && a["signedIn"] == true) {
+        drive_login(c, id).await?;
+    }
+    let Some(path) = path else { return Ok(c.call("drive_link", json!({ "url": url, "provider": id })).await?) };
+    let mut here = Value::Null;
+    for part in path.split(['/', '\\']).filter(|p| !p.is_empty()) {
+        let listing = c.call("drive_browse", json!({ "provider": id, "folder": here })).await?;
+        let found = listing["folders"].as_array().into_iter().flatten().find(|f| s(&f["name"]).eq_ignore_ascii_case(part)).cloned();
+        let Some(f) = found else { return fail(&format!("{}: {part}", t().drive_no_folder)) };
+        let parent_label = s(&listing["folder"]["label"]);
+        let label = if parent_label.is_empty() { s(&f["name"]) } else { format!("{parent_label}/{}", s(&f["name"])) };
+        here = json!({ "provider": id, "id": f["id"], "drive": f["drive"], "label": label });
+    }
+    if here.is_null() {
+        return fail(t().drive_no_folder);
+    }
+    Ok(here)
 }
 
 fn is_git(arg: &str) -> bool {
@@ -55,6 +96,9 @@ fn is_git(arg: &str) -> bool {
 }
 
 async fn place(c: &Client, arg: &str, login: &GitLogin) -> Res<Place> {
+    if let Some((provider, path)) = drive_place(arg) {
+        return Ok(Place::Drive(drive_folder(c, provider, path, arg).await?));
+    }
     if !is_git(arg) {
         let path = std::path::absolute(arg).map_err(|e| Fail(format!("{arg}: {e}")))?;
         return Ok(Place::Folder(path.display().to_string()));
@@ -161,6 +205,68 @@ async fn github_ready(c: &Client, url: &str) -> Res<()> {
     fail(t().github_no_access)
 }
 
+/* ---------- cloud drives ---------- */
+
+/// Signs in to a drive on this device: a code to enter (OneDrive), or a page to open in a
+/// browser on this device (Google Drive, Dropbox).
+pub async fn drive_login(c: &Client, provider: &str) -> Res<String> {
+    let start = c.call("drive_sign_in", json!({ "provider": provider })).await?;
+    let mut interval = start["interval"].as_u64().unwrap_or(2);
+    match start["kind"].as_str() {
+        Some("device") => {
+            eprintln!("{} {}", t().drive_open, s(&start["verificationUri"]));
+            eprintln!("{} {}", t().github_enter_code, s(&start["userCode"]));
+        }
+        _ => {
+            eprintln!("{} {}", t().drive_open, s(&start["url"]));
+            if start["paste"] == true {
+                let code = line(t().drive_paste_code)?;
+                let account = s(&c.call("drive_sign_in_code", json!({ "provider": provider, "code": code.trim() })).await?);
+                eprintln!("{} {account}", t().drive_signed_in);
+                return Ok(account);
+            }
+        }
+    }
+    loop {
+        tokio::time::sleep(Duration::from_secs(interval)).await;
+        let r = c.call("drive_sign_in_poll", json!({ "provider": provider })).await?;
+        match r["status"].as_str() {
+            Some("done") => {
+                eprintln!("{} {}", t().drive_signed_in, s(&r["account"]));
+                return Ok(s(&r["account"]));
+            }
+            Some("slowDown") => interval += 5,
+            Some("expired" | "denied") => return fail(t().cancelled),
+            _ => {}
+        }
+    }
+}
+
+pub async fn drive(c: &Client, action: Option<crate::DriveAction>) -> Res<()> {
+    let check = |p: &str| -> Res<&'static str> { detour_core::drive::Provider::parse(p).map(|p| p.id()).ok_or_else(|| Fail(format!("{}: {p}", t().drive_unknown))) };
+    match action {
+        None => {
+            let accounts = c.call("drive_accounts", json!({})).await?;
+            let list = accounts.as_array().cloned().unwrap_or_default();
+            if list.is_empty() {
+                eprintln!("{}", t().drive_none);
+            }
+            for a in list {
+                let state = if a["signedIn"] == true { String::new() } else { format!(" ({})", t().drive_expired) };
+                println!("{}: {}{state}", s(&a["provider"]), s(&a["account"]));
+            }
+        }
+        Some(crate::DriveAction::Login { provider }) => {
+            drive_login(c, check(&provider)?).await?;
+        }
+        Some(crate::DriveAction::Logout { provider }) => {
+            c.call("drive_sign_out", json!({ "provider": check(&provider)? })).await?;
+            eprintln!("{}", t().done);
+        }
+    }
+    Ok(())
+}
+
 pub async fn github(c: &Client, action: Option<crate::GithubAction>) -> Res<()> {
     match action {
         None => match c.call("github_user", json!({})).await? {
@@ -190,6 +296,7 @@ pub async fn sync_enable(ctx: &Ctx, arg: &str, login: &GitLogin) -> Res<()> {
     match place(&ctx.c, arg, login).await? {
         Place::Folder(path) => ctx.c.call("sync_enable_folder", json!({ "path": path })).await?,
         Place::Git(p) => trusting(&ctx.c, "sync_enable_git", p).await?,
+        Place::Drive(d) => ctx.c.call("sync_enable_drive", json!({ "drive": d })).await?,
     };
     eprintln!("{}", t().sync_enabled);
     print_recovery(&s(&ctx.c.call("sync_recovery_key", json!({})).await?));
@@ -206,6 +313,7 @@ pub async fn sync_join(ctx: &Ctx, arg: &str, code: Option<String>, login: &GitLo
     match place {
         Place::Folder(path) => ctx.c.call("sync_join_folder", json!({ "path": path, "code": code.trim() })).await?,
         Place::Git(p) => trusting(&ctx.c, "sync_join_git", with_place(&p, json!({ "code": code.trim() }))).await?,
+        Place::Drive(d) => ctx.c.call("sync_join_drive", json!({ "drive": d, "code": code.trim() })).await?,
     };
     eprintln!("{}", t().sync_joined);
     Ok(())
@@ -284,6 +392,7 @@ pub async fn team_create(ctx: &Ctx, arg: &str, name: &str, me: &str, login: &Git
     match place(&ctx.c, arg, login).await? {
         Place::Folder(path) => ctx.c.call("team_create", with_place(&json!({ "path": path }), common)).await?,
         Place::Git(p) => trusting(&ctx.c, "team_create_git", with_place(&p, common)).await?,
+        Place::Drive(d) => ctx.c.call("team_create_drive", with_place(&json!({ "drive": d }), common)).await?,
     };
     eprintln!("{} {name}", t().team_created);
     println!("{}\n\n    {recovery}\n", t().team_recovery_key);
@@ -300,6 +409,10 @@ pub async fn team_join(ctx: &Ctx, arg: &str, login: &GitLogin) -> Res<()> {
             let r = trusting(&ctx.c, "team_inspect_git", p.clone()).await?;
             (r["info"].clone(), r["clone"].clone())
         }
+        Place::Drive(d) => {
+            let r = ctx.c.call("team_inspect_drive", json!({ "drive": d })).await?;
+            (r["info"].clone(), r["clone"].clone())
+        }
     };
     eprintln!("{}\n    {}", t().team_creator, s(&info["rootFingerprint"]));
     if !confirm(t().team_join_question) {
@@ -308,6 +421,7 @@ pub async fn team_join(ctx: &Ctx, arg: &str, login: &GitLogin) -> Res<()> {
     let view = match &place {
         Place::Folder(path) => ctx.c.call("team_join", json!({ "path": path, "root": info["root"] })).await?,
         Place::Git(p) => ctx.c.call("team_join_git", with_place(p, json!({ "clone": clone, "root": info["root"] }))).await?,
+        Place::Drive(d) => ctx.c.call("team_join_drive", json!({ "drive": d, "clone": clone, "root": info["root"] })).await?,
     };
     joined(&view);
     Ok(())
@@ -321,6 +435,7 @@ pub async fn team_recover(ctx: &Ctx, arg: &str, me: &str, login: &GitLogin) -> R
     let view = match place {
         Place::Folder(path) => ctx.c.call("team_recover", with_place(&json!({ "path": path }), common)).await?,
         Place::Git(p) => trusting(&ctx.c, "team_recover_git", with_place(&p, common)).await?,
+        Place::Drive(d) => ctx.c.call("team_recover_drive", with_place(&json!({ "drive": d }), common)).await?,
     };
     joined(&view);
     Ok(())
@@ -371,15 +486,19 @@ pub async fn team_token(ctx: &Ctx, github: bool) -> Res<()> {
 pub async fn pending_teams(c: &Client) -> Res<()> {
     let pending = c.call("teams_pending", json!({})).await?;
     let all = pending.as_array().cloned().unwrap_or_default();
-    let folders: Vec<String> = all.iter().filter(|p| p["url"].is_null()).map(|p| s(&p["name"])).collect();
+    let folders: Vec<String> = all.iter().filter(|p| p["url"].is_null() && p["drive"].is_null()).map(|p| s(&p["name"])).collect();
     if !folders.is_empty() {
         eprintln!("\n{} {}", t().teams_elsewhere, folders.join(", "));
         eprintln!("    detour teams join <folder>");
     }
-    for p in all.iter().filter(|p| !p["url"].is_null()) {
+    for p in all.iter().filter(|p| !p["url"].is_null() || !p["drive"].is_null()) {
         match p["error"].is_null() {
             true => eprintln!("\n{} {}", t().team_joining, s(&p["name"])),
             false => eprintln!("\n{} {}: {}", t().team_cant_join, s(&p["name"]), error_text(&p["error"])),
+        }
+        // A team in a drive joins once this device is signed in to it.
+        if !p["drive"].is_null() {
+            eprintln!("    detour drive login {}", s(&p["drive"]["provider"]));
         }
     }
     Ok(())
@@ -388,6 +507,16 @@ pub async fn pending_teams(c: &Client) -> Res<()> {
 #[cfg(test)]
 mod tests {
     use super::is_git;
+
+    #[test]
+    fn drive_places() {
+        use detour_core::drive::Provider;
+        assert_eq!(super::drive_place("onedrive:Detour/Team"), Some((Provider::OneDrive, Some("Detour/Team"))));
+        assert_eq!(super::drive_place("dropbox:/Team"), Some((Provider::Dropbox, Some("/Team"))));
+        assert_eq!(super::drive_place("https://1drv.ms/f/s!abc"), Some((Provider::OneDrive, None)));
+        assert_eq!(super::drive_place(r"C:\Sync\team"), None);
+        assert_eq!(super::drive_place("git@github.com:me/vault.git"), None);
+    }
 
     #[test]
     fn repositories_and_folders() {

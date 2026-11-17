@@ -1333,6 +1333,11 @@ impl Store {
         Ok(self.unlocked()?.vault.github.clone())
     }
 
+    /// This device's sign-ins to drives.
+    pub fn drive_logins(&self) -> Result<Vec<crate::drive::DriveLogin>> {
+        Ok(self.unlocked()?.vault.drives.clone())
+    }
+
     /// This device's sign-in to a drive.
     pub fn drive_login(&self, p: crate::drive::Provider) -> Result<Option<crate::drive::DriveLogin>> {
         Ok(self.unlocked()?.vault.drives.iter().find(|l| l.provider == p).cloned())

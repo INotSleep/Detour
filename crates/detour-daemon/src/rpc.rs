@@ -12,6 +12,8 @@ use detour_core::store::{PERSONAL, Store, VaultUpdate};
 use detour_core::team::AccessChange;
 use detour_core::team::git::GitRemote;
 use detour_core::team::state::{Coll, Level, Role};
+use detour_core::drive::{self, DriveRemote, Provider};
+use detour_core::sync::Place;
 use detour_core::{Error, SecretKind, github, sync, tunnel};
 use detour_ipc::{Frame, Message};
 use serde::Serialize;
@@ -65,7 +67,7 @@ fn git_remote(url: String, auth: Auth, token: Option<String>, github: Option<boo
 pub(crate) const READ_ONLY: &[&str] = &[
     "hello", "core_info", "vault_status", "vault_get", "ssh_import_preview", "sync_status", "teams_pending", "sync_recovery_key", "sync_add_device",
     "host_password", "key_export", "my_id", "id_inspect", "recovery_key_new", "teams_list", "team_inspect", "team_inspect_git",
-    "github_user", "github_start", "github_repo_access", "session_input", "session_resize", "session_check", "session_attach", "session_detach", "sessions_list", "session_runs",
+    "github_user", "github_start", "github_repo_access", "drive_accounts", "drive_sign_in", "drive_browse", "drive_link", "team_inspect_drive", "session_input", "session_resize", "session_check", "session_attach", "session_detach", "sessions_list", "session_runs",
     "files_open", "files_list", "files_resolve", "files_cancel", "files_close", "tunnels_status", "tunnel_start", "tunnel_stop", "proxy_check", "proxy_parse", "proxy_export", "settings_get",
     "settings_set", "activity", "log_write", "log_tail", "quit", "trust_request", "trust_answer", "trust_with_password", "hosts_export",
     "hosts_file_counts", "hosts_file_export", "hosts_file_open",
@@ -112,6 +114,11 @@ fn pushed<T>(core: &Arc<Core>, vault_id: &str, result: detour_core::Result<T>) -
         });
     }
     result
+}
+
+/// Blocking work (a drive's API) off the async threads.
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> detour_core::Result<T> + Send + 'static) -> detour_core::Result<T> {
+    tokio::task::spawn_blocking(f).await.map_err(|e| detour_core::Error::Internal { message: e.to_string() })?
 }
 
 fn synced(core: &Core, changed: bool) -> Out {
@@ -383,6 +390,76 @@ pub(crate) async fn dispatch(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value
             ok(github::repo_access(store, &github::Endpoints::default(), &a.url).await)
         }
         "github_sign_out" => ok(s!().set_github_login(None)),
+
+        /* ---------- cloud drives ---------- */
+        "drive_accounts" => {
+            let v = s!().drive_logins().map_err(err)?;
+            Ok(json!(v.iter().map(|l| json!({ "provider": l.provider, "account": l.account, "signedIn": !l.access_token.is_empty() })).collect::<Vec<_>>()))
+        }
+        "drive_sign_in" => {
+            let a = args!(method, p, { provider: Provider });
+            ok(drive::auth::start(a.provider).await)
+        }
+        "drive_sign_in_poll" => {
+            let a = args!(method, p, { provider: Provider });
+            ok(drive::auth::poll(store, a.provider).await)
+        }
+        "drive_sign_in_code" => {
+            let a = args!(method, p, { provider: Provider, code: String });
+            ok(drive::auth::finish_code(store, a.provider, &a.code).await)
+        }
+        "drive_sign_out" => {
+            let a = args!(method, p, { provider: Provider });
+            ok(s!().drive_sign_out(a.provider))
+        }
+        "drive_browse" => {
+            let a = args!(method, p, { provider: Provider, folder: Option<DriveRemote> });
+            let token = drive::auth::token(store, a.provider).await.map_err(err)?;
+            ok(blocking(move || drive::browse(a.provider, &token, a.folder.as_ref())).await)
+        }
+        "drive_folder_create" => {
+            let a = args!(method, p, { provider: Provider, parent: Option<DriveRemote>, name: String });
+            let token = drive::auth::token(store, a.provider).await.map_err(err)?;
+            ok(blocking(move || drive::create_folder(a.provider, &token, a.parent.as_ref(), &a.name)).await)
+        }
+        // The folder a pasted share link is to (the drive is told by the link, or given).
+        "drive_link" => {
+            let a = args!(method, p, { url: String, provider: Option<Provider> });
+            let provider = a.provider.or_else(|| drive::link::provider_of(&a.url)).ok_or_else(|| json!({ "kind": "drive", "provider": "", "message": "not a link to a OneDrive, Google Drive or Dropbox folder" }))?;
+            let token = drive::auth::token(store, provider).await.map_err(err)?;
+            ok(blocking(move || drive::open_link(provider, &token, &a.url)).await)
+        }
+        "team_create_drive" => {
+            let a = args!(method, p, { drive: DriveRemote, name: String, my_name: String, recovery_key: String });
+            ok(sync::create_remote_team(store, Place::Drive(a.drive), &a.name, &a.my_name, &a.recovery_key, None).await)
+        }
+        "team_inspect_drive" => {
+            let a = args!(method, p, { drive: DriveRemote });
+            let (info, clone) = sync::inspect_remote_team(store, &Place::Drive(a.drive), None).await.map_err(err)?;
+            Ok(json!({ "info": info, "clone": clone }))
+        }
+        "team_join_drive" => {
+            let a = args!(method, p, { clone: String, root: String, drive: DriveRemote });
+            ok(sync::join_remote_team(store, &a.clone, &a.root, Place::Drive(a.drive)))
+        }
+        "team_recover_drive" => {
+            let a = args!(method, p, { drive: DriveRemote, recovery_key: String, my_name: String });
+            ok(sync::recover_remote_team(store, Place::Drive(a.drive), &a.recovery_key, &a.my_name, None).await)
+        }
+        "team_join_linked_drive" => {
+            let a = args!(method, p, { team_id: String, drive: DriveRemote });
+            ok(sync::join_linked_drive_team(store, &a.team_id, a.drive).await)
+        }
+        "sync_enable_drive" => {
+            let a = args!(method, p, { drive: DriveRemote });
+            sync::enable_remote_sync(store, Place::Drive(a.drive), None).await.map_err(err)?;
+            ok(s!().sync_status())
+        }
+        "sync_join_drive" => {
+            let a = args!(method, p, { drive: DriveRemote, code: String });
+            sync::join_remote_sync(store, Place::Drive(a.drive), a.code, None).await.map_err(err)?;
+            ok(s!().sync_status())
+        }
 
         /* ---------- hosts and keys ---------- */
         "host_set_password" => {

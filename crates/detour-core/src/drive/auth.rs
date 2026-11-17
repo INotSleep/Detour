@@ -272,37 +272,47 @@ fn decode(s: &str) -> String {
 /// Has the person finished signing in? Once they have, the sign-in is kept on this device.
 pub async fn poll(store: &Mutex<Store>, p: Provider) -> Result<Poll> {
     let client = client_id(p)?;
-    let tokens = {
+    enum Next {
+        Gone,
+        Device(String),
+        Browser(Option<std::result::Result<Tokens, Error>>),
+    }
+    // Taken out under the lock, which must not be held across the network calls below.
+    let next = {
         let mut map = pending();
         match map.get_mut(&p) {
-            None => return Ok(Poll::Expired),
-            Some(Pending::Device { device_code }) => {
-                let device_code = device_code.clone();
-                drop(map);
-                let form = vec![("client_id", client), ("grant_type", "urn:ietf:params:oauth:grant-type:device_code".to_string()), ("device_code", device_code)];
-                let t = blocking(move || post_form(p, &token_url(p), &form)).await?;
-                match t.error.as_deref() {
-                    Some("authorization_pending") => return Ok(Poll::Pending),
-                    Some("slow_down") => return Ok(Poll::SlowDown),
-                    Some("expired_token" | "bad_verification_code") => {
-                        pending().remove(&p);
-                        return Ok(Poll::Expired);
-                    }
-                    Some("authorization_declined" | "access_denied") => {
-                        pending().remove(&p);
-                        return Ok(Poll::Denied);
-                    }
-                    Some(e) => return Err(Error::Drive { provider: p.id().into(), message: t.error_description.clone().unwrap_or_else(|| e.to_string()) }),
-                    None => t,
-                }
-            }
-            Some(Pending::Browser { done, .. }) => match done.take() {
-                None => return Ok(Poll::Pending),
-                Some(r) => {
+            None => Next::Gone,
+            Some(Pending::Device { device_code }) => Next::Device(device_code.clone()),
+            Some(Pending::Browser { done, .. }) => {
+                let d = done.take();
+                if d.is_some() {
                     map.remove(&p);
-                    r?
                 }
-            },
+                Next::Browser(d)
+            }
+        }
+    };
+    let tokens = match next {
+        Next::Gone => return Ok(Poll::Expired),
+        Next::Browser(None) => return Ok(Poll::Pending),
+        Next::Browser(Some(r)) => r?,
+        Next::Device(device_code) => {
+            let form = vec![("client_id", client), ("grant_type", "urn:ietf:params:oauth:grant-type:device_code".to_string()), ("device_code", device_code)];
+            let t = blocking(move || post_form(p, &token_url(p), &form)).await?;
+            match t.error.as_deref() {
+                Some("authorization_pending") => return Ok(Poll::Pending),
+                Some("slow_down") => return Ok(Poll::SlowDown),
+                Some("expired_token" | "bad_verification_code") => {
+                    pending().remove(&p);
+                    return Ok(Poll::Expired);
+                }
+                Some("authorization_declined" | "access_denied") => {
+                    pending().remove(&p);
+                    return Ok(Poll::Denied);
+                }
+                Some(e) => return Err(Error::Drive { provider: p.id().into(), message: t.error_description.clone().unwrap_or_else(|| e.to_string()) }),
+                None => t,
+            }
         }
     };
     pending().remove(&p);

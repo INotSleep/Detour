@@ -77,6 +77,10 @@ enum Command {
         #[command(subcommand)]
         action: Option<GithubAction>,
     },
+    Drive {
+        #[command(subcommand)]
+        action: Option<DriveAction>,
+    },
     #[command(subcommand)]
     Teams(Teams),
     Id,
@@ -280,6 +284,12 @@ enum SyncAction {
 pub enum GithubAction {
     Login,
     Logout,
+}
+
+#[derive(Subcommand)]
+pub enum DriveAction {
+    Login { provider: String },
+    Logout { provider: String },
 }
 
 #[derive(Subcommand)]
@@ -529,6 +539,7 @@ async fn run(command: Command, dir: &std::path::Path, team: Option<String>, json
             SyncAction::Disable => setup::sync_disable(&ctx).await?,
         },
         Command::Github { action } => setup::github(&ctx.c, action).await?,
+        Command::Drive { action } => setup::drive(&ctx.c, action).await?,
         Command::Teams(Teams::Ls) => {
             cmds::teams(&ctx).await?;
             if !json {
