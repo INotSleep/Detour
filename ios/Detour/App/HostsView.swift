@@ -84,9 +84,8 @@ struct HostsView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
-                        if app.sync?.enabled != true {
-                            Button { joining = true } label: { Label("Connect to your vault", systemImage: "arrow.triangle.2.circlepath") }
-                        }
+                        NavigationLink { SyncView() } label: { Label("Sync", systemImage: "arrow.triangle.2.circlepath") }
+                        NavigationLink { TeamsView() } label: { Label("Teams", systemImage: "person.3") }
                         NavigationLink { KeysView() } label: { Label("SSH keys", systemImage: "key") }
                         Button { snippets = true } label: { Label("Snippets", systemImage: "chevron.left.forwardslash.chevron.right") }
                         NavigationLink { KeyBarEditor() } label: { Label("Key bar", systemImage: "keyboard") }

@@ -29,20 +29,44 @@ struct VaultView: Decodable {
 
 struct TeamEntry: Decodable {
     let id: String
+    let path: String
     let view: TeamView?
+    /// Why the team could not be opened.
+    let error: String?
 
     struct TeamView: Decodable {
         let id: String
         let name: String
+        /// Added by an admin: until then the team's contents can't be read.
+        let joined: Bool
+        let members: [Member]
         let data: VaultView
         let remote: Remote?
     }
 
-    /// Where the team is kept, and why reaching it failed.
-    struct Remote: Decodable {
-        let kind: String
-        let error: CoreErrorInfo?
+    struct Member: Decodable {
+        let id: String
+        let name: String
+        /// `owner`, `admin` or `member`.
+        let role: String
+        let fingerprint: String
+        let isYou: Bool
     }
+
+    /// Where the team is kept, how syncing it goes, and why reaching it failed.
+    struct Remote: Decodable {
+        let url: String
+        let kind: String
+        let pending: Bool
+        let error: CoreErrorInfo?
+        let syncedAt: Double?
+    }
+}
+
+/// This person's identity: what an admin adds to a team.
+struct MyId: Decodable {
+    let detourId: String
+    let fingerprint: String
 }
 
 /// A team joined on another device of this person's and not here yet.
@@ -70,6 +94,8 @@ struct SyncStatus: Decodable {
     let git: Bool
     /// `folder`, `git`, `onedrive`, `gdrive` or `dropbox`.
     let storage: String?
+    /// The drive folder, when it syncs through a cloud drive.
+    let drive: DriveFolderRef?
     let pending: Bool
     let error: CoreErrorInfo?
     let syncedAt: Double?

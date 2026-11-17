@@ -68,6 +68,8 @@ struct CoreErrorInfo: Decodable, Hashable {
     let provider: String?
     let account: String?
     let message: String?
+    /// The server key now (`hostKeyChanged`).
+    let actual: String?
 
     var drive: DriveProvider? { provider.flatMap(DriveProvider.init(rawValue:)) }
 }
