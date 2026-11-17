@@ -81,6 +81,10 @@ struct TerminalsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var scheme
     @ObservedObject private var settings = TerminalSettings.shared
+    @State private var files: Host?
+    @State private var snippets = false
+
+    private var currentSession: TerminalSession? { app.terminals.first { $0.id == app.current } }
 
     var body: some View {
         NavigationStack {
@@ -98,8 +102,18 @@ struct TerminalsView: View {
                     Button { dismiss() } label: { Image(systemName: "chevron.down") }
                         .accessibilityLabel("Hosts")
                 }
+                ToolbarItemGroup(placement: .primaryAction) {
+                    if let t = currentSession {
+                        Button { files = t.host } label: { Image(systemName: "folder") }
+                            .accessibilityLabel("Files")
+                        Button { snippets = true } label: { Image(systemName: "chevron.left.forwardslash.chevron.right") }
+                            .accessibilityLabel("Snippets")
+                    }
+                }
             }
             .toolbarBackground(.visible, for: .navigationBar)
+            .sheet(item: $files) { h in FilesView(host: h) }
+            .sheet(isPresented: $snippets) { SnippetsView(session: currentSession) }
             .navigationBarTitleDisplayMode(.inline)
         }
     }

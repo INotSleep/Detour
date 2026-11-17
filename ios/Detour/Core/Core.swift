@@ -70,6 +70,12 @@ final class Core: @unchecked Sendable {
         listener.unwatch(stream: stream)
     }
 
+    /// Progress of a transfer (`{ done, total }`), as often as the core reports it, until
+    /// `unwatch`.
+    func watchProgress(stream: UInt64, _ progress: @escaping (_ done: Double, _ total: Double) -> Void) {
+        listener.watchProgress(stream: stream, progress)
+    }
+
     /// Events of the core (`sessions.changed`, `locked`, `data.changed`...).
     func onEvent(_ handler: @escaping (String, [String: Any]) -> Void) {
         listener.onEvent(handler)
@@ -85,6 +91,13 @@ private final class Listener: CoreListener, @unchecked Sendable {
     private let lock = NSLock()
     private var streams: [UInt64: (data: (Data) -> Void, end: ([String: Any]) -> Void)] = [:]
     private var handlers: [(String, [String: Any]) -> Void] = []
+    private var progress: [UInt64: (Double, Double) -> Void] = [:]
+
+    func watchProgress(stream: UInt64, _ p: @escaping (Double, Double) -> Void) {
+        lock.lock()
+        progress[stream] = p
+        lock.unlock()
+    }
 
     func watch(stream: UInt64, data: @escaping (Data) -> Void, end: @escaping ([String: Any]) -> Void) {
         lock.lock()
@@ -95,6 +108,7 @@ private final class Listener: CoreListener, @unchecked Sendable {
     func unwatch(stream: UInt64) {
         lock.lock()
         streams[stream] = nil
+        progress[stream] = nil
         lock.unlock()
     }
 
@@ -123,6 +137,14 @@ private final class Listener: CoreListener, @unchecked Sendable {
     func onStreamEnd(stream: UInt64, data: String) {
         let obj = (try? JSONSerialization.jsonObject(with: Data(data.utf8))) as? [String: Any] ?? [:]
         lock.lock()
+        // A transfer's progress comes the same way as a session's end, and keeps coming.
+        if let p = progress[stream] {
+            lock.unlock()
+            let done = (obj["done"] as? NSNumber)?.doubleValue ?? 0
+            let total = (obj["total"] as? NSNumber)?.doubleValue ?? 0
+            DispatchQueue.main.async { p(done, total) }
+            return
+        }
         let w = streams.removeValue(forKey: stream)
         lock.unlock()
         guard let w else { return }

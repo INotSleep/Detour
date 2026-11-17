@@ -135,6 +135,12 @@ final class TerminalSession: ObservableObject, Identifiable {
         input(out)
     }
 
+    /// Types a snippet's command and presses Enter (each line of a longer one too).
+    func run(_ command: String) {
+        let text = command.trimmingCharacters(in: .newlines).replacingOccurrences(of: "\r\n", with: "\r").replacingOccurrences(of: "\n", with: "\r") + "\r"
+        input(Array(text.utf8))
+    }
+
     func input(_ bytes: [UInt8]) {
         guard let id = sessionId else {
             if case .closed = state, bytes == [13] { reconnect() }

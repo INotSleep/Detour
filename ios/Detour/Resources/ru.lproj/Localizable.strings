@@ -126,3 +126,29 @@
 "Import" = "Импортировать";
 "Wrong passphrase" = "Неверный пароль ключа";
 "This isn't a private key" = "Это не приватный ключ";
+
+/* Files */
+"Files" = "Файлы";
+"Empty folder" = "Пустая папка";
+"Upload" = "Загрузить";
+"New folder" = "Новая папка";
+"Copy path" = "Скопировать путь";
+"Rename" = "Переименовать";
+"Open" = "Открыть";
+"Replace" = "Заменить";
+"%@ already exists" = "%@ уже есть";
+"Some files already exist" = "Некоторые файлы уже есть";
+
+/* Snippets */
+"Snippets" = "Сниппеты";
+"My snippets" = "Мои сниппеты";
+"No snippets" = "Сниппетов нет";
+"New snippet" = "Новый сниппет";
+"Edit snippet" = "Изменить сниппет";
+"Command" = "Команда";
+
+/* Own login for a team host */
+"My login" = "Свой вход";
+"Log in with my own login" = "Входить со своими данными";
+"The team's login is used: %@" = "Используется вход команды: %@";
+"Remove my login" = "Убрать свой вход";

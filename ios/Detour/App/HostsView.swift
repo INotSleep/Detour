@@ -12,6 +12,9 @@ struct HostsView: View {
     @State private var deletedAt = Date.distantPast
 
     private struct EditTarget: Identifiable { let id: String }
+    @State private var filesHost: Host?
+    @State private var ownLogin: Host?
+    @State private var snippets = false
 
     var body: some View {
         NavigationStack {
@@ -29,7 +32,11 @@ struct HostsView: View {
                                 }
                                 .contextMenu {
                                     Button { app.open(host) } label: { Label("Connect", systemImage: "terminal") }
+                                    Button { filesHost = host } label: { Label("Files", systemImage: "folder") }
                                     Button { UIPasteboard.general.string = sshCommand(host) } label: { Label("Copy ssh command", systemImage: "doc.on.doc") }
+                                    if host.vaultId != "personal" {
+                                        Button { ownLogin = host } label: { Label("My login", systemImage: "person.badge.key") }
+                                    }
                                     if host.vaultId == "personal" {
                                         Button { editing = EditTarget(id: host.id) } label: { Label("Edit", systemImage: "pencil") }
                                         Button(role: .destructive) { Task { await delete(host) } } label: { Label("Delete", systemImage: "trash") }
@@ -63,6 +70,7 @@ struct HostsView: View {
                             Button { joining = true } label: { Label("Connect to your vault", systemImage: "arrow.triangle.2.circlepath") }
                         }
                         NavigationLink { KeysView() } label: { Label("SSH keys", systemImage: "key") }
+                        Button { snippets = true } label: { Label("Snippets", systemImage: "chevron.left.forwardslash.chevron.right") }
                         NavigationLink { KeyBarEditor() } label: { Label("Key bar", systemImage: "keyboard") }
                         NavigationLink { SettingsView() } label: { Label("Settings", systemImage: "gearshape") }
                         Button { Task { await app.lock() } } label: { Label("Lock", systemImage: "lock") }
@@ -73,6 +81,9 @@ struct HostsView: View {
             }
             .sheet(isPresented: $joining) { SyncJoinView() }
             .sheet(item: $editing) { t in HostEditor(hostId: t.id.isEmpty ? nil : t.id, saved: { await app.reload() }) }
+            .sheet(item: $filesHost) { h in FilesView(host: h) }
+            .sheet(item: $ownLogin) { h in OwnLoginEditor(host: h, saved: { await app.reload() }) }
+            .sheet(isPresented: $snippets) { SnippetsView(session: nil) }
             .onAppear { joinIfLinked() }
             .onChange(of: app.pendingJoin) { joinIfLinked() }
         }
