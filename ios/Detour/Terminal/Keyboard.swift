@@ -10,7 +10,7 @@ final class KeyboardObserver: ObservableObject {
     /// The keyboard's top edge in window points; infinity while it is hidden.
     @Published private(set) var top: CGFloat = .infinity
     @Published private(set) var duration: Double = 0.25
-    @Published private(set) var hardware = GCKeyboard.coalesced != nil
+    @Published private(set) var hardware = KeyboardObserver.attached
 
     var shown: Bool { top.isFinite }
 
@@ -29,9 +29,17 @@ final class KeyboardObserver: ObservableObject {
         })
         for name in [NSNotification.Name.GCKeyboardDidConnect, .GCKeyboardDidDisconnect] {
             observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.hardware = GCKeyboard.coalesced != nil }
+                MainActor.assumeIsolated { self?.hardware = KeyboardObserver.attached }
             })
         }
+    }
+
+    /// A hardware keyboard is attached (never in screenshots: the simulator always has the Mac's).
+    private static var attached: Bool {
+        #if DEBUG
+        if Shots.screen != nil { return false }
+        #endif
+        return GCKeyboard.coalesced != nil
     }
 
     private func changed(_ frame: CGRect?, _ duration: Double?) {
