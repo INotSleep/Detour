@@ -184,7 +184,14 @@ final class TerminalSession: ObservableObject, Identifiable {
         }
     }
 
+    /// iOS turned down a connection into the local network (not allowed yet, or turned off).
+    nonisolated static var localNetworkDenied: String { String(localized: "Detour has no access to the local network") }
+
     nonisolated static func describe(_ f: CoreFailure) -> String {
+        let raw = "\(f["message"] ?? "") \(f["endpoint"] ?? "")"
+        if raw.localizedCaseInsensitiveContains("no route to host") || raw.contains("os error 65") {
+            return localNetworkDenied
+        }
         switch f.kind {
         case "unreachable": return String(localized: "Can't reach \(f["endpoint"] ?? "the host")")
         case "authFailed": return String(localized: "The server didn't accept the login")

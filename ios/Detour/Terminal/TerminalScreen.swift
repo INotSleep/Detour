@@ -221,6 +221,9 @@ private struct SessionScreen: View {
             card {
                 Text(message).font(.subheadline).multilineTextAlignment(.center)
                 Button("Retry") { session.connect() }.buttonStyle(.borderedProminent)
+                if message == TerminalSession.localNetworkDenied, let url = URL(string: UIApplication.openSettingsURLString) {
+                    Button("Open Settings") { UIApplication.shared.open(url) }
+                }
             }
         }
     }
