@@ -7,7 +7,8 @@ export type VaultKind = "personal" | "team";
 export type SyncBackend =
   | { type: "local" }
   | { type: "git"; remote: string }
-  | { type: "folder"; path: string };
+  | { type: "folder"; path: string }
+  | { type: "drive"; provider: import("./api").DriveProvider; label: string };
 
 export type SyncStatus = "synced" | "syncing" | "offline" | "conflict";
 

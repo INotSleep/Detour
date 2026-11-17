@@ -1,6 +1,6 @@
 // Mapping detour-core team views into the UI workspace.
 
-import { fromView, isCoreError, type PersonalData, type TeamEntry, type TeamView } from "./api";
+import { fromView, isCoreError, type DriveProvider, type PersonalData, type TeamEntry, type TeamView } from "./api";
 import type { Level, Role, Vault, Workspace } from "./types";
 
 export const canManage = (role?: Role | null) => role === "owner" || role === "admin";
@@ -35,7 +35,11 @@ function teamVault(view: TeamView): Vault {
     id: view.id,
     name: view.name || (view.remote ? repoName(view.remote.url) : folderName(view.path)),
     kind: "team",
-    sync: view.remote ? { type: "git", remote: view.remote.url } : { type: "folder", path: view.path },
+    sync: !view.remote
+      ? { type: "folder", path: view.path }
+      : view.remote.kind && view.remote.kind !== "git"
+        ? { type: "drive", provider: view.remote.kind as DriveProvider, label: view.remote.url }
+        : { type: "git", remote: view.remote.url },
     syncStatus: view.conflicts.length ? "conflict" : "synced",
     // For a repository: when it was last reached.
     lastSync: view.remote ? (view.remote.syncedAt ?? undefined) : Date.now(),

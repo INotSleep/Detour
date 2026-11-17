@@ -1,4 +1,4 @@
-import { FolderSync, GitBranch, HardDrive, Server } from "lucide-react";
+import { Cloud, FolderSync, GitBranch, HardDrive, Server } from "lucide-react";
 import { tr } from "../i18n";
 import type { Host, Member, SyncBackend, Vault } from "../lib/types";
 
@@ -48,12 +48,14 @@ export function Avatar({ member, size = 28 }: { member: Member; size?: number })
 export function SyncIcon({ sync, size = 14 }: { sync: SyncBackend; size?: number }) {
   if (sync.type === "git") return <GitBranch size={size} />;
   if (sync.type === "folder") return <FolderSync size={size} />;
+  if (sync.type === "drive") return <Cloud size={size} />;
   return <HardDrive size={size} />;
 }
 
 export function syncTarget(sync: SyncBackend): string {
   if (sync.type === "git") return sync.remote;
   if (sync.type === "folder") return sync.path;
+  if (sync.type === "drive") return sync.label;
   return "";
 }
 

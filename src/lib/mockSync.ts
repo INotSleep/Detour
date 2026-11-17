@@ -1,5 +1,5 @@
 // Personal vault sync in a plain browser (no detour-core): enough to show every state.
-import type { CoreError, Pairing, SyncInfo, SyncPlace } from "./api";
+import { driveNames, type CoreError, type Pairing, type SyncInfo, type SyncPlace } from "./api";
 
 const off: SyncInfo = { enabled: false, location: null, git: false, pending: false, error: null, syncedAt: null, problems: [] };
 let state: SyncInfo = { ...off };
@@ -8,9 +8,13 @@ const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const chars = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const group = () => Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
 
+/** Where a place is, as the status shows it. */
+const where = (place: SyncPlace) => ("path" in place ? place.path : "drive" in place ? `${driveNames[place.drive.provider]}: ${place.drive.label}` : place.url);
+
 function placed(place: SyncPlace): SyncInfo {
-  const git = !("path" in place);
-  return { ...off, enabled: true, git, location: "path" in place ? place.path : place.url, syncedAt: Date.now() };
+  const git = !("path" in place) && !("drive" in place);
+  const storage = "path" in place ? "folder" : "drive" in place ? place.drive.provider : "git";
+  return { ...off, enabled: true, git, storage, location: where(place), syncedAt: Date.now() };
 }
 
 export const demoSync = {
@@ -25,7 +29,7 @@ export const demoSync = {
   async enable(place: SyncPlace) {
     await wait(700);
     // A place named so stands for one another device already syncs through.
-    if (("path" in place ? place.path : place.url).includes("existing")) throw { kind: "syncExists" } satisfies CoreError;
+    if (where(place).includes("existing")) throw { kind: "syncExists" } satisfies CoreError;
     state = placed(place);
     return state;
   },

@@ -44,6 +44,8 @@ export type CoreError =
   | { kind: "notASyncVault" | "invalidCode" | "codeExpired" | "syncHasTeams" | "syncExists" }
   | { kind: "wrongFilePassword" | "notADetourFile" | "newerFile" | "keyInUse" | "repoKeyMissing" }
   | { kind: "git"; message: string }
+  | { kind: "drive"; provider: string; message: string }
+  | { kind: "driveSignIn" | "driveNoAccess"; provider: string }
   | { kind: "portBusy" | "forwardRefused"; port: number }
   | { kind: "unavailable"; path: string }
   | { kind: "sftp"; message: string }
@@ -105,6 +107,9 @@ export function errorText(e: unknown): string {
     case "jumpLoop": return t.jumpLoop;
     case "proxy": return proxyReason(e.reason);
     case "connect": return e.message === "connection lost" ? t.connectionLost : e.message;
+    case "driveSignIn": return tr().teams.drive.signInNeeded(driveNames[e.provider as DriveProvider] ?? e.provider);
+    case "driveNoAccess": return tr().teams.drive.noAccess(driveNames[e.provider as DriveProvider] ?? e.provider);
+    case "drive": return `${driveNames[e.provider as DriveProvider] ?? e.provider}: ${e.message}`;
     default: return e.message;
   }
 }
@@ -217,8 +222,8 @@ export interface TeamView {
   problems: Problem[];
   /** This person's own grouping of the team's hosts. */
   layout?: Layout | null;
-  /** Team kept in Git: how mirroring it goes. */
-  remote: { url: string; pending: boolean; error: CoreError | null; syncedAt: number | null } | null;
+  /** Team kept in Git or a cloud drive: how mirroring it goes. `url` is the repository or "OneDrive: Detour/Team". */
+  remote: { url: string; kind?: "git" | DriveProvider; pending: boolean; error: CoreError | null; syncedAt: number | null } | null;
   /** The same for every member who read the same entries. */
   stateFingerprint: string;
 }
@@ -235,6 +240,44 @@ export interface GitLogin {
   /** HTTPS: log in with this device's GitHub sign-in instead of `token`. */
   github?: boolean;
 }
+
+/** A cloud drive Detour keeps vaults in. */
+export type DriveProvider = "onedrive" | "gdrive" | "dropbox";
+
+/** A folder in a drive (detour_core::drive::DriveRemote): what the ids mean is the drive's business. */
+export interface DriveFolderRef {
+  provider: DriveProvider;
+  id: string;
+  drive?: string | null;
+  /** Its path or name, to show. */
+  label: string;
+  link?: string | null;
+}
+
+export interface DriveAccount {
+  provider: DriveProvider;
+  account: string;
+  /** False once the drive refused to renew the sign-in: sign in again. */
+  signedIn: boolean;
+}
+
+/** How to sign in: a code to enter on a page (OneDrive), or a page to open (Google Drive, Dropbox). */
+export type DriveStart = { kind: "device"; userCode: string; verificationUri: string; interval: number } | { kind: "browser"; url: string; paste: boolean };
+export type DrivePoll = { status: "pending" } | { status: "slowDown" } | { status: "done"; account: string } | { status: "expired" } | { status: "denied" };
+
+export interface DriveListing {
+  folder: DriveFolderRef;
+  folders: { id: string; drive?: string | null; name: string; shared: boolean }[];
+}
+
+export const driveNames: Record<DriveProvider, string> = { onedrive: "OneDrive", gdrive: "Google Drive", dropbox: "Dropbox" };
+
+/* demo stand-ins for cloud drives (plain browser) */
+const demoDrive = {
+  accounts: [] as DriveAccount[],
+  polls: 0,
+  folders: { "": ["Detour", "Documents", "Photos"], Detour: ["Team", "Personal"] } as Record<string, string[]>,
+};
 
 /** The code a person enters on GitHub to sign this device in (detour_core::github::DeviceCode). */
 export interface GithubCode {
@@ -288,6 +331,8 @@ export interface PendingTeam {
   root: string;
   /** A team in Git joins here by itself; a team in a folder needs the folder on this device. */
   url: string | null;
+  /** A team in a drive joins here by itself once this device is signed in to the drive. */
+  drive: DriveFolderRef | null;
   error: CoreError | null;
 }
 
@@ -347,9 +392,11 @@ export interface ImportPreview {
 /** Where the personal vault syncs and how that goes (detour_core::store::SyncStatus). */
 export interface SyncInfo {
   enabled: boolean;
-  /** The folder, or the repository's URL. */
+  /** The folder, the repository's URL, or the drive's folder. */
   location: string | null;
   git: boolean;
+  /** "folder", "git", or the drive. */
+  storage?: "folder" | "git" | DriveProvider | null;
   pending: boolean;
   error: CoreError | null;
   syncedAt: number | null;
@@ -362,8 +409,8 @@ export interface Pairing {
   expiresAt: number;
 }
 
-/** Where to sync: a folder, or a repository. */
-export type SyncPlace = { path: string } | GitLogin;
+/** Where to sync: a folder, a repository, or a drive folder. */
+export type SyncPlace = { path: string } | GitLogin | { drive: DriveFolderRef };
 
 /** A program that edits files (the core's Editor). */
 export interface Editor {
@@ -901,6 +948,10 @@ export const api = {
   teamUseGithub: (id: string): Promise<TeamView> => invoke("team_use_github", { id }),
   teamRecoverGit: (g: GitLogin, recoveryKey: string, myName: string, trustFingerprint?: string): Promise<TeamView> =>
     invoke("team_recover_git", { url: g.url, auth: g.auth, token: g.token ?? null, github: g.github ?? false, recoveryKey, myName, trustFingerprint: trustFingerprint ?? null }),
+  teamCreateDrive: (drive: DriveFolderRef, name: string, myName: string, recoveryKey: string): Promise<TeamView> => invoke("team_create_drive", { drive, name, myName, recoveryKey }),
+  teamInspectDrive: (drive: DriveFolderRef): Promise<{ info: VaultInfo; clone: string }> => invoke("team_inspect_drive", { drive }),
+  teamJoinDrive: (clone: string, root: string, drive: DriveFolderRef): Promise<TeamView> => invoke("team_join_drive", { clone, root, drive }),
+  teamRecoverDrive: (drive: DriveFolderRef, recoveryKey: string, myName: string): Promise<TeamView> => invoke("team_recover_drive", { drive, recoveryKey, myName }),
   teamPut: (id: string, data: PersonalData, base?: PersonalData): Promise<TeamView> => invoke("team_put", { id, update: toView(data), base: base ? toView(base) : null }),
   teamRename: (id: string, name: string): Promise<TeamView> => invoke("team_rename", { id, name }),
   teamMemberAdd: (id: string, detourId: string, name: string, role: Role, access: Level): Promise<TeamView> => invoke("team_member_add", { id, detourId, name, role, access }),
@@ -983,6 +1034,8 @@ export const api = {
 
   teamsPending: (): Promise<PendingTeam[]> => (real ? invoke("teams_pending") : Promise.resolve([])),
   teamJoinLinked: (teamId: string, path: string): Promise<TeamView> => invoke("team_join_linked", { teamId, path }),
+  /** Joins here, through a drive folder, a team another device keeps in a folder its drive app syncs. */
+  teamJoinLinkedDrive: (teamId: string, drive: DriveFolderRef): Promise<TeamView> => invoke("team_join_linked_drive", { teamId, drive }),
 
   /* moving over from OpenSSH (into the personal vault) */
 
@@ -998,12 +1051,14 @@ export const api = {
   syncEnable: (place: SyncPlace, trustFingerprint?: string): Promise<SyncInfo> => {
     if (!real) return demoSync.enable(place);
     if ("path" in place) return invoke("sync_enable_folder", { path: place.path });
+    if ("drive" in place) return invoke("sync_enable_drive", { drive: place.drive });
     return invoke("sync_enable_git", { url: place.url, auth: place.auth, token: place.token ?? null, github: place.github ?? false, trustFingerprint: trustFingerprint ?? null });
   },
   /** Joins the vault this person syncs on other devices, with a pairing code or the recovery key. */
   syncJoin: (place: SyncPlace, code: string, trustFingerprint?: string): Promise<SyncInfo> => {
     if (!real) return demoSync.join(place, code);
     if ("path" in place) return invoke("sync_join_folder", { path: place.path, code });
+    if ("drive" in place) return invoke("sync_join_drive", { drive: place.drive, code });
     return invoke("sync_join_git", { url: place.url, auth: place.auth, token: place.token ?? null, github: place.github ?? false, code, trustFingerprint: trustFingerprint ?? null });
   },
   syncAddDevice: (): Promise<Pairing> => (real ? invoke("sync_add_device") : demoSync.addDevice()),
@@ -1033,6 +1088,49 @@ export const api = {
   githubSignOut: async (): Promise<void> => {
     if (real) return invoke("github_sign_out");
     demoGithub.user = null;
+  },
+
+  /* cloud drives */
+
+  driveAccounts: async (): Promise<DriveAccount[]> => (real ? invoke("drive_accounts") : demoDrive.accounts),
+  driveSignIn: async (provider: DriveProvider): Promise<DriveStart> => {
+    if (real) return invoke("drive_sign_in", { provider });
+    demoDrive.polls = 0;
+    return provider === "onedrive"
+      ? { kind: "device", userCode: "F7KQ-2XMP", verificationUri: "https://microsoft.com/devicelogin", interval: 2 }
+      : { kind: "browser", url: provider === "gdrive" ? "https://accounts.google.com/o/oauth2/v2/auth" : "https://www.dropbox.com/oauth2/authorize", paste: false };
+  },
+  driveSignInPoll: async (provider: DriveProvider): Promise<DrivePoll> => {
+    if (real) return invoke("drive_sign_in_poll", { provider });
+    if (++demoDrive.polls < 3) return { status: "pending" };
+    const account = provider === "onedrive" ? "me@outlook.com" : provider === "gdrive" ? "me@gmail.com" : "me@example.com";
+    demoDrive.accounts = [...demoDrive.accounts.filter((a) => a.provider !== provider), { provider, account, signedIn: true }];
+    return { status: "done", account };
+  },
+  driveSignInCode: (provider: DriveProvider, code: string): Promise<string> => invoke("drive_sign_in_code", { provider, code }),
+  driveSignOut: async (provider: DriveProvider): Promise<void> => {
+    if (real) return invoke("drive_sign_out", { provider });
+    demoDrive.accounts = demoDrive.accounts.filter((a) => a.provider !== provider);
+  },
+  /** The folders in a folder (null: the drive's top, with what is shared with this person). */
+  driveBrowse: async (provider: DriveProvider, folder: DriveFolderRef | null): Promise<DriveListing> => {
+    if (real) return invoke("drive_browse", { provider, folder });
+    const path = folder?.label ?? "";
+    const names = demoDrive.folders[path] ?? [];
+    const here = folder ?? { provider, id: "root", label: "" };
+    const shared = path === "" ? [{ id: "shared-acme", name: "Acme Ops", shared: true }] : [];
+    return { folder: here, folders: [...names.map((n) => ({ id: `${path}/${n}`, name: n, shared: false })), ...shared] };
+  },
+  driveFolderCreate: async (provider: DriveProvider, parent: DriveFolderRef | null, name: string): Promise<DriveFolderRef> => {
+    if (real) return invoke("drive_folder_create", { provider, parent, name });
+    const path = parent?.label ?? "";
+    demoDrive.folders[path] = [...(demoDrive.folders[path] ?? []), name];
+    return { provider, id: `${path}/${name}`, label: path ? `${path}/${name}` : name };
+  },
+  /** The folder a share link points to; the drive is told by the link. */
+  driveLink: async (url: string, provider?: DriveProvider): Promise<DriveFolderRef> => {
+    if (real) return invoke("drive_link", { url, provider: provider ?? null });
+    return { provider: provider ?? "onedrive", id: "linked", label: "Team", link: url };
   },
 
   /* files (SFTP) */

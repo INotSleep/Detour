@@ -1,20 +1,21 @@
 import { useEffect, useMemo, useState } from "react";
 import { renderSVG } from "uqr";
-import { ChevronRight, Copy, Download, FolderSync, GitBranch, Laptop, Link2, RotateCw, ShieldAlert } from "lucide-react";
-import { api, errorText, isCoreError, type CoreError, type Pairing, type SyncInfo, type SyncPlace } from "../lib/api";
+import { ChevronRight, Cloud, Copy, Download, FolderSync, GitBranch, Laptop, Link2, RotateCw, ShieldAlert } from "lucide-react";
+import { api, driveNames, errorText, isCoreError, type CoreError, type DriveProvider, type Pairing, type SyncInfo, type SyncPlace } from "../lib/api";
+import { DriveSignInDialog } from "./DriveFields";
 import { locale, tr, useT } from "../i18n";
 import { copyText, formatAgo, useStore } from "../lib/store";
 import { Button, ConfirmDialog, Field, Modal } from "./ui";
 import { RepoLoginFields, ServerKeyCard, StorageFields, githubIssue, githubRepo, gitLogin, storageReady, unknownServerKey, useStorage, type Storage } from "./TeamDialogs";
 import { problemText, remoteErrorText } from "./TeamsView";
 
-const placeOf = (s: Storage): SyncPlace => (s.kind === "folder" ? { path: s.path.trim() } : gitLogin(s));
+const placeOf = (s: Storage): SyncPlace => (s.kind === "folder" ? { path: s.path.trim() } : s.kind === "drive" && s.drive ? { drive: s.drive } : gitLogin(s));
 
 /** What went wrong with the last sync, in words. */
 export function syncErrorText(s: SyncInfo): string {
   const e = s.error;
   if (!e) return "";
-  if (!s.git && (e.kind === "unavailable" || e.kind === "io")) return tr().sync.folderUnavailable;
+  if ((!s.storage || s.storage === "folder") && !s.git && (e.kind === "unavailable" || e.kind === "io")) return tr().sync.folderUnavailable;
   return remoteErrorText(e);
 }
 
@@ -25,7 +26,7 @@ export function SyncSettings() {
   const { sync, setSync, refreshPersonal, toast } = useStore();
   const all = useT();
   const t = all.sync;
-  const [dialog, setDialog] = useState<"enable" | "device" | "recovery" | "disable" | "token" | "serverKey" | null>(null);
+  const [dialog, setDialog] = useState<"enable" | "device" | "recovery" | "disable" | "token" | "serverKey" | "driveSignIn" | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [showProblems, setShowProblems] = useState(false);
 
@@ -69,13 +70,15 @@ export function SyncSettings() {
     <section className="settings-group">
       <h3 className="section-title">{t.title}</h3>
       <div className="sync-card">
-        <div className="item-icon">{sync.git ? <GitBranch size={15} /> : <FolderSync size={15} />}</div>
+        <div className="item-icon">{sync.git ? <GitBranch size={15} /> : sync.storage && sync.storage !== "folder" ? <Cloud size={15} /> : <FolderSync size={15} />}</div>
         <div className="sync-main">
           <span className="mono sync-location" title={sync.location ?? ""}>{sync.location}</span>
           <span className={`small ${failed ? "err-text" : sync.pending ? "warn-text" : "muted"}`}>{status}</span>
         </div>
         {keyChanged ? (
           <Button size="sm" onClick={() => setDialog("serverKey")}>{t.replaceServerKey}</Button>
+        ) : sync.error?.kind === "driveSignIn" ? (
+          <Button size="sm" variant="primary" onClick={() => setDialog("driveSignIn")}>{all.teams.drive.signInFix(driveNames[sync.error.provider as DriveProvider] ?? sync.error.provider)}</Button>
         ) : tokenRejected(sync.error) ? (
           <Button size="sm" onClick={() => setDialog("token")}>{githubIssue(sync.error) ? all.teams.github.fix : t.newToken}</Button>
         ) : (
@@ -111,6 +114,9 @@ export function SyncSettings() {
         <Button size="sm" variant="ghost" className="danger-text" onClick={() => setDialog("disable")}>{t.disable}</Button>
       </div>
 
+      {dialog === "driveSignIn" && sync.error?.kind === "driveSignIn" && (
+        <DriveSignInDialog provider={sync.error.provider as DriveProvider} onClose={() => setDialog(null)} onDone={() => { setDialog(null); void run(() => api.syncNow()); }} />
+      )}
       {dialog === "device" && <AddDeviceDialog repo={sync.location} onClose={() => setDialog(null)} />}
       {dialog === "recovery" && <RecoveryDialog onClose={() => setDialog(null)} />}
       {dialog === "token" && <TokenDialog repoUrl={sync.location ?? ""} onClose={() => setDialog(null)} onSaved={(go) => run(go)} />}

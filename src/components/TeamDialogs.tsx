@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Check, Copy, Download, ExternalLink, FolderOpen, KeyRound, Loader2, ShieldAlert, ShieldCheck, ShieldQuestion } from "lucide-react";
-import { api, errorText, isCoreError, type GitLogin, type GithubCode, type TeamView } from "../lib/api";
+import { api, driveNames, errorText, isCoreError, type DriveFolderRef, type DriveProvider, type GitLogin, type GithubCode, type TeamView } from "../lib/api";
+import { DriveFields } from "./DriveFields";
 import { copyText, sleep, uid, useStore } from "../lib/store";
 import type { Level, Role, SshKey, Vault } from "../lib/types";
 import { Button, Field, IconButton, Modal, PasswordInput, Segmented } from "./ui";
@@ -40,7 +41,10 @@ export function FolderField({ value, onChange, label, placeholder = "D:\\Sync\\t
 /* ---------- where a team vault lives: a folder or a Git repository ---------- */
 
 export interface Storage {
-  kind: "folder" | "git";
+  kind: "folder" | "git" | "drive";
+  /** A cloud drive's folder, picked or opened from a link. */
+  provider: DriveProvider;
+  drive: DriveFolderRef | null;
   path: string;
   url: string;
   /** Personal key id, or "agent". */
@@ -56,7 +60,7 @@ export interface Storage {
 export function useStorage(): [Storage, (patch: Partial<Storage>) => void] {
   const { ws } = useStore();
   const firstKey = ws.keys.find((k) => k.vaultId === "personal")?.id ?? "agent";
-  const [s, setS] = useState<Storage>({ kind: "folder", path: "", url: "", login: firstKey, token: "", useToken: false, githubReady: false });
+  const [s, setS] = useState<Storage>({ kind: "folder", provider: "onedrive", drive: null, path: "", url: "", login: firstKey, token: "", useToken: false, githubReady: false });
   return [s, (patch) => setS((cur) => ({ ...cur, ...patch }))];
 }
 
@@ -69,7 +73,10 @@ export const gitLogin = (s: Storage): GitLogin =>
       ? { url: s.url.trim(), auth: { type: "password" }, token: s.token.trim() }
       : { url: s.url.trim(), auth: s.login === "agent" ? { type: "agent" } : { type: "key", keyId: s.login } };
 export const storageReady = (s: Storage) =>
-  s.kind === "folder" ? !!s.path.trim() : !!s.url.trim() && (viaGithub(s) ? s.githubReady : !isHttps(s.url) || !!s.token.trim());
+  s.kind === "folder" ? !!s.path.trim() : s.kind === "drive" ? !!s.drive : !!s.url.trim() && (viaGithub(s) ? s.githubReady : !isHttps(s.url) || !!s.token.trim());
+
+/** Where a storage is, as the status line shows it. */
+export const storageLabel = (s: Storage) => (s.kind === "drive" && s.drive ? `${driveNames[s.drive.provider]}: ${s.drive.label}` : s.kind === "git" ? s.url.trim() : s.path.trim());
 
 export function StorageFields({ value, set, folderLabel, folderPlaceholder }: { value: Storage; set: (p: Partial<Storage>) => void; folderLabel: string; folderPlaceholder?: string }) {
   const t = useT();
@@ -99,9 +106,11 @@ export function StorageFields({ value, set, folderLabel, folderPlaceholder }: { 
   return (
     <>
       <Field label={t.teams.storage.title}>
-        <Segmented value={value.kind} onChange={(kind) => set({ kind })} options={[{ value: "folder", label: t.teams.storage.folder }, { value: "git", label: t.teams.storage.git }]} />
+        <Segmented value={value.kind} onChange={(kind) => set({ kind })} options={[{ value: "folder", label: t.teams.storage.folder }, { value: "git", label: t.teams.storage.git }, { value: "drive", label: t.teams.storage.cloud }]} />
       </Field>
-      {value.kind === "folder" ? (
+      {value.kind === "drive" ? (
+        <DriveFields provider={value.provider} folder={value.drive} set={(p) => set(p)} />
+      ) : value.kind === "folder" ? (
         <FolderField value={value.path} onChange={(path) => set({ path })} label={folderLabel} placeholder={folderPlaceholder} />
       ) : (
         <>
@@ -440,14 +449,21 @@ export function CreateTeamDialog({ onClose, onDone }: { onClose: () => void; onD
         const view: TeamView =
           storage.kind === "git"
             ? await api.teamCreateGit(gitLogin(storage), name.trim(), myName.trim(), recovery, serverKey ?? undefined)
-            : await api.teamCreate(storage.path.trim(), name.trim(), myName.trim(), recovery);
+            : storage.kind === "drive" && storage.drive
+              ? await api.teamCreateDrive(storage.drive, name.trim(), myName.trim(), recovery)
+              : await api.teamCreate(storage.path.trim(), name.trim(), myName.trim(), recovery);
         applyTeamView(view);
         setVault(view.id);
       } else {
         await sleep(500);
         const id = uid("v");
         const meId = uid("m");
-        const sync = storage.kind === "git" ? { type: "git" as const, remote: storage.url.trim() } : { type: "folder" as const, path: storage.path.trim() };
+        const sync =
+          storage.kind === "git"
+            ? { type: "git" as const, remote: storage.url.trim() }
+            : storage.kind === "drive" && storage.drive
+              ? { type: "drive" as const, provider: storage.drive.provider, label: storageLabel(storage) }
+              : { type: "folder" as const, path: storage.path.trim() };
         const vault: Vault = { id, name: name.trim(), kind: "team", sync, syncStatus: "synced", lastSync: Date.now(), conflicts: [], joined: true, myRole: "owner", me: meId, problems: [] };
         update((w) => ({
           ...w,
@@ -575,6 +591,18 @@ export function JoinTeamDialog({ onClose, onDone }: { onClose: () => void; onDon
     setError(null);
     const trust = serverKey ?? undefined;
     try {
+      if (storage.kind === "drive" && storage.drive) {
+        const drive = storage.drive;
+        if (mode === "recover") return finish(await api.teamRecoverDrive(drive, recoveryKey, myName.trim() || "Owner"));
+        if (!info || !clone) {
+          const found = await api.teamInspectDrive(drive);
+          setInfo(found.info);
+          setClone(found.clone);
+          setBusy(false);
+          return;
+        }
+        return finish(await api.teamJoinDrive(clone, info.root, drive));
+      }
       if (storage.kind === "git") {
         const login = gitLogin(storage);
         if (mode === "recover") return finish(await api.teamRecoverGit(login, recoveryKey, myName.trim() || "Owner", trust));

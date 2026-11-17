@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useState } from "react";
-import { ChevronRight, Copy, Ellipsis, Fingerprint, IdCard, LogIn, LogOut, Plus, RefreshCw, ShieldAlert, ShieldQuestion, TriangleAlert, UserMinus, UserPlus, Users, UserX } from "lucide-react";
-import { api, errorText, isCoreError, type CoreError, type PendingTeam } from "../lib/api";
+import { ChevronRight, Cloud, Copy, Ellipsis, Fingerprint, IdCard, LogIn, LogOut, Plus, RefreshCw, ShieldAlert, ShieldQuestion, TriangleAlert, UserMinus, UserPlus, Users, UserX } from "lucide-react";
+import { api, driveNames, errorText, isCoreError, type CoreError, type DriveFolderRef, type DriveProvider, type PendingTeam } from "../lib/api";
+import { DriveFields, DriveSignInDialog } from "./DriveFields";
 import { copyText, formatAgo, sleep, useStore } from "../lib/store";
 import { atLeast, canManage, removeVault } from "../lib/teams";
 import type { ActivityItem, Coll, Level, Member, Problem, Role, Vault } from "../lib/types";
@@ -31,6 +32,8 @@ function activityText(t: Dict, a: ActivityItem): string {
   }
 }
 
+const driveName = (p: string) => driveNames[p as DriveProvider] ?? p;
+
 /** Why a team's repository could not be reached, in words. */
 export function remoteErrorText(e: CoreError): string {
   const t = tr().teams.remote;
@@ -39,6 +42,8 @@ export function remoteErrorText(e: CoreError): string {
     case "unreachable": case "connect": case "io": return t.unreachable;
     case "authFailed": return t.authFailed;
     case "needSecret": return t.needSecret;
+    case "driveSignIn": return tr().teams.drive.signInNeeded(driveName(e.provider));
+    case "driveNoAccess": return tr().teams.drive.noAccess(driveName(e.provider));
     default: return errorText(e);
   }
 }
@@ -78,6 +83,7 @@ function TeamPage({ vault }: { vault: Vault }) {
   const [syncing, setSyncing] = useState(false);
   const [showProblems, setShowProblems] = useState(false);
   const [tokenDialog, setTokenDialog] = useState(false);
+  const [driveSignIn, setDriveSignIn] = useState<DriveProvider | null>(null);
   const loginIssue = githubIssue(vault.remoteError);
   const tokenRejected = loginIssue || (vault.remoteError?.kind === "git" && vault.remoteError.message.includes("token rejected"));
 
@@ -216,7 +222,11 @@ function TeamPage({ vault }: { vault: Vault }) {
         <div className="banner warn">
           <TriangleAlert size={16} />
           <span className="grow">{remoteErrorText(vault.remoteError)}</span>
-          {tokenRejected ? (
+          {vault.remoteError.kind === "driveSignIn" ? (
+            <Button size="sm" variant="primary" onClick={() => setDriveSignIn(vault.remoteError?.kind === "driveSignIn" ? (vault.remoteError.provider as DriveProvider) : null)}>
+              {t.teams.drive.signInFix(driveName(vault.remoteError.provider))}
+            </Button>
+          ) : tokenRejected ? (
             <Button size="sm" variant="primary" onClick={() => setTokenDialog(true)}>{loginIssue ? t.teams.github.fix : t.teams.page.newToken}</Button>
           ) : (
             <Button size="sm" loading={syncing} onClick={() => sync()}>{t.common.retry}</Button>
@@ -341,6 +351,7 @@ function TeamPage({ vault }: { vault: Vault }) {
       )}
 
       {adding && <AddMemberDialog vault={vault} onClose={() => setAdding(false)} />}
+      {driveSignIn && <DriveSignInDialog provider={driveSignIn} onClose={() => setDriveSignIn(null)} onDone={() => { setDriveSignIn(null); void sync(); }} />}
       {tokenDialog && <TokenDialog vault={vault} onClose={() => setTokenDialog(false)} />}
       {removing && (
         <ConfirmDialog
@@ -629,6 +640,9 @@ function PendingTeamCard({ team, onChanged }: { team: PendingTeam; onChanged: ()
   const { toast, applyTeamView } = useStore();
   const [busy, setBusy] = useState(false);
   const [removing, setRemoving] = useState(false);
+  const [fromDrive, setFromDrive] = useState(false);
+  const [signIn, setSignIn] = useState(false);
+  const drive = team.drive;
 
   const pickFolder = async () => {
     const path = await api.pickFolder();
@@ -651,14 +665,38 @@ function PendingTeamCard({ team, onChanged }: { team: PendingTeam; onChanged: ()
       <div className="team-card-main">
         <span className="strong">{team.name || t.teams.pending.fallbackName}</span>
         <span className={`small ${team.error ? "err-text" : "muted"}`}>
-          {team.url ? (team.error ? remoteErrorText(team.error) : t.teams.pending.connecting) : t.teams.pending.notConnected}
+          {team.url || drive ? (team.error ? remoteErrorText(team.error) : t.teams.pending.connecting) : t.teams.pending.notConnected}
         </span>
       </div>
-      {!team.url && <Button size="sm" variant="primary" loading={busy} onClick={() => void pickFolder()}>{t.teams.pending.chooseFolder}</Button>}
+      {drive ? (
+        <Button size="sm" variant="primary" onClick={() => setSignIn(true)}>{t.teams.drive.signInFix(driveNames[drive.provider])}</Button>
+      ) : (
+        !team.url && <Button size="sm" variant="primary" loading={busy} onClick={() => void pickFolder()}>{t.teams.pending.chooseFolder}</Button>
+      )}
       <Menu
         trigger={(open, isOpen) => <IconButton icon={Ellipsis} label={t.teams.more} className={isOpen ? "pressed" : ""} onClick={open} />}
-        items={[{ label: t.teams.leave.everywhere, icon: LogOut, danger: true, onSelect: () => setRemoving(true) }]}
+        items={[
+          // A folder its drive's app syncs on the other device: here, through the drive.
+          ...(!team.url && !drive ? [{ label: t.teams.pending.fromCloud, icon: Cloud, onSelect: () => setFromDrive(true) }] : []),
+          { label: t.teams.leave.everywhere, icon: LogOut, danger: true, onSelect: () => setRemoving(true) },
+        ]}
       />
+      {signIn && drive && (
+        <DriveSignInDialog
+          provider={drive.provider}
+          onClose={() => setSignIn(false)}
+          onDone={async () => {
+            setSignIn(false);
+            try {
+              await api.syncNow();
+            } catch {
+              // The background sync joins it too.
+            }
+            onChanged();
+          }}
+        />
+      )}
+      {fromDrive && <JoinFromDriveDialog team={team} onClose={() => setFromDrive(false)} onJoined={() => { setFromDrive(false); onChanged(); }} />}
       {removing && (
         <ConfirmDialog
           title={t.teams.pending.removeTitle(team.name)}
@@ -675,6 +713,56 @@ function PendingTeamCard({ team, onChanged }: { team: PendingTeam; onChanged: ()
         />
       )}
     </div>
+  );
+}
+
+/** Joins a team joined on another device through the folder of it in a cloud drive. */
+function JoinFromDriveDialog({ team, onClose, onJoined }: { team: PendingTeam; onClose: () => void; onJoined: () => void }) {
+  const t = useT();
+  const { toast, applyTeamView } = useStore();
+  const [provider, setProvider] = useState<DriveProvider>("onedrive");
+  const [folder, setFolder] = useState<DriveFolderRef | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const join = async () => {
+    if (!folder || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      applyTeamView(await api.teamJoinLinkedDrive(team.teamId, folder));
+      toast({ text: t.teams.join.joined(team.name), tone: "success" });
+      onJoined();
+    } catch (e) {
+      setBusy(false);
+      setError(isCoreError(e) && e.kind === "notATeamVault" ? t.teams.pending.otherTeam : errorText(e));
+    }
+  };
+
+  return (
+    <Modal
+      title={team.name || t.teams.pending.fallbackName}
+      width={540}
+      onClose={onClose}
+      onSubmit={join}
+      footer={
+        <>
+          <Button type="button" variant="ghost" onClick={onClose}>{t.common.cancel}</Button>
+          <Button type="submit" variant="primary" loading={busy} disabled={!folder}>{t.teams.join.joinTitle}</Button>
+        </>
+      }
+    >
+      <DriveFields
+        provider={provider}
+        folder={folder}
+        set={(p) => {
+          if (p.provider) setProvider(p.provider);
+          if (p.drive !== undefined) setFolder(p.drive);
+          setError(null);
+        }}
+      />
+      {error && <span className="field-error">{error}</span>}
+    </Modal>
   );
 }
 
