@@ -54,6 +54,8 @@ import json, sys
 d = json.load(sys.stdin)["devices"]
 pro = [x for k, v in sorted(d.items()) if "iOS" in k for x in v if x["name"].endswith("Pro Max")]
 print(pro[-1]["udid"])')
+# As on a phone: no Mac keyboard attached (the app hides its key bar when one is).
+defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
 xcrun simctl boot "$dev" 2>/dev/null || true
 xcrun simctl bootstatus "$dev" -b
 xcrun simctl ui "$dev" appearance dark
