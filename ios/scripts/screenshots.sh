@@ -48,38 +48,55 @@ for _ in $(seq 1 20); do
   sleep 1
 done
 
-# The newest 6.9" iPhone there is.
-dev=$(xcrun simctl list devices available -j | python3 -c '
+# The newest 6.9" iPhone and 13" iPad there are.
+newest() {
+  xcrun simctl list devices available -j | python3 -c '
 import json, sys
 d = json.load(sys.stdin)["devices"]
-pro = [x for k, v in sorted(d.items()) if "iOS" in k for x in v if x["name"].endswith("Pro Max")]
-print(pro[-1]["udid"])')
-# As on a phone: no Mac keyboard attached (the app hides its key bar when one is).
+found = [x for k, v in sorted(d.items()) if "iOS" in k for x in v if sys.argv[1] in x["name"]]
+print(found[-1]["udid"] if found else "")' "$1"
+}
+phone=$(newest "iPhone 17 Pro Max")
+[ -n "$phone" ] || phone=$(newest "Pro Max")
+pad=$(newest "iPad Pro 13-inch")
+# As on a phone: no Mac keyboard attached.
 defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
-xcrun simctl boot "$dev" 2>/dev/null || true
-xcrun simctl bootstatus "$dev" -b
-xcrun simctl ui "$dev" appearance dark
-# No keyboard tips over the shots.
-xcrun simctl spawn "$dev" defaults write com.apple.Preferences DidShowContinuousPathIntroduction -bool true
-xcrun simctl spawn "$dev" defaults write com.apple.keyboard.preferences DidShowContinuousPathIntroduction -bool true
-xcrun simctl status_bar "$dev" override --time 9:41 --dataNetwork wifi --wifiMode active --wifiBars 3   --cellularMode active --cellularBars 4 --batteryState charged --batteryLevel 100
 
-# The debug app, built for that simulator.
-xcodebuild -project Detour.xcodeproj -scheme Detour -configuration Debug -destination "id=$dev"   -skipPackagePluginValidation -skipMacroValidation build | xcbeautify --renderer github-actions
+boot() {
+  xcrun simctl boot "$1" 2>/dev/null || true
+  xcrun simctl bootstatus "$1" -b
+  xcrun simctl ui "$1" appearance dark
+  # No keyboard tips over the shots.
+  xcrun simctl spawn "$1" defaults write com.apple.Preferences DidShowContinuousPathIntroduction -bool true
+  xcrun simctl spawn "$1" defaults write com.apple.keyboard.preferences DidShowContinuousPathIntroduction -bool true
+  xcrun simctl status_bar "$1" override --time 9:41 --dataNetwork wifi --wifiMode active --wifiBars 3 --cellularMode active --cellularBars 4 --batteryState charged --batteryLevel 100
+}
+boot "$phone"
+
+# The debug app, built for the simulator (the same app runs on the iPad one).
+xcodebuild -project Detour.xcodeproj -scheme Detour -configuration Debug -destination "id=$phone" \
+  -skipPackagePluginValidation -skipMacroValidation build | xcbeautify --renderer github-actions
 app=$(find ~/Library/Developer/Xcode/DerivedData -maxdepth 6 -path '*/Build/Products/Debug-iphonesimulator/Detour.app' -newer "$key" 2>/dev/null | head -1)
 echo "app: $app"
-ls "$app" | head -20
-xcrun simctl install "$dev" "$app"
 
 export SIMCTL_CHILD_DETOUR_SHOTS_KEY="$(cat "$key")"
 export SIMCTL_CHILD_DETOUR_SHOTS_USER="$user"
-n=1
-for screen in hosts terminal files snippets keys; do
-  xcrun simctl terminate "$dev" dev.detour.ios 2>/dev/null || true
-  xcrun simctl launch "$dev" dev.detour.ios -shot "$screen" -AppleLanguages "(en)" -AppleLocale en_US
-  # The first launch makes the vault (and its key) first.
-  sleep $([ "$screen" = hosts ] && echo 15 || echo 9)
-  xcrun simctl io "$dev" screenshot "$out/$n-$screen.png"
-  n=$((n + 1))
-done
+shoot() {
+  local dev=$1 kind=$2 n=1
+  xcrun simctl install "$dev" "$app"
+  for screen in hosts terminal files snippets keys; do
+    xcrun simctl terminate "$dev" dev.detour.ios 2>/dev/null || true
+    xcrun simctl launch "$dev" dev.detour.ios -shot "$screen" -AppleLanguages "(en)" -AppleLocale en_US
+    # The first launch makes the vault (and its key) first.
+    sleep $([ "$screen" = hosts ] && echo 15 || echo 9)
+    xcrun simctl io "$dev" screenshot "$out/$kind-$n-$screen.png"
+    n=$((n + 1))
+  done
+}
+shoot "$phone" iphone
+if [ -n "$pad" ]; then
+  xcrun simctl shutdown "$phone" || true
+  boot "$pad"
+  shoot "$pad" ipad
+fi
 ls -la "$out"
