@@ -91,9 +91,12 @@ extension SwiftTerm.Color {
 extension TerminalView {
     func apply(_ theme: TerminalTheme, fontSize: Double) {
         installColors(theme.ansi)
-        nativeBackgroundColor = theme.background
         nativeForegroundColor = theme.foreground
-        backgroundColor = theme.background
+        nativeBackgroundColor = theme.background
+        // SwiftTerm clears old glyphs to transparent and lets the layer's colour show through:
+        // that needs a view that isn't opaque, or the cleared places come out black.
+        layer.backgroundColor = theme.background.cgColor
+        isOpaque = false
         caretColor = theme.cursor
         selectedTextBackgroundColor = theme.selection
         keyboardAppearance = theme.isLight ? .light : .dark

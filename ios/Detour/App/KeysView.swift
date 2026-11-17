@@ -238,12 +238,12 @@ private struct ImportKeySheet: View {
                 }
                 if let error { Text(error).foregroundStyle(.red).font(.footnote) }
             }
-            .navigationTitle("Import a key")
+            .navigationTitle("Key import")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    if busy { ProgressView() } else { Button("Import") { Task { await save() } }.disabled(text.isEmpty) }
+                    if busy { ProgressView() } else { Button("Add") { Task { await save() } }.disabled(text.isEmpty) }
                 }
             }
             .fileImporter(isPresented: $picking, allowedContentTypes: [.data, .text, .item]) { result in
