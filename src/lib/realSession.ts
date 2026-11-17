@@ -20,6 +20,8 @@ export type HostKeyAnswer = "trust" | "replace" | "cancel";
 export const shownSessions = new Set<string>();
 
 interface Options {
+  /** The user it logs in as (a group's or this person's own login may stand in for the host's), for what it prints. */
+  user: string;
   initialCommand?: string;
   /** A session the core already holds: show it instead of opening one. */
   attach?: string;
@@ -152,10 +154,10 @@ export function runRealSession(term: Terminal, host: Host, opts: Options): () =>
           secret = null;
           if (attemptsLeft > 0) {
             term.write(e.secret === "password" ? "Permission denied, please try again.\r\n" : `${tr().common.errors.wrongPassphrase}.\r\n`);
-            return askSecret(e.secret, secretPrompt || (e.secret === "password" ? `${host.user}@${host.address}'s password: ` : tr().terminal.session.passphrasePrompt));
+            return askSecret(e.secret, secretPrompt || (e.secret === "password" ? `${opts.user}@${host.address}'s password: ` : tr().terminal.session.passphrasePrompt));
           }
           attemptsLeft = MAX_SECRET_ATTEMPTS;
-          return fail(`${host.user}@${host.address}: Permission denied`);
+          return fail(`${opts.user}@${host.address}: Permission denied`);
         }
         return fail(tr().common.errors.keyRejected);
       default:
@@ -216,7 +218,7 @@ export function runRealSession(term: Terminal, host: Host, opts: Options): () =>
 
   if (opts.attach) void attach(opts.attach);
   else {
-    term.write(`${C.dim}${host.user}@${host.address}:${host.port}${C.reset}\r\n`);
+    term.write(`${C.dim}${opts.user}@${host.address}:${host.port}${C.reset}\r\n`);
     void open();
   }
 

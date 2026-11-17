@@ -2,7 +2,8 @@ import { useRef, useState } from "react";
 import { ArrowLeftRight, ArrowRight, Copy, Ellipsis, Globe, Laptop, Loader2, Pencil, Plus, RotateCw, Server, ShieldQuestion, Trash2, type LucideIcon } from "lucide-react";
 import { api, errorText, isCoreError, trustMore, type SecretKind } from "../lib/api";
 import { copyText, sleep, uid, useStore } from "../lib/store";
-import type { Host, Tunnel } from "../lib/types";
+import type { Host, Tunnel, Workspace } from "../lib/types";
+import { loginUser } from "../lib/groups";
 import { atLeast, writable } from "../lib/teams";
 import { Button, Checkbox, Empty, Field, IconButton, Menu, Modal, PageHeader, PasswordInput, Switch } from "./ui";
 import { tr, useT } from "../i18n";
@@ -128,11 +129,11 @@ export function TunnelsView() {
       const via = latest.current.hosts.find((h) => h.id === t.viaHostId);
       if (isCoreError(e) && e.kind === "needSecret") {
         patch(t.id, { state: "off" });
-        return setAsk({ kind: "secret", tunnel: t, secret: e.secret, text: secretLabel(e.secret, via), trust: answer.trust });
+        return setAsk({ kind: "secret", tunnel: t, secret: e.secret, text: secretLabel(e.secret, latest.current, via), trust: answer.trust });
       }
       if (isCoreError(e) && e.kind === "authFailed" && answer.secret) {
         patch(t.id, { state: "off" });
-        return setAsk({ kind: "secret", tunnel: t, secret: e.secret ?? "password", text: secretLabel(e.secret ?? "password", via), trust: answer.trust, error: errorText(e) });
+        return setAsk({ kind: "secret", tunnel: t, secret: e.secret ?? "password", text: secretLabel(e.secret ?? "password", latest.current, via), trust: answer.trust, error: errorText(e) });
       }
       if (isCoreError(e) && e.kind === "hostKeyUnknown") {
         patch(t.id, { state: "off" });
@@ -336,9 +337,9 @@ function TrustDialog({ ask, onClose, onTrust }: { ask: Extract<Ask, { kind: "tru
 }
 
 /** What the login prompt asks for, in words. */
-function secretLabel(kind: SecretKind, via?: Host) {
+function secretLabel(kind: SecretKind, ws: Workspace, via?: Host) {
   const tx = tr();
-  return kind === "passphrase" ? tx.tunnels.secret.passphrase : via ? tx.tunnels.secret.passwordFor(`${via.user}@${via.address}`) : tx.common.password;
+  return kind === "passphrase" ? tx.tunnels.secret.passphrase : via ? tx.tunnels.secret.passwordFor(`${loginUser(ws, via)}@${via.address}`) : tx.common.password;
 }
 
 function ChangedKeyDialog({ ask, onClose, onReplace }: { ask: Extract<Ask, { kind: "changed" }>; onClose: () => void; onReplace: () => void }) {
