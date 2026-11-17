@@ -24,12 +24,15 @@ struct DriveFolderRef: Codable, Hashable {
     /// Its path or name, to show.
     var label: String
     var link: String?
+    /// The account it is reached with (any of the drive's when unset).
+    var account: String?
 
     /// As the core takes it.
     var json: [String: Any] {
         var o: [String: Any] = ["provider": provider.rawValue, "id": id, "label": label]
         if let drive { o["drive"] = drive }
         if let link { o["link"] = link }
+        if let account { o["account"] = account }
         return o
     }
 
@@ -63,9 +66,18 @@ struct DriveAccount: Decodable {
 struct CoreErrorInfo: Decodable, Hashable {
     let kind: String
     let provider: String?
+    let account: String?
     let message: String?
 
     var drive: DriveProvider? { provider.flatMap(DriveProvider.init(rawValue:)) }
+}
+
+/// A drive (and its account) something kept there needs signing in to again.
+struct DriveSignInNeed: Hashable, Identifiable {
+    let provider: DriveProvider
+    let account: String?
+
+    var id: String { "\(provider.rawValue)/\(account ?? "")" }
 }
 
 /// What starting a sign-in gave: a page to open, and whether it ends with a code to paste.
@@ -75,10 +87,14 @@ struct DriveStart {
 }
 
 enum Drives {
-    /// The drives this device is signed in to, with their accounts.
-    static func accounts() async -> [DriveProvider: String] {
-        let list = (try? await Core.shared.call("drive_accounts", as: [DriveAccount].self)) ?? []
-        return Dictionary(list.filter(\.signedIn).map { ($0.provider, $0.account) }, uniquingKeysWith: { a, _ in a })
+    /// This device's sign-ins to a drive's accounts.
+    static func accounts(of p: DriveProvider) async -> [DriveAccount] {
+        ((try? await Core.shared.call("drive_accounts", as: [DriveAccount].self)) ?? []).filter { $0.provider == p }
+    }
+
+    /// The accounts this device is signed in to, of all drives.
+    static func signedIn() async -> [DriveAccount] {
+        ((try? await Core.shared.call("drive_accounts", as: [DriveAccount].self)) ?? []).filter(\.signedIn)
     }
 
     /// Starts signing in: the page sends the browser back to the app once the drive has answered.
@@ -111,7 +127,9 @@ enum Drives {
         guard let f = e as? CoreFailure else { return e.localizedDescription }
         let name = f["provider"].flatMap(DriveProvider.init(rawValue:))?.name ?? ""
         switch f.kind {
-        case "driveSignIn": return String(localized: "Sign in to \(name) again")
+        case "driveSignIn":
+            if let a = f["account"] { return String(localized: "Sign in to \(name) as \(a) again") }
+            return String(localized: "Sign in to \(name) again")
         case "driveNoAccess": return String(localized: "The \(name) account has no access to the folder")
         case "folderNotEmpty": return String(localized: "This folder is not empty")
         case "notATeamVault": return String(localized: "This folder has a different team")

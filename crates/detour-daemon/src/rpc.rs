@@ -409,25 +409,32 @@ pub(crate) async fn dispatch(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value
             ok(drive::auth::finish_code(store, a.provider, &a.code).await)
         }
         "drive_sign_out" => {
-            let a = args!(method, p, { provider: Provider });
-            ok(s!().drive_sign_out(a.provider))
+            let a = args!(method, p, { provider: Provider, account: Option<String> });
+            ok(s!().drive_sign_out(a.provider, a.account.as_deref()))
         }
+        // Folders are reached with `account` (any of the drive's when unset), and say so.
         "drive_browse" => {
-            let a = args!(method, p, { provider: Provider, folder: Option<DriveRemote> });
-            let token = drive::auth::token(store, a.provider).await.map_err(err)?;
-            ok(blocking(move || drive::browse(a.provider, &token, a.folder.as_ref())).await)
+            let a = args!(method, p, { provider: Provider, folder: Option<DriveRemote>, account: Option<String> });
+            let token = drive::auth::token(store, a.provider, a.account.as_deref()).await.map_err(err)?;
+            let account = a.account.clone();
+            ok(blocking(move || drive::browse(a.provider, &token, a.folder.as_ref())).await.map(|mut l| {
+                l.folder.account = account;
+                l
+            }))
         }
         "drive_folder_create" => {
-            let a = args!(method, p, { provider: Provider, parent: Option<DriveRemote>, name: String });
-            let token = drive::auth::token(store, a.provider).await.map_err(err)?;
-            ok(blocking(move || drive::create_folder(a.provider, &token, a.parent.as_ref(), &a.name)).await)
+            let a = args!(method, p, { provider: Provider, parent: Option<DriveRemote>, name: String, account: Option<String> });
+            let token = drive::auth::token(store, a.provider, a.account.as_deref()).await.map_err(err)?;
+            let account = a.account.clone();
+            ok(blocking(move || drive::create_folder(a.provider, &token, a.parent.as_ref(), &a.name)).await.map(|f| DriveRemote { account, ..f }))
         }
         // The folder a pasted share link is to (the drive is told by the link, or given).
         "drive_link" => {
-            let a = args!(method, p, { url: String, provider: Option<Provider> });
+            let a = args!(method, p, { url: String, provider: Option<Provider>, account: Option<String> });
             let provider = a.provider.or_else(|| drive::link::provider_of(&a.url)).ok_or_else(|| json!({ "kind": "drive", "provider": "", "message": "not a link to a OneDrive, Google Drive or Dropbox folder" }))?;
-            let token = drive::auth::token(store, provider).await.map_err(err)?;
-            ok(blocking(move || drive::open_link(provider, &token, &a.url)).await)
+            let token = drive::auth::token(store, provider, a.account.as_deref()).await.map_err(err)?;
+            let account = a.account.clone();
+            ok(blocking(move || drive::open_link(provider, &token, &a.url)).await.map(|f| DriveRemote { account, ..f }))
         }
         "team_create_drive" => {
             let a = args!(method, p, { drive: DriveRemote, name: String, my_name: String, recovery_key: String });

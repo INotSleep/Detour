@@ -1343,22 +1343,25 @@ impl Store {
         Ok(self.unlocked()?.vault.drives.clone())
     }
 
-    /// This device's sign-in to a drive.
-    pub fn drive_login(&self, p: crate::drive::Provider) -> Result<Option<crate::drive::DriveLogin>> {
-        Ok(self.unlocked()?.vault.drives.iter().find(|l| l.provider == p).cloned())
+    /// This device's sign-in to a drive with `account`, or (with `None`) to any account of
+    /// that drive, a working one first.
+    pub fn drive_login(&self, p: crate::drive::Provider, account: Option<&str>) -> Result<Option<crate::drive::DriveLogin>> {
+        let drives = &self.unlocked()?.vault.drives;
+        let mut of = drives.iter().filter(|l| l.provider == p && account.is_none_or(|a| l.account == a));
+        Ok(of.clone().find(|l| !l.access_token.is_empty()).or_else(|| of.next()).cloned())
     }
 
-    /// Keeps this device's sign-in to a drive, in place of an earlier one.
+    /// Keeps this device's sign-in to a drive's account, in place of an earlier one to it.
     pub fn set_drive_login(&mut self, login: crate::drive::DriveLogin) -> Result<()> {
         let v = self.vault_mut()?;
-        v.drives.retain(|l| l.provider != login.provider);
+        v.drives.retain(|l| l.provider != login.provider || l.account != login.account);
         v.drives.push(login);
         self.write_vault()
     }
 
-    /// Forgets this device's sign-in to a drive.
-    pub fn drive_sign_out(&mut self, p: crate::drive::Provider) -> Result<()> {
-        self.vault_mut()?.drives.retain(|l| l.provider != p);
+    /// Forgets this device's sign-in to a drive's account (with `None`, to all its accounts).
+    pub fn drive_sign_out(&mut self, p: crate::drive::Provider, account: Option<&str>) -> Result<()> {
+        self.vault_mut()?.drives.retain(|l| l.provider != p || account.is_some_and(|a| l.account != a));
         self.write_vault()
     }
 
@@ -2185,7 +2188,7 @@ impl Store {
             .iter()
             .filter(|l| !v.teams.iter().any(|t| t.id == l.team_id))
             .filter_map(|l| Some((l.team_id.clone(), l.root.clone(), l.drive.clone()?)))
-            .filter(|(_, _, d)| v.drives.iter().any(|x| x.provider == d.provider && !x.access_token.is_empty()))
+            .filter(|(_, _, d)| v.drives.iter().any(|x| x.provider == d.provider && d.account.as_ref().is_none_or(|a| &x.account == a) && !x.access_token.is_empty()))
             .collect())
     }
 

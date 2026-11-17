@@ -84,6 +84,10 @@ pub struct DriveRemote {
     /// The share link it was opened with, if any (OneDrive redeems it again when needed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<String>,
+    /// The account it is reached with, of those this device is signed in to (any of that
+    /// drive's when unset).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
 }
 
 impl DriveRemote {
@@ -274,7 +278,7 @@ pub(crate) mod http {
     /// An answer the drive refused: 401 means signing in again, 403/404 no access.
     pub fn refused(p: Provider, status: u16, body: &str) -> Error {
         match status {
-            401 => Error::DriveSignIn { provider: p.id().into() },
+            401 => Error::DriveSignIn { provider: p.id().into(), account: None },
             403 | 404 => Error::DriveNoAccess { provider: p.id().into() },
             _ => {
                 let short: String = body.chars().take(300).collect();

@@ -259,8 +259,8 @@ pub async fn drive(c: &Client, action: Option<crate::DriveAction>) -> Res<()> {
         Some(crate::DriveAction::Login { provider }) => {
             drive_login(c, check(&provider)?).await?;
         }
-        Some(crate::DriveAction::Logout { provider }) => {
-            c.call("drive_sign_out", json!({ "provider": check(&provider)? })).await?;
+        Some(crate::DriveAction::Logout { provider, account }) => {
+            c.call("drive_sign_out", json!({ "provider": check(&provider)?, "account": account })).await?;
             eprintln!("{}", t().done);
         }
     }

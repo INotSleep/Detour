@@ -113,7 +113,7 @@ async fn job_at(store: &Mutex<Store>, dir: &Path, place: &Place, trust_fingerpri
     match place {
         Place::Git(g) => Ok(Job::Git(Mirror::new(dir), locked(store)?.git_remote(g, trust_fingerprint)?)),
         Place::Drive(d) => {
-            let token = drive::auth::token(store, d.provider).await?;
+            let token = drive::auth::token(store, d.provider, d.account.as_deref()).await?;
             let d = d.clone();
             let storage = blocking(move || drive::storage(&d, &token)).await?;
             Ok(Job::Drive(drive::Mirror::new(dir), Arc::from(storage)))

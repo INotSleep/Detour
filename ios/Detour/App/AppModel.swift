@@ -11,7 +11,7 @@ final class AppModel: ObservableObject {
     @Published var sections: [HostSection] = []
     @Published var sync: SyncStatus?
     /// Drives to sign in to again: the vault's sync or a team is kept there.
-    @Published var driveSignIns: [DriveProvider] = []
+    @Published var driveSignIns: [DriveSignInNeed] = []
     /// Teams on this person's other devices kept in a folder: opened here through a drive.
     @Published var folderTeams: [PendingTeam] = []
     @Published var terminals: [TerminalSession] = []
@@ -100,19 +100,21 @@ final class AppModel: ObservableObject {
         sections = out
         sync = try? await Core.shared.call("sync_status", as: SyncStatus.self)
         signIns.append(sync?.error)
-        var drives = signIns.compactMap { $0?.kind == "driveSignIn" ? $0?.drive : nil }
+        var needs: [DriveSignInNeed] = signIns.compactMap { e in e?.kind == "driveSignIn" ? e?.drive.map { DriveSignInNeed(provider: $0, account: e?.account) } : nil }
         var folders: [PendingTeam] = []
         if sync?.enabled == true, let pending = try? await Core.shared.call("teams_pending", as: [PendingTeam].self), !pending.isEmpty {
-            let accounts = await Drives.accounts()
+            let accounts = await Drives.signedIn()
             for t in pending {
                 if let d = t.drive {
-                    if accounts[d.provider] == nil { drives.append(d.provider) }
+                    let here = accounts.contains { $0.provider == d.provider && (d.account == nil || $0.account == d.account) }
+                    if !here { needs.append(DriveSignInNeed(provider: d.provider, account: d.account)) }
                 } else if t.url == nil {
                     folders.append(t)
                 }
             }
         }
-        driveSignIns = DriveProvider.allCases.filter { drives.contains($0) }
+        var seen = Set<DriveSignInNeed>()
+        driveSignIns = needs.filter { seen.insert($0).inserted }
         folderTeams = folders
     }
 

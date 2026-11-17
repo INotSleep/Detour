@@ -201,7 +201,7 @@ pub fn browse(token: &str, folder: Option<&DriveRemote>) -> Result<DriveListing>
         None => {
             let mut folders = folders_of(query(token, &format!("'root' in parents and mimeType={} and trashed=false", quoted(FOLDER)), "")?, false);
             folders.extend(folders_of(query(token, &format!("sharedWithMe and mimeType={} and trashed=false", quoted(FOLDER)), "")?, true));
-            Ok(DriveListing { folder: DriveRemote { provider: P, id: "root".into(), drive: None, label: String::new(), link: None }, folders })
+            Ok(DriveListing { folder: DriveRemote { provider: P, id: "root".into(), drive: None, label: String::new(), link: None, account: None }, folders })
         }
     }
 }
@@ -212,7 +212,7 @@ pub fn create_folder(token: &str, parent: Option<&DriveRemote>, name: &str) -> R
         Some(p) if !p.label.is_empty() => format!("{}/{}", p.label, f.name),
         _ => f.name.clone(),
     };
-    Ok(DriveRemote { provider: P, id: f.id, drive: None, label, link: None })
+    Ok(DriveRemote { provider: P, id: f.id, drive: None, label, link: None, account: None })
 }
 
 /// The folder id in a Drive link (`/drive/folders/<id>`, `?id=<id>`).
@@ -233,7 +233,7 @@ pub fn open_link(token: &str, url: &str) -> Result<DriveRemote> {
     if !f.is_folder() {
         return Err(Error::Drive { provider: P.id().into(), message: "the link is not to a folder".into() });
     }
-    Ok(DriveRemote { provider: P, id: f.id, drive: None, label: f.name, link: Some(url.trim().to_string()) })
+    Ok(DriveRemote { provider: P, id: f.id, drive: None, label: f.name, link: Some(url.trim().to_string()), account: None })
 }
 
 pub fn account(token: &str) -> Result<String> {

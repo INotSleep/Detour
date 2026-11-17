@@ -83,7 +83,7 @@ function TeamPage({ vault }: { vault: Vault }) {
   const [syncing, setSyncing] = useState(false);
   const [showProblems, setShowProblems] = useState(false);
   const [tokenDialog, setTokenDialog] = useState(false);
-  const [driveSignIn, setDriveSignIn] = useState<DriveProvider | null>(null);
+  const [driveSignIn, setDriveSignIn] = useState<{ provider: DriveProvider; account?: string } | null>(null);
   const loginIssue = githubIssue(vault.remoteError);
   const tokenRejected = loginIssue || (vault.remoteError?.kind === "git" && vault.remoteError.message.includes("token rejected"));
 
@@ -223,7 +223,7 @@ function TeamPage({ vault }: { vault: Vault }) {
           <TriangleAlert size={16} />
           <span className="grow">{remoteErrorText(vault.remoteError)}</span>
           {vault.remoteError.kind === "driveSignIn" ? (
-            <Button size="sm" variant="primary" onClick={() => setDriveSignIn(vault.remoteError?.kind === "driveSignIn" ? (vault.remoteError.provider as DriveProvider) : null)}>
+            <Button size="sm" variant="primary" onClick={() => setDriveSignIn(vault.remoteError?.kind === "driveSignIn" ? { provider: vault.remoteError.provider as DriveProvider, account: vault.remoteError.account } : null)}>
               {t.teams.drive.signInFix(driveName(vault.remoteError.provider))}
             </Button>
           ) : tokenRejected ? (
@@ -351,7 +351,7 @@ function TeamPage({ vault }: { vault: Vault }) {
       )}
 
       {adding && <AddMemberDialog vault={vault} onClose={() => setAdding(false)} />}
-      {driveSignIn && <DriveSignInDialog provider={driveSignIn} onClose={() => setDriveSignIn(null)} onDone={() => { setDriveSignIn(null); void sync(); }} />}
+      {driveSignIn && <DriveSignInDialog provider={driveSignIn.provider} account={driveSignIn.account} onClose={() => setDriveSignIn(null)} onDone={() => { setDriveSignIn(null); void sync(); }} />}
       {tokenDialog && <TokenDialog vault={vault} onClose={() => setTokenDialog(false)} />}
       {removing && (
         <ConfirmDialog
@@ -684,6 +684,7 @@ function PendingTeamCard({ team, onChanged }: { team: PendingTeam; onChanged: ()
       {signIn && drive && (
         <DriveSignInDialog
           provider={drive.provider}
+          account={drive.account}
           onClose={() => setSignIn(false)}
           onDone={async () => {
             setSignIn(false);

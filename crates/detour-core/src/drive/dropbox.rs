@@ -208,7 +208,7 @@ fn with_tag(mut v: serde_json::Value, tag: &str) -> Result<Entry> {
 fn remote_of(e: &Entry, link: Option<String>) -> DriveRemote {
     let shared = e.shared_folder_id.clone().or_else(|| e.sharing_info.as_ref().and_then(|s| s.shared_folder_id.clone()));
     let path = e.path_display.clone().or_else(|| e.path_lower.clone()).unwrap_or_default();
-    DriveRemote { provider: P, label: path.trim_start_matches('/').to_string(), id: path, drive: shared, link }
+    DriveRemote { provider: P, label: path.trim_start_matches('/').to_string(), id: path, drive: shared, link, account: None }
 }
 
 pub fn browse(token: &str, folder: Option<&DriveRemote>) -> Result<DriveListing> {
@@ -222,7 +222,7 @@ pub fn browse(token: &str, folder: Option<&DriveRemote>) -> Result<DriveListing>
         })
         .collect();
     folders.sort_by_key(|f| f.name.to_lowercase());
-    let here = folder.cloned().unwrap_or(DriveRemote { provider: P, id: String::new(), drive: None, label: String::new(), link: None });
+    let here = folder.cloned().unwrap_or(DriveRemote { provider: P, id: String::new(), drive: None, label: String::new(), link: None, account: None });
     Ok(DriveListing { folder: here, folders })
 }
 

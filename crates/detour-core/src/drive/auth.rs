@@ -171,13 +171,13 @@ pub async fn start(p: Provider, back: Option<String>) -> Result<Start> {
             let mut url = match p {
                 Provider::OneDrive => format!("{}/authorize?client_id={}&response_type=code&response_mode=query&scope={}&prompt=select_account", ms_login(), enc(&client), enc(ONEDRIVE_SCOPE)),
                 Provider::GoogleDrive => format!(
-                    "{}?client_id={}&response_type=code&scope={}&access_type=offline&prompt=consent",
+                    "{}?client_id={}&response_type=code&scope={}&access_type=offline&prompt=select_account%20consent",
                     std::env::var("DETOUR_GOOGLE_AUTH").unwrap_or_else(|_| "https://accounts.google.com/o/oauth2/v2/auth".into()),
                     enc(&client),
                     enc(GDRIVE_SCOPE)
                 ),
                 _ => format!(
-                    "{}?client_id={}&response_type=code&token_access_type=offline",
+                    "{}?client_id={}&response_type=code&token_access_type=offline&force_reapprove=true",
                     std::env::var("DETOUR_DROPBOX_AUTH").unwrap_or_else(|_| "https://www.dropbox.com/oauth2/authorize".into()),
                     enc(&client)
                 ),
@@ -337,16 +337,17 @@ async fn keep(store: &Mutex<Store>, p: Provider, t: Tokens) -> Result<String> {
 static RENEWING: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(Default::default);
 
 /// A token to call the drive with, renewed first when it is about to run out.
-pub async fn token(store: &Mutex<Store>, p: Provider) -> Result<String> {
+pub async fn token(store: &Mutex<Store>, p: Provider, account: Option<&str>) -> Result<String> {
     let _held = RENEWING.lock().await;
-    let login = locked(store)?.drive_login(p)?.ok_or_else(|| Error::DriveSignIn { provider: p.id().into() })?;
+    let sign_in = || Error::DriveSignIn { provider: p.id().into(), account: account.map(str::to_string) };
+    let login = locked(store)?.drive_login(p, account)?.ok_or_else(sign_in)?;
     if login.access_token.is_empty() {
-        return Err(Error::DriveSignIn { provider: p.id().into() });
+        return Err(sign_in());
     }
     if login.expires_at - 5 * 60 * 1000 > now_ms() {
         return Ok(login.access_token);
     }
-    let Some(refresh) = login.refresh_token.clone() else { return Err(Error::DriveSignIn { provider: p.id().into() }) };
+    let Some(refresh) = login.refresh_token.clone() else { return Err(sign_in()) };
     let client = client_id(p)?;
     let mut form = vec![("client_id", client), ("grant_type", "refresh_token".to_string()), ("refresh_token", refresh.clone())];
     match p {
@@ -367,7 +368,7 @@ pub async fn token(store: &Mutex<Store>, p: Provider) -> Result<String> {
         // Refused: the sign-in is over (revoked, or unused for too long).
         Ok(_) => {
             locked(store)?.set_drive_login(DriveLogin { access_token: String::new(), ..login })?;
-            Err(Error::DriveSignIn { provider: p.id().into() })
+            Err(sign_in())
         }
         // Offline: the old token may still work for a while.
         Err(e) if login.expires_at > now_ms() => {

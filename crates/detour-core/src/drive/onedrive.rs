@@ -167,7 +167,7 @@ impl Storage for Folder {
 
 fn remote_of(it: &DriveItem, link: Option<String>) -> Result<DriveRemote> {
     let drive = it.drive_id().ok_or_else(|| Error::Drive { provider: P.id().into(), message: "the folder's drive is unknown".into() })?;
-    Ok(DriveRemote { provider: P, id: it.id.clone(), drive: Some(drive), label: it.name.clone(), link })
+    Ok(DriveRemote { provider: P, id: it.id.clone(), drive: Some(drive), label: it.name.clone(), link, account: None })
 }
 
 fn folders_of(items: Vec<DriveItem>) -> Vec<DriveFolder> {
@@ -203,7 +203,7 @@ pub fn browse(token: &str, folder: Option<&DriveRemote>) -> Result<DriveListing>
                 folders.extend(folders_of(shared).into_iter().filter(|f| f.shared));
             }
             let drive = root.drive_id();
-            Ok(DriveListing { folder: DriveRemote { provider: P, id: root.id, drive, label: String::new(), link: None }, folders })
+            Ok(DriveListing { folder: DriveRemote { provider: P, id: root.id, drive, label: String::new(), link: None, account: None }, folders })
         }
     }
 }

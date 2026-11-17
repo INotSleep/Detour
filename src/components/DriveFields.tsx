@@ -1,32 +1,45 @@
 import { useEffect, useState } from "react";
-import { ChevronRight, Cloud, ExternalLink, Folder, FolderPlus, Link2, Loader2, Users } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Cloud, ExternalLink, Folder, FolderPlus, Link2, Loader2, LogOut, Plus, Users } from "lucide-react";
 import { api, driveNames, errorText, type DriveAccount, type DriveFolderRef, type DriveListing, type DriveProvider, type DriveStart } from "../lib/api";
 import { copyText, useStore } from "../lib/store";
-import { Button, Field, Modal, Segmented } from "./ui";
+import { Button, Field, IconButton, Menu, Modal, Segmented } from "./ui";
 import { useT } from "../i18n";
 
 /* ---------- signing in to a drive ---------- */
 
-/** This device's sign-in to a drive: the account, or signing in (a code to enter, or a page to open). */
-export function DriveSignIn({ provider, onAccount }: { provider: DriveProvider; onAccount: (account: string | null) => void }) {
+/** The account of a drive a vault is reached with: one this device is signed in to, another
+ * one added (signing in: a code to enter, or a page to open), or signed out of. */
+export function DriveSignIn({ provider, account: wanted, onAccount }: { provider: DriveProvider; account?: string | null; onAccount: (account: string | null) => void }) {
   const t = useT();
   const d = t.teams.drive;
   const name = driveNames[provider];
   const { toast } = useStore();
-  const [account, setAccount] = useState<DriveAccount | null | undefined>(undefined);
+  const [accounts, setAccounts] = useState<DriveAccount[] | undefined>(undefined);
+  const [chosen, setChosen] = useState<string | null>(null);
   const [start, setStart] = useState<DriveStart | null>(null);
   const [starting, setStarting] = useState(false);
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
 
+  const load = async (pick?: string | null) => {
+    const list = (await api.driveAccounts().catch(() => [] as DriveAccount[])).filter((a) => a.provider === provider);
+    setAccounts(list);
+    setChosen((now) => {
+      const want = pick ?? now ?? wanted ?? null;
+      return list.find((a) => a.account === want)?.account ?? list.find((a) => a.signedIn)?.account ?? list[0]?.account ?? null;
+    });
+  };
+
   useEffect(() => {
-    setAccount(undefined);
+    setAccounts(undefined);
+    setChosen(null);
     setStart(null);
     setError(null);
-    api.driveAccounts().then((list) => setAccount(list.find((a) => a.provider === provider) ?? null)).catch(() => setAccount(null));
+    void load(wanted ?? null);
   }, [provider]);
 
-  useEffect(() => onAccount(account?.signedIn ? account.account : null), [account]);
+  const current = accounts?.find((a) => a.account === chosen) ?? null;
+  useEffect(() => onAccount(current?.signedIn ? current.account : null), [current?.account, current?.signedIn]);
 
   // Waits for the sign-in to finish on the drive's page.
   useEffect(() => {
@@ -62,7 +75,8 @@ export function DriveSignIn({ provider, onAccount }: { provider: DriveProvider; 
 
   const done = (who: string) => {
     setStart(null);
-    setAccount({ provider, account: who, signedIn: true });
+    setCode("");
+    void load(who);
     toast({ text: d.signedIn(name, who), tone: "success" });
   };
 
@@ -98,10 +112,21 @@ export function DriveSignIn({ provider, onAccount }: { provider: DriveProvider; 
     }
   };
 
-  if (account === undefined) return null;
+  const signOut = async (who: string) => {
+    try {
+      await api.driveSignOut(provider, who);
+      setChosen(null);
+      await load(null);
+      toast({ text: d.signedOut(name, who), tone: "success" });
+    } catch (e) {
+      setError(errorText(e));
+    }
+  };
+
+  if (accounts === undefined) return null;
   return (
     <div className="field">
-      <span className="field-label">{name}</span>
+      <span className="field-label">{d.account}</span>
       {start?.kind === "device" ? (
         <div className="github-code">
           <div className="input-group">
@@ -119,14 +144,30 @@ export function DriveSignIn({ provider, onAccount }: { provider: DriveProvider; 
         <div className="github-install">
           <span className="muted small github-status"><Loader2 size={13} className="spin" />{d.waiting}</span>
           <Button type="button" size="sm" icon={ExternalLink} onClick={() => void api.openInBrowser(start.url)}>{d.open(name)}</Button>
+          <Button type="button" size="sm" variant="ghost" onClick={() => setStart(null)}>{t.common.cancel}</Button>
         </div>
-      ) : account?.signedIn ? (
-        <div className="github-account">
-          <span className="mono small">{d.account(account.account)}</span>
+      ) : current ? (
+        <div className="input-group">
+          <Menu
+            align="start"
+            trigger={(open) => (
+              <button type="button" className="input drive-account grow" onClick={open}>
+                <span className="mono ellipsis grow">{current.account}</span>
+                {!current.signedIn && <span className="field-error small">{d.expired}</span>}
+                <ChevronDown size={14} className="muted" />
+              </button>
+            )}
+            items={[
+              ...accounts.map((a) => ({ label: a.account, icon: a.account === current.account ? Check : undefined, hint: a.signedIn ? undefined : d.expired, onSelect: () => setChosen(a.account) })),
+              { label: d.addAccount, icon: Plus, onSelect: () => void begin() },
+            ]}
+          />
+          {!current.signedIn && <Button type="button" variant="primary" loading={starting} onClick={() => void begin()}>{d.signInAgain(name)}</Button>}
+          <IconButton type="button" icon={LogOut} label={d.signOut} onClick={() => void signOut(current.account)} />
         </div>
       ) : (
         <Button type="button" variant="primary" className="self-start" loading={starting} onClick={() => void begin()}>
-          {account ? d.signInAgain(name) : d.signIn(name)}
+          {d.signIn(name)}
         </Button>
       )}
       {error && <span className="field-error">{error}</span>}
@@ -135,11 +176,11 @@ export function DriveSignIn({ provider, onAccount }: { provider: DriveProvider; 
 }
 
 /** Signing in to a drive again, from a banner: done once the account is there. */
-export function DriveSignInDialog({ provider, onClose, onDone }: { provider: DriveProvider; onClose: () => void; onDone: () => void }) {
+export function DriveSignInDialog({ provider, account, onClose, onDone }: { provider: DriveProvider; account?: string | null; onClose: () => void; onDone: () => void }) {
   const t = useT();
   return (
     <Modal title={t.teams.drive.signIn(driveNames[provider])} width={460} onClose={onClose} onSubmit={onClose} footer={<Button type="button" variant="ghost" onClick={onClose}>{t.common.cancel}</Button>}>
-      <DriveSignIn provider={provider} onAccount={(a) => { if (a) onDone(); }} />
+      <DriveSignIn provider={provider} account={account} onAccount={(a) => { if (a && (!account || a === account)) onDone(); }} />
     </Modal>
   );
 }
@@ -163,7 +204,7 @@ export function DriveFields({ provider, folder, set }: { provider: DriveProvider
     setOpening(true);
     setError(null);
     try {
-      set({ drive: await api.driveLink(link.trim(), provider) });
+      set({ drive: await api.driveLink(link.trim(), provider, account) });
       setLink("");
     } catch (e) {
       setError(errorText(e));
@@ -177,7 +218,15 @@ export function DriveFields({ provider, folder, set }: { provider: DriveProvider
       <Field label={d.service}>
         <Segmented value={provider} onChange={(p) => set({ provider: p, drive: null })} options={PROVIDERS.map((p) => ({ value: p, label: driveNames[p] }))} />
       </Field>
-      <DriveSignIn provider={provider} onAccount={setAccount} />
+      <DriveSignIn
+        provider={provider}
+        account={folder?.account}
+        onAccount={(a) => {
+          setAccount(a);
+          // A folder is reached with the account chosen for it.
+          if (folder && a && folder.account !== a) set({ drive: { ...folder, account: a } });
+        }}
+      />
       {account && (
         <>
           <Field label={d.folder}>
@@ -206,13 +255,13 @@ export function DriveFields({ provider, folder, set }: { provider: DriveProvider
           </Field>
         </>
       )}
-      {browsing && <DriveBrowser provider={provider} onClose={() => setBrowsing(false)} onPick={(f) => { set({ drive: f }); setBrowsing(false); }} />}
+      {browsing && account && <DriveBrowser provider={provider} account={account} onClose={() => setBrowsing(false)} onPick={(f) => { set({ drive: f }); setBrowsing(false); }} />}
     </>
   );
 }
 
 /** Walks the drive's folders, makes one if needed, and picks one. */
-export function DriveBrowser({ provider, onClose, onPick }: { provider: DriveProvider; onClose: () => void; onPick: (f: DriveFolderRef) => void }) {
+export function DriveBrowser({ provider, account, onClose, onPick }: { provider: DriveProvider; account: string; onClose: () => void; onPick: (f: DriveFolderRef) => void }) {
   const t = useT();
   const d = t.teams.drive;
   const name = driveNames[provider];
@@ -228,7 +277,7 @@ export function DriveBrowser({ provider, onClose, onPick }: { provider: DrivePro
     setListing(null);
     setError(null);
     try {
-      setListing(await api.driveBrowse(provider, folder));
+      setListing(await api.driveBrowse(provider, folder, account));
     } catch (e) {
       setError(errorText(e));
     }
@@ -238,13 +287,13 @@ export function DriveBrowser({ provider, onClose, onPick }: { provider: DrivePro
   const enter = (f: DriveListing["folders"][number]) => {
     const parent = here?.label ?? "";
     const label = f.shared || !parent ? f.name : `${parent}/${f.name}`;
-    setTrail([...trail, { provider, id: f.id, drive: f.drive ?? listing?.folder.drive ?? null, label }]);
+    setTrail([...trail, { provider, id: f.id, drive: f.drive ?? listing?.folder.drive ?? null, label, account }]);
   };
 
   const create = async () => {
     if (!newName.trim()) return;
     try {
-      const f = await api.driveFolderCreate(provider, here, newName.trim());
+      const f = await api.driveFolderCreate(provider, here, newName.trim(), account);
       setMaking(false);
       setNewName("");
       setTrail([...trail, f]);

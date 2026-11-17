@@ -289,7 +289,8 @@ pub enum GithubAction {
 #[derive(Subcommand)]
 pub enum DriveAction {
     Login { provider: String },
-    Logout { provider: String },
+    /// Without an account, signs out of all of that drive's.
+    Logout { provider: String, account: Option<String> },
 }
 
 #[derive(Subcommand)]

@@ -34,7 +34,7 @@ fn folder() -> (FakeDrive, DriveRemote) {
     let drive = FakeDrive::new();
     let id = format!("folder-{}", detour_core::new_id());
     FAKES.lock().unwrap().insert(id.clone(), drive.clone());
-    (drive, DriveRemote { provider: Provider::OneDrive, id, drive: Some("d1".into()), label: "Detour/Team".into(), link: None })
+    (drive, DriveRemote { provider: Provider::OneDrive, id, drive: Some("d1".into()), label: "Detour/Team".into(), link: None, account: None })
 }
 
 fn put(s: &Mutex<Store>, id: &str, hosts: Vec<HostView>) {
@@ -82,9 +82,29 @@ async fn signed_out_of_the_drive_the_team_says_so() {
     let (_drive, remote) = folder();
     let alice = store("alice");
     let team = sync::create_remote_team(&alice, Place::Drive(remote), "Acme", "Alice", &Store::new_recovery_key(), None).await.unwrap();
-    alice.lock().unwrap().drive_sign_out(Provider::OneDrive).unwrap();
+    alice.lock().unwrap().drive_sign_out(Provider::OneDrive, None).unwrap();
     let view = sync::sync_team(&alice, &team.id, None).await.unwrap();
     assert_eq!(view.remote.unwrap().error.unwrap()["kind"], "driveSignIn");
+}
+
+#[tokio::test]
+async fn a_team_is_reached_with_its_own_account() {
+    let (_drive, mut remote) = folder();
+    let alice = store("alice");
+    let work = DriveLogin { provider: Provider::OneDrive, account: "work@example.com".into(), access_token: "tok2".into(), expires_at: i64::MAX / 2, refresh_token: None };
+    alice.lock().unwrap().set_drive_login(work).unwrap();
+    assert_eq!(alice.lock().unwrap().drive_logins().unwrap().len(), 2);
+    remote.account = Some("work@example.com".into());
+    let team = sync::create_remote_team(&alice, Place::Drive(remote), "Acme", "Alice", &Store::new_recovery_key(), None).await.unwrap();
+
+    // Signed out of the other account: the team doesn't notice.
+    alice.lock().unwrap().drive_sign_out(Provider::OneDrive, Some("alice@example.com")).unwrap();
+    assert!(sync::sync_team(&alice, &team.id, None).await.unwrap().remote.unwrap().error.is_none());
+
+    // Signed out of its own: it asks for that account again.
+    alice.lock().unwrap().drive_sign_out(Provider::OneDrive, Some("work@example.com")).unwrap();
+    let error = sync::sync_team(&alice, &team.id, None).await.unwrap().remote.unwrap().error.unwrap();
+    assert_eq!((error["kind"].as_str(), error["account"].as_str()), (Some("driveSignIn"), Some("work@example.com")));
 }
 
 #[tokio::test]

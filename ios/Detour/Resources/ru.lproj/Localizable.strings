@@ -174,3 +174,7 @@
 "This folder has a different team" = "В этой папке другая команда";
 "This folder has no synced vault" = "В этой папке нет синхронизированного хранилища";
 "No connection" = "Нет соединения";
+"Account" = "Аккаунт";
+"Add account" = "Добавить аккаунт";
+"Sign out" = "Выйти";
+"Sign in to %@ as %@ again" = "Войдите в %1$@ как %2$@ снова";

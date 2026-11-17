@@ -45,7 +45,8 @@ export type CoreError =
   | { kind: "wrongFilePassword" | "notADetourFile" | "newerFile" | "keyInUse" | "repoKeyMissing" }
   | { kind: "git"; message: string }
   | { kind: "drive"; provider: string; message: string }
-  | { kind: "driveSignIn" | "driveNoAccess"; provider: string }
+  | { kind: "driveSignIn"; provider: string; account?: string }
+  | { kind: "driveNoAccess"; provider: string }
   | { kind: "portBusy" | "forwardRefused"; port: number }
   | { kind: "unavailable"; path: string }
   | { kind: "sftp"; message: string }
@@ -107,7 +108,7 @@ export function errorText(e: unknown): string {
     case "jumpLoop": return t.jumpLoop;
     case "proxy": return proxyReason(e.reason);
     case "connect": return e.message === "connection lost" ? t.connectionLost : e.message;
-    case "driveSignIn": return tr().teams.drive.signInNeeded(driveNames[e.provider as DriveProvider] ?? e.provider);
+    case "driveSignIn": return e.account ? tr().teams.drive.signInNeededAs(driveNames[e.provider as DriveProvider] ?? e.provider, e.account) : tr().teams.drive.signInNeeded(driveNames[e.provider as DriveProvider] ?? e.provider);
     case "driveNoAccess": return tr().teams.drive.noAccess(driveNames[e.provider as DriveProvider] ?? e.provider);
     case "drive": return `${driveNames[e.provider as DriveProvider] ?? e.provider}: ${e.message}`;
     default: return e.message;
@@ -252,6 +253,8 @@ export interface DriveFolderRef {
   /** Its path or name, to show. */
   label: string;
   link?: string | null;
+  /** The account it is reached with (any of the drive's when unset). */
+  account?: string | null;
 }
 
 export interface DriveAccount {
@@ -1106,33 +1109,34 @@ export const api = {
     if (real) return invoke("drive_sign_in_poll", { provider });
     if (++demoDrive.polls < 3) return { status: "pending" };
     const account = provider === "onedrive" ? "me@outlook.com" : provider === "gdrive" ? "me@gmail.com" : "me@example.com";
-    demoDrive.accounts = [...demoDrive.accounts.filter((a) => a.provider !== provider), { provider, account, signedIn: true }];
+    demoDrive.accounts = [...demoDrive.accounts.filter((a) => a.provider !== provider || a.account !== account), { provider, account, signedIn: true }];
     return { status: "done", account };
   },
   driveSignInCode: (provider: DriveProvider, code: string): Promise<string> => invoke("drive_sign_in_code", { provider, code }),
-  driveSignOut: async (provider: DriveProvider): Promise<void> => {
-    if (real) return invoke("drive_sign_out", { provider });
-    demoDrive.accounts = demoDrive.accounts.filter((a) => a.provider !== provider);
+  /** Signs out of one account of a drive (all of them without `account`). */
+  driveSignOut: async (provider: DriveProvider, account?: string): Promise<void> => {
+    if (real) return invoke("drive_sign_out", { provider, account: account ?? null });
+    demoDrive.accounts = demoDrive.accounts.filter((a) => a.provider !== provider || (account !== undefined && a.account !== account));
   },
   /** The folders in a folder (null: the drive's top, with what is shared with this person). */
-  driveBrowse: async (provider: DriveProvider, folder: DriveFolderRef | null): Promise<DriveListing> => {
-    if (real) return invoke("drive_browse", { provider, folder });
+  driveBrowse: async (provider: DriveProvider, folder: DriveFolderRef | null, account: string | null): Promise<DriveListing> => {
+    if (real) return invoke("drive_browse", { provider, folder, account });
     const path = folder?.label ?? "";
     const names = demoDrive.folders[path] ?? [];
-    const here = folder ?? { provider, id: "root", label: "" };
+    const here = folder ?? { provider, id: "root", label: "", account };
     const shared = path === "" ? [{ id: "shared-acme", name: "Acme Ops", shared: true }] : [];
     return { folder: here, folders: [...names.map((n) => ({ id: `${path}/${n}`, name: n, shared: false })), ...shared] };
   },
-  driveFolderCreate: async (provider: DriveProvider, parent: DriveFolderRef | null, name: string): Promise<DriveFolderRef> => {
-    if (real) return invoke("drive_folder_create", { provider, parent, name });
+  driveFolderCreate: async (provider: DriveProvider, parent: DriveFolderRef | null, name: string, account: string | null): Promise<DriveFolderRef> => {
+    if (real) return invoke("drive_folder_create", { provider, parent, name, account });
     const path = parent?.label ?? "";
     demoDrive.folders[path] = [...(demoDrive.folders[path] ?? []), name];
-    return { provider, id: `${path}/${name}`, label: path ? `${path}/${name}` : name };
+    return { provider, id: `${path}/${name}`, label: path ? `${path}/${name}` : name, account };
   },
   /** The folder a share link points to; the drive is told by the link. */
-  driveLink: async (url: string, provider?: DriveProvider): Promise<DriveFolderRef> => {
-    if (real) return invoke("drive_link", { url, provider: provider ?? null });
-    return { provider: provider ?? "onedrive", id: "linked", label: "Team", link: url };
+  driveLink: async (url: string, provider: DriveProvider | undefined, account: string | null): Promise<DriveFolderRef> => {
+    if (real) return invoke("drive_link", { url, provider: provider ?? null, account });
+    return { provider: provider ?? "onedrive", id: "linked", label: "Team", link: url, account };
   },
 
   /* files (SFTP) */

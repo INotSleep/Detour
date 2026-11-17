@@ -22,8 +22,8 @@ struct HostsView: View {
             List {
                 if query.isEmpty, !app.driveSignIns.isEmpty || !app.folderTeams.isEmpty {
                     Section {
-                        ForEach(app.driveSignIns) { p in
-                            DriveSignInRow(provider: p, account: .constant(nil)) { _ in Task { await app.driveSignedIn() } }
+                        ForEach(app.driveSignIns) { need in
+                            DriveSignInAgainRow(need: need) { Task { await app.driveSignedIn() } }
                         }
                         ForEach(app.folderTeams) { t in
                             Button { folderTeam = t } label: {

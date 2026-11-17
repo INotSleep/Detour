@@ -115,7 +115,7 @@ export function SyncSettings() {
       </div>
 
       {dialog === "driveSignIn" && sync.error?.kind === "driveSignIn" && (
-        <DriveSignInDialog provider={sync.error.provider as DriveProvider} onClose={() => setDialog(null)} onDone={() => { setDialog(null); void run(() => api.syncNow()); }} />
+        <DriveSignInDialog provider={sync.error.provider as DriveProvider} account={sync.error.account} onClose={() => setDialog(null)} onDone={() => { setDialog(null); void run(() => api.syncNow()); }} />
       )}
       {dialog === "device" && <AddDeviceDialog repo={sync.location} drive={sync.drive ?? null} onClose={() => setDialog(null)} />}
       {dialog === "recovery" && <RecoveryDialog onClose={() => setDialog(null)} />}

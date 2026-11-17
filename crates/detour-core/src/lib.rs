@@ -50,7 +50,12 @@ pub enum Error {
     Drive { provider: String, message: String },
     /// Signing in to the drive is needed (never signed in here, or the sign-in ran out).
     #[error("sign in to {provider}")]
-    DriveSignIn { provider: String },
+    DriveSignIn {
+        provider: String,
+        /// The account to sign in with, when the vault is reached with a particular one.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        account: Option<String>,
+    },
     /// The drive's account has no access to the folder.
     #[error("{provider}: no access to the folder")]
     DriveNoAccess { provider: String },

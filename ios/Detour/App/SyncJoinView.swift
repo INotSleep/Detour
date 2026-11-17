@@ -129,6 +129,7 @@ struct SyncJoinView: View {
             storage = .drive
             provider = drive.provider
             folder = drive
+            driveAccount = drive.account
         }
         app.pendingJoin = nil
     }
@@ -176,7 +177,8 @@ struct SyncJoinView: View {
         error = nil
         let code = code.trimmingCharacters(in: .whitespaces)
         do {
-            if storage == .drive, let folder {
+            if storage == .drive, var folder {
+                folder.account = driveAccount
                 _ = try await Core.shared.call("sync_join_drive", ["drive": folder.json, "code": code])
             } else {
                 _ = try await Core.shared.call("sync_join_git", [

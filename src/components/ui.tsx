@@ -293,12 +293,17 @@ export function Menu({ trigger, items: itemsOrMake, align = "end", header }: { t
     const close = (e: MouseEvent) => {
       if (!menu.current?.contains(e.target as Node) && !anchor.current?.contains(e.target as Node)) setOpen(false);
     };
-    const key = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    // Escape closes the menu only, not the dialog it is in.
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      setOpen(false);
+    };
     window.addEventListener("mousedown", close);
-    window.addEventListener("keydown", key);
+    window.addEventListener("keydown", key, true);
     return () => {
       window.removeEventListener("mousedown", close);
-      window.removeEventListener("keydown", key);
+      window.removeEventListener("keydown", key, true);
     };
   }, [open]);
 

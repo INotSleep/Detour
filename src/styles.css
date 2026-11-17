@@ -1174,6 +1174,10 @@ body.resizing-col, body.resizing-col * { cursor: row-resize !important; }
 
 /* cloud drives: the folder picker */
 .drive-folder { display: flex; align-items: center; min-height: 34px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drive-account { display: flex; align-items: center; gap: 8px; min-height: 34px; text-align: left; cursor: pointer; }
+.drive-account:hover { border-color: var(--line-strong, var(--accent)); }
+.drive-account:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.input-group .menu-anchor { display: flex; flex: 1; min-width: 0; }
 .drive-crumbs { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; min-height: 26px; }
 .drive-crumbs .crumb-wrap { display: inline-flex; align-items: center; gap: 2px; }
 .drive-crumbs .crumb { display: inline-flex; align-items: center; gap: 5px; padding: 3px 6px; border: 0; border-radius: var(--r); background: none; color: var(--text-2); font: inherit; cursor: pointer; }
