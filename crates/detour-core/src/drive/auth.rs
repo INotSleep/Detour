@@ -24,9 +24,9 @@ use crate::{Error, Result};
 /// Detour's app ids, public by design. A build can use its own: `DETOUR_ONEDRIVE_CLIENT_ID`,
 /// `DETOUR_GDRIVE_CLIENT_ID` (+ `DETOUR_GDRIVE_CLIENT_SECRET`), `DETOUR_DROPBOX_CLIENT_ID`.
 const ONEDRIVE_CLIENT_ID: &str = "02e1bc0d-f5fb-4d4f-82f0-0c8096228794";
-const GDRIVE_CLIENT_ID: &str = "";
+const GDRIVE_CLIENT_ID: &str = "37796379108-us7c38abrstv524hb8lb875qiajhuhgu.apps.googleusercontent.com";
 /// Google calls it a secret, but for an installed app it is not one (Google says so).
-const GDRIVE_CLIENT_SECRET: &str = "";
+const GDRIVE_CLIENT_SECRET: &str = "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";
 const DROPBOX_CLIENT_ID: &str = "07zhut87lxovpwt";
 /// Registered with Dropbox as the redirect: it takes exact addresses only.
 const DROPBOX_PORT: u16 = 53682;
