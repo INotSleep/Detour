@@ -57,7 +57,11 @@ final class FilesSession: ObservableObject {
         } catch let f as CoreFailure {
             switch f.kind {
             case "needSecret": state = .needPassword(prompt: f["prompt"] ?? "", passphrase: f["secret"] == "passphrase")
-            case "hostKeyUnknown": state = .unknownKey(fingerprint: f["fingerprint"] ?? "")
+            case "hostKeyUnknown":
+                #if DEBUG
+                if Shots.screen != nil, trust == nil, let fp = f["fingerprint"] { return await open(trust: fp) }
+                #endif
+                state = .unknownKey(fingerprint: f["fingerprint"] ?? "")
             default: state = .failed(TerminalSession.describe(f))
             }
         } catch {

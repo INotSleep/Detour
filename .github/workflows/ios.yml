@@ -10,6 +10,10 @@ on:
         description: Also upload to App Store Connect
         type: boolean
         default: false
+      screenshots:
+        description: App Store screenshots from the simulator
+        type: boolean
+        default: false
 
 concurrency:
   group: ios-${{ github.ref }}
@@ -58,6 +62,17 @@ jobs:
             -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
             -skipPackagePluginValidation -skipMacroValidation \
             CODE_SIGNING_ALLOWED=NO build | xcbeautify --renderer github-actions
+
+      - name: App Store screenshots
+        if: inputs.screenshots
+        run: ios/scripts/screenshots.sh
+
+      - uses: actions/upload-artifact@v7
+        if: inputs.screenshots
+        with:
+          name: Detour-ios-screenshots
+          path: ios/build/screenshots/*.png
+          retention-days: 14
 
       - name: Ad hoc build
         if: env.IOS_PROFILE_BASE64 != ''

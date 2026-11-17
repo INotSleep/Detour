@@ -44,6 +44,9 @@ final class AppModel: ObservableObject {
     }
 
     func start() async {
+        #if DEBUG
+        await Shots.prepare()
+        #endif
         do {
             let st = try await Core.shared.call("vault_status", as: VaultStatus.self)
             if !st.initialized { phase = .setup } else if !st.unlocked { phase = .locked } else { await ready() }

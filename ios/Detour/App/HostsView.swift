@@ -16,6 +16,7 @@ struct HostsView: View {
     @State private var ownLogin: Host?
     @State private var snippets = false
     @State private var folderTeam: PendingTeam?
+    @State private var shotKeys = false
 
     var body: some View {
         NavigationStack {
@@ -102,9 +103,39 @@ struct HostsView: View {
             .sheet(item: $ownLogin) { h in OwnLoginEditor(host: h, saved: { await app.reload() }) }
             .sheet(isPresented: $snippets) { SnippetsView(session: nil) }
             .sheet(item: $folderTeam) { t in TeamFromDriveView(team: t) }
+            .navigationDestination(isPresented: $shotKeys) { KeysView() }
+            .task { await shot() }
             .onAppear { joinIfLinked() }
             .onChange(of: app.pendingJoin) { joinIfLinked() }
         }
+    }
+
+    /// Screenshots (debug builds): opens the screen asked for.
+    private func shot() async {
+        #if DEBUG
+        guard let screen = Shots.screen else { return }
+        var local: Host?
+        for _ in 0..<40 {
+            local = app.sections.flatMap(\.hosts).first { $0.label == Shots.localLabel }
+            if local != nil { break }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        guard let local else { return }
+        switch screen {
+        case "terminal":
+            app.open(local)
+            for _ in 0..<60 {
+                if app.terminals.first?.state == .connected { break }
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+            try? await Task.sleep(for: .seconds(1))
+            app.terminals.first?.run(Shots.terminalCommands)
+        case "files": filesHost = local
+        case "snippets": snippets = true
+        case "keys": shotKeys = true
+        default: break
+        }
+        #endif
     }
 
     private func delete(_ host: Host) async {

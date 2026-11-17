@@ -56,7 +56,15 @@ final class TerminalSession: ObservableObject, Identifiable {
                 Core.shared.unwatch(stream: s)
                 switch f.kind {
                 case "needSecret": state = .needPassword(prompt: f["prompt"] ?? "")
-                case "hostKeyUnknown": state = .unknownKey(fingerprint: f["fingerprint"] ?? "")
+                case "hostKeyUnknown":
+                    #if DEBUG
+                    // Screenshots: the simulator's own Mac.
+                    if Shots.screen != nil, let fp = f["fingerprint"] {
+                        connect(trust: fp)
+                        return
+                    }
+                    #endif
+                    state = .unknownKey(fingerprint: f["fingerprint"] ?? "")
                 default: state = .failed(Self.describe(f))
                 }
             } catch {
