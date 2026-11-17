@@ -33,6 +33,12 @@ if [ -z "$app" ]; then
   app=$(find_app)
 fi
 echo "app: $app"
+plutil -p "$app/Info.plist" | grep -E 'CFBundle(Identifier|Executable|ShortVersion)' || true
+# The simulator wants the bundle id and at least an ad hoc signature.
+if ! plutil -extract CFBundleIdentifier raw "$app/Info.plist" > /dev/null 2>&1; then
+  plutil -replace CFBundleIdentifier -string dev.detour.ios "$app/Info.plist"
+fi
+codesign --force --sign - --timestamp=none --deep "$app"
 
 # The newest 6.9" iPhone there is.
 dev=$(xcrun simctl list devices available -j | python3 -c '
