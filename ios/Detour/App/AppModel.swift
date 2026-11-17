@@ -10,6 +10,10 @@ final class AppModel: ObservableObject {
     @Published var phase: Phase = .loading
     @Published var sections: [HostSection] = []
     @Published var sync: SyncStatus?
+    /// Drives to sign in to again: the vault's sync or a team is kept there.
+    @Published var driveSignIns: [DriveProvider] = []
+    /// Teams on this person's other devices kept in a folder: opened here through a drive.
+    @Published var folderTeams: [PendingTeam] = []
     @Published var terminals: [TerminalSession] = []
     @Published var current: TerminalSession.ID?
     @Published var showTerminals = false
@@ -85,14 +89,42 @@ final class AppModel: ObservableObject {
         if let personal = try? await Core.shared.call("vault_get", as: VaultView.self) {
             out += Self.grouped(personal.hosts, vault: "personal", prefix: nil)
         }
+        var signIns: [CoreErrorInfo?] = []
         if let teams = try? await Core.shared.call("teams_list", as: [TeamEntry].self) {
             for t in teams {
                 guard let v = t.view else { continue }
                 out += Self.grouped(v.data.hosts, vault: v.id, prefix: v.name)
+                signIns.append(v.remote?.error)
             }
         }
         sections = out
         sync = try? await Core.shared.call("sync_status", as: SyncStatus.self)
+        signIns.append(sync?.error)
+        var drives = signIns.compactMap { $0?.kind == "driveSignIn" ? $0?.drive : nil }
+        var folders: [PendingTeam] = []
+        if sync?.enabled == true, let pending = try? await Core.shared.call("teams_pending", as: [PendingTeam].self), !pending.isEmpty {
+            let accounts = await Drives.accounts()
+            for t in pending {
+                if let d = t.drive {
+                    if accounts[d.provider] == nil { drives.append(d.provider) }
+                } else if t.url == nil {
+                    folders.append(t)
+                }
+            }
+        }
+        driveSignIns = DriveProvider.allCases.filter { drives.contains($0) }
+        folderTeams = folders
+    }
+
+    /// Signed in to a drive again: what is kept there syncs now, and teams in it join here.
+    func driveSignedIn() async {
+        if sync?.enabled == true { _ = try? await Core.shared.call("sync_now") }
+        if let teams = try? await Core.shared.call("teams_list", as: [TeamEntry].self) {
+            for t in teams where t.view?.remote?.error?.kind == "driveSignIn" {
+                _ = try? await Core.shared.call("team_sync", ["id": t.id])
+            }
+        }
+        await reload()
     }
 
     /// Pulls what changed on other devices.

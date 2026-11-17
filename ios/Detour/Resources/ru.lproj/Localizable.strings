@@ -152,3 +152,25 @@
 "Log in with my own login" = "Входить со своими данными";
 "The team's login is used: %@" = "Используется вход команды: %@";
 "Remove my login" = "Убрать свой вход";
+
+/* Cloud drives */
+"Storage" = "Хранилище";
+"Cloud drive" = "Облачный диск";
+"Service" = "Сервис";
+"Sign in to %@" = "Войти в %@";
+"Sign in to %@ again" = "Войти в %@ снова";
+"Code from the page" = "Код со страницы";
+"The sign-in did not go through" = "Вход не выполнен";
+"Folder" = "Папка";
+"Choose" = "Выбрать";
+"Or a link to a shared folder" = "Или ссылка на общую папку";
+"Shared" = "Общая";
+"Try again" = "Повторить";
+"No folders here" = "Здесь нет папок";
+"Use this folder" = "Выбрать эту папку";
+"Open from a cloud drive" = "Открыть из облачного диска";
+"The %@ account has no access to the folder" = "У аккаунта %@ нет доступа к папке";
+"This folder is not empty" = "Папка не пустая";
+"This folder has a different team" = "В этой папке другая команда";
+"This folder has no synced vault" = "В этой папке нет синхронизированного хранилища";
+"No connection" = "Нет соединения";

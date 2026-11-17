@@ -15,10 +15,28 @@ struct HostsView: View {
     @State private var filesHost: Host?
     @State private var ownLogin: Host?
     @State private var snippets = false
+    @State private var folderTeam: PendingTeam?
 
     var body: some View {
         NavigationStack {
             List {
+                if query.isEmpty, !app.driveSignIns.isEmpty || !app.folderTeams.isEmpty {
+                    Section {
+                        ForEach(app.driveSignIns) { p in
+                            DriveSignInRow(provider: p, account: .constant(nil)) { _ in Task { await app.driveSignedIn() } }
+                        }
+                        ForEach(app.folderTeams) { t in
+                            Button { folderTeam = t } label: {
+                                LabeledContent {
+                                    Text("Open from a cloud drive")
+                                } label: {
+                                    Label(t.name, systemImage: "person.3")
+                                }
+                            }
+                            .foregroundStyle(.primary)
+                        }
+                    }
+                }
                 ForEach(filtered) { section in
                     Section(section.title) {
                         ForEach(section.hosts) { host in
@@ -84,6 +102,7 @@ struct HostsView: View {
             .sheet(item: $filesHost) { h in FilesView(host: h) }
             .sheet(item: $ownLogin) { h in OwnLoginEditor(host: h, saved: { await app.reload() }) }
             .sheet(isPresented: $snippets) { SnippetsView(session: nil) }
+            .sheet(item: $folderTeam) { t in TeamFromDriveView(team: t) }
             .onAppear { joinIfLinked() }
             .onChange(of: app.pendingJoin) { joinIfLinked() }
         }
@@ -141,7 +160,7 @@ struct HostsView: View {
     }
 
     @ViewBuilder private var empty: some View {
-        if app.sections.isEmpty {
+        if app.sections.isEmpty && app.driveSignIns.isEmpty && app.folderTeams.isEmpty {
             ContentUnavailableView {
                 Label("No hosts", systemImage: "server.rack")
             } actions: {

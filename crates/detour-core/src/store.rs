@@ -67,6 +67,10 @@ pub struct SyncStatus {
     pub git: bool,
     /// `folder`, `git`, `onedrive`, `gdrive` or `dropbox`.
     pub storage: Option<String>,
+    /// The drive folder, when the vault syncs through a cloud drive (another device of this
+    /// person's joins through it: the phone's QR carries it).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drive: Option<crate::drive::DriveRemote>,
     /// Changes the repository doesn't have yet.
     pub pending: bool,
     /// Why the last sync failed (a serialized `Error`).
@@ -1186,6 +1190,7 @@ impl Store {
             location: r.as_ref().map(TeamRef::location),
             git: r.as_ref().is_some_and(|r| r.remote.is_some()),
             storage: r.as_ref().map(|r| r.storage().to_string()),
+            drive: r.as_ref().and_then(|r| r.drive.clone()),
             pending: r.as_ref().is_some_and(pending_of),
             error: if r.is_some() { error } else { None },
             synced_at,

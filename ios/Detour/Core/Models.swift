@@ -35,7 +35,27 @@ struct TeamEntry: Decodable {
         let id: String
         let name: String
         let data: VaultView
+        let remote: Remote?
     }
+
+    /// Where the team is kept, and why reaching it failed.
+    struct Remote: Decodable {
+        let kind: String
+        let error: CoreErrorInfo?
+    }
+}
+
+/// A team joined on another device of this person's and not here yet.
+struct PendingTeam: Decodable, Identifiable {
+    let teamId: String
+    let name: String
+    /// Its repository: joined here by itself.
+    let url: String?
+    /// Its drive folder: joined here by itself once signed in to the drive.
+    let drive: DriveFolderRef?
+    let error: CoreErrorInfo?
+
+    var id: String { teamId }
 }
 
 struct VaultStatus: Decodable {
@@ -48,7 +68,10 @@ struct SyncStatus: Decodable {
     let enabled: Bool
     let location: String?
     let git: Bool
+    /// `folder`, `git`, `onedrive`, `gdrive` or `dropbox`.
+    let storage: String?
     let pending: Bool
+    let error: CoreErrorInfo?
     let syncedAt: Double?
 }
 

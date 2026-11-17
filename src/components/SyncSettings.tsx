@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { renderSVG } from "uqr";
 import { ChevronRight, Cloud, Copy, Download, FolderSync, GitBranch, Laptop, Link2, RotateCw, ShieldAlert } from "lucide-react";
-import { api, driveNames, errorText, isCoreError, type CoreError, type DriveProvider, type Pairing, type SyncInfo, type SyncPlace } from "../lib/api";
+import { api, driveNames, errorText, isCoreError, type CoreError, type DriveFolderRef, type DriveProvider, type Pairing, type SyncInfo, type SyncPlace } from "../lib/api";
 import { DriveSignInDialog } from "./DriveFields";
 import { locale, tr, useT } from "../i18n";
 import { copyText, formatAgo, useStore } from "../lib/store";
@@ -117,7 +117,7 @@ export function SyncSettings() {
       {dialog === "driveSignIn" && sync.error?.kind === "driveSignIn" && (
         <DriveSignInDialog provider={sync.error.provider as DriveProvider} onClose={() => setDialog(null)} onDone={() => { setDialog(null); void run(() => api.syncNow()); }} />
       )}
-      {dialog === "device" && <AddDeviceDialog repo={sync.location} onClose={() => setDialog(null)} />}
+      {dialog === "device" && <AddDeviceDialog repo={sync.location} drive={sync.drive ?? null} onClose={() => setDialog(null)} />}
       {dialog === "recovery" && <RecoveryDialog onClose={() => setDialog(null)} />}
       {dialog === "token" && <TokenDialog repoUrl={sync.location ?? ""} onClose={() => setDialog(null)} onSaved={(go) => run(go)} />}
       {dialog === "serverKey" && sync.error?.kind === "hostKeyChanged" && (
@@ -270,16 +270,20 @@ function EnableDialog({ onClose }: { onClose: () => void }) {
 
 /* ---------- adding a device ---------- */
 
-/** What the phone scans: the code, and the repository as the phone reaches it (over HTTPS; a folder means nothing to it). */
-function joinLink(code: string, repo: string | null): string {
+/** What the phone scans: the code, and the repository as the phone reaches it (over HTTPS; a folder means nothing to it) or the drive folder. */
+function joinLink(code: string, repo: string | null, drive: DriveFolderRef | null): string {
   const q = new URLSearchParams({ code });
+  if (drive) {
+    q.set("drive", JSON.stringify({ provider: drive.provider, id: drive.id, drive: drive.drive ?? undefined, label: drive.label, link: drive.link ?? undefined }));
+    return `detour://join?${q}`;
+  }
   const github = repo?.match(/^(?:git@github\.com:|ssh:\/\/git@github\.com\/)(.+?)(?:\.git)?\/?$/);
   const url = github ? `https://github.com/${github[1]}` : repo && /^https?:\/\//.test(repo) ? repo : null;
   if (url) q.set("repo", url);
   return `detour://join?${q}`;
 }
 
-function AddDeviceDialog({ repo, onClose }: { repo: string | null; onClose: () => void }) {
+function AddDeviceDialog({ repo, drive, onClose }: { repo: string | null; drive: DriveFolderRef | null; onClose: () => void }) {
   const { toast } = useStore();
   const all = useT();
   const t = all.sync;
@@ -290,7 +294,7 @@ function AddDeviceDialog({ repo, onClose }: { repo: string | null; onClose: () =
     api.syncAddDevice().then(setPairing).catch((e) => setError(errorText(e)));
   }, []);
 
-  const qr = useMemo(() => (pairing ? renderSVG(joinLink(pairing.code, repo), { ecc: "L", border: 2, whiteColor: "#fff", blackColor: "#000" }) : ""), [pairing, repo]);
+  const qr = useMemo(() => (pairing ? renderSVG(joinLink(pairing.code, repo, drive), { ecc: "L", border: 2, whiteColor: "#fff", blackColor: "#000" }) : ""), [pairing, repo, drive]);
   const until = pairing ? new Date(pairing.expiresAt).toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit" }) : "";
   return (
     <Modal

@@ -397,6 +397,8 @@ export interface SyncInfo {
   git: boolean;
   /** "folder", "git", or the drive. */
   storage?: "folder" | "git" | DriveProvider | null;
+  /** The drive folder, when it syncs through a cloud drive. */
+  drive?: DriveFolderRef | null;
   pending: boolean;
   error: CoreError | null;
   syncedAt: number | null;

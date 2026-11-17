@@ -1,14 +1,19 @@
 import SwiftUI
 
-/// Connects this phone to the vault the person syncs through a repository, with a code from
-/// another device (or the recovery key).
+/// Connects this phone to the vault the person syncs through a repository or a cloud drive,
+/// with a code from another device (or the recovery key).
 struct SyncJoinView: View {
     @EnvironmentObject var app: AppModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
 
+    enum Storage: String, CaseIterable { case git, drive }
     enum Login: String, CaseIterable { case github, token }
 
+    @State private var storage: Storage = .git
+    @State private var provider: DriveProvider = .onedrive
+    @State private var folder: DriveFolderRef?
+    @State private var driveAccount: String?
     @State private var url = ""
     @State private var login: Login = .github
     @State private var token = ""
@@ -24,44 +29,16 @@ struct SyncJoinView: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("https://github.com/you/detour-vault", text: $url)
-                        .keyboardType(.URL)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                } header: {
-                    Text("Repository")
-                }
-                Section {
-                    Picker("Login", selection: $login) {
-                        Text("GitHub").tag(Login.github)
-                        Text("Token").tag(Login.token)
+                    Picker("Storage", selection: $storage) {
+                        Text("Repository").tag(Storage.git)
+                        Text("Cloud drive").tag(Storage.drive)
                     }
                     .pickerStyle(.segmented)
-                    if login == .github {
-                        if let github {
-                            Label(github, systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-                        } else if let signIn {
-                            Button {
-                                UIPasteboard.general.string = signIn.code
-                                copies += 1
-                            } label: {
-                                HStack {
-                                    Text(signIn.code).font(.title2.monospaced().bold())
-                                    Spacer()
-                                    Image(systemName: copies > 0 ? "checkmark" : "doc.on.doc")
-                                        .foregroundStyle(copies > 0 ? Color.green : Color.accentColor)
-                                }
-                            }
-                            .foregroundStyle(.primary)
-                            .accessibilityLabel("Copy")
-                            .sensoryFeedback(.success, trigger: copies)
-                            Button("Open GitHub") { openURL(URL(string: signIn.uri)!) }
-                        } else {
-                            Button("Sign in with GitHub") { Task { await startGithub() } }
-                        }
-                    } else {
-                        SecureField("Access token", text: $token)
-                    }
+                }
+                if storage == .drive {
+                    DriveSections(provider: $provider, folder: $folder, account: $driveAccount)
+                } else {
+                    repository
                 }
                 Section {
                     HStack {
@@ -97,16 +74,71 @@ struct SyncJoinView: View {
         }
     }
 
+    @ViewBuilder private var repository: some View {
+        Section {
+            TextField("https://github.com/you/detour-vault", text: $url)
+                .keyboardType(.URL)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+        } header: {
+            Text("Repository")
+        }
+        Section {
+            Picker("Login", selection: $login) {
+                Text("GitHub").tag(Login.github)
+                Text("Token").tag(Login.token)
+            }
+            .pickerStyle(.segmented)
+            if login == .github {
+                if let github {
+                    Label(github, systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                } else if let signIn {
+                    Button {
+                        UIPasteboard.general.string = signIn.code
+                        copies += 1
+                    } label: {
+                        HStack {
+                            Text(signIn.code).font(.title2.monospaced().bold())
+                            Spacer()
+                            Image(systemName: copies > 0 ? "checkmark" : "doc.on.doc")
+                                .foregroundStyle(copies > 0 ? Color.green : Color.accentColor)
+                        }
+                    }
+                    .foregroundStyle(.primary)
+                    .accessibilityLabel("Copy")
+                    .sensoryFeedback(.success, trigger: copies)
+                    Button("Open GitHub") { openURL(URL(string: signIn.uri)!) }
+                } else {
+                    Button("Sign in with GitHub") { Task { await startGithub() } }
+                }
+            } else {
+                SecureField("Access token", text: $token)
+            }
+        }
+    }
+
     /// Fills the form from the other device's QR.
     private func apply(_ link: JoinLink?) {
         guard let link else { return }
         code = link.code
-        if let repo = link.repo { url = repo }
+        if let repo = link.repo {
+            url = repo
+            storage = .git
+        }
+        if let drive = link.drive {
+            storage = .drive
+            provider = drive.provider
+            folder = drive
+        }
         app.pendingJoin = nil
     }
 
     private var ready: Bool {
-        !url.trimmingCharacters(in: .whitespaces).isEmpty && !code.trimmingCharacters(in: .whitespaces).isEmpty && (login == .github ? github != nil : !token.isEmpty)
+        guard !code.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
+        switch storage {
+        case .drive: return folder != nil && driveAccount != nil
+        case .git: return !url.trimmingCharacters(in: .whitespaces).isEmpty && (login == .github ? github != nil : !token.isEmpty)
+        }
     }
 
     private func startGithub() async {
@@ -142,22 +174,27 @@ struct SyncJoinView: View {
     private func connect() async {
         busy = true
         error = nil
+        let code = code.trimmingCharacters(in: .whitespaces)
         do {
-            _ = try await Core.shared.call("sync_join_git", [
-                "url": url.trimmingCharacters(in: .whitespaces),
-                "auth": ["type": "password"],
-                "token": login == .token ? token : nil,
-                "github": login == .github,
-                "code": code.trimmingCharacters(in: .whitespaces),
-            ])
+            if storage == .drive, let folder {
+                _ = try await Core.shared.call("sync_join_drive", ["drive": folder.json, "code": code])
+            } else {
+                _ = try await Core.shared.call("sync_join_git", [
+                    "url": url.trimmingCharacters(in: .whitespaces),
+                    "auth": ["type": "password"],
+                    "token": login == .token ? token : nil,
+                    "github": login == .github,
+                    "code": code,
+                ])
+            }
             await app.reload()
             dismiss()
         } catch let f as CoreFailure {
             switch f.kind {
             case "invalidCode": error = String(localized: "Wrong code")
             case "codeExpired": error = String(localized: "The code has expired: make a new one on the other device")
-            case "notASyncVault": error = String(localized: "This repository has no synced vault")
-            default: error = f["message"] ?? f.kind
+            case "notASyncVault": error = storage == .drive ? String(localized: "This folder has no synced vault") : String(localized: "This repository has no synced vault")
+            default: error = Drives.errorText(f)
             }
         } catch {
             self.error = error.localizedDescription

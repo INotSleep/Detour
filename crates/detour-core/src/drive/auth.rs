@@ -108,6 +108,16 @@ fn pending() -> std::sync::MutexGuard<'static, HashMap<Provider, Pending>> {
     PENDING.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// The listener waiting for the browser, per drive: a new sign-in stops the one before it (whose
+/// port Dropbox's fixed one would otherwise still hold).
+static WAITING: LazyLock<Mutex<HashMap<Provider, tokio::task::AbortHandle>>> = LazyLock::new(Default::default);
+
+fn stop_waiting(p: Provider) {
+    if let Some(h) = WAITING.lock().unwrap_or_else(|e| e.into_inner()).remove(&p) {
+        h.abort();
+    }
+}
+
 fn locked(store: &Mutex<Store>) -> Result<std::sync::MutexGuard<'_, Store>> {
     store.lock().map_err(|_| Error::Internal { message: "state lock poisoned".into() })
 }
@@ -132,15 +142,25 @@ fn challenge(verifier: &str) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
 }
 
-/// Starts signing in to a drive.
-pub async fn start(p: Provider) -> Result<Start> {
+/// Starts signing in to a drive. With `back`, the browser is sent there once the drive has
+/// answered (a phone's sign-in sheet closes on the app's own link), with `ok=1` or `ok=0`.
+pub async fn start(p: Provider, back: Option<String>) -> Result<Start> {
     let client = client_id(p)?;
     match p {
         Provider::OneDrive | Provider::GoogleDrive | Provider::Dropbox => {
             let verifier = random();
             let state = random();
             let port = if p == Provider::Dropbox { DROPBOX_PORT } else { 0 };
-            let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await.ok();
+            stop_waiting(p);
+            let mut listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await.ok();
+            // The stopped listener lets go of the port once its task is dropped.
+            for _ in 0..20 {
+                if listener.is_some() || port == 0 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await.ok();
+            }
             let redirect = match &listener {
                 // Microsoft takes loopback addresses by the name it was registered with.
                 Some(l) if p == Provider::OneDrive => Some(format!("http://localhost:{}/", l.local_addr()?.port())),
@@ -168,8 +188,8 @@ pub async fn start(p: Provider) -> Result<Start> {
             }
             pending().insert(p, Pending::Browser { verifier: verifier.clone(), redirect: redirect.clone(), done: None });
             if let (Some(l), Some(r)) = (listener, redirect) {
-                tokio::spawn(async move {
-                    let got = match tokio::time::timeout(Duration::from_secs(600), wait_for_code(l, &state)).await {
+                let task = tokio::spawn(async move {
+                    let got = match tokio::time::timeout(Duration::from_secs(600), wait_for_code(l, &state, back.as_deref())).await {
                         Ok(Ok(code)) => {
                             let client = client.clone();
                             blocking(move || exchange(p, &client, &code, &verifier, Some(&r))).await
@@ -181,6 +201,7 @@ pub async fn start(p: Provider) -> Result<Start> {
                         *done = Some(got);
                     }
                 });
+                WAITING.lock().unwrap_or_else(|e| e.into_inner()).insert(p, task.abort_handle());
             }
             Ok(Start::Browser { url, paste: !matches!(pending().get(&p), Some(Pending::Browser { redirect: Some(_), .. })) })
         }
@@ -209,7 +230,7 @@ fn exchange(p: Provider, client: &str, code: &str, verifier: &str, redirect: Opt
 }
 
 /// Waits for the browser to come back with the code (other requests, like a favicon, are turned away).
-async fn wait_for_code(l: tokio::net::TcpListener, state: &str) -> Result<String> {
+async fn wait_for_code(l: tokio::net::TcpListener, state: &str, back: Option<&str>) -> Result<String> {
     loop {
         let (mut s, _) = l.accept().await?;
         let mut buf = vec![0u8; 8192];
@@ -224,7 +245,11 @@ async fn wait_for_code(l: tokio::net::TcpListener, state: &str) -> Result<String
         let ok = query.get("state").map(String::as_str) == Some(state) && query.contains_key("code");
         let page = if ok { "Detour: signed in. You can close this tab. / Вход выполнен, вкладку можно закрыть." } else { "Detour: the sign-in did not go through. / Вход не выполнен." };
         let body = format!("<!doctype html><meta charset=utf-8><title>Detour</title><body style=\"font:16px system-ui;padding:40px\">{page}</body>");
-        let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await;
+        let head = match back {
+            Some(b) => format!("HTTP/1.1 302 Found\r\nLocation: {b}{}ok={}\r\n", if b.contains('?') { '&' } else { '?' }, u8::from(ok)),
+            None => "HTTP/1.1 200 OK\r\n".into(),
+        };
+        let _ = s.write_all(format!("{head}Content-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await;
         return match (ok, query.get("code")) {
             (true, Some(code)) => Ok(code.clone()),
             _ => Err(Error::Drive { provider: "oauth".into(), message: query.get("error").cloned().unwrap_or_else(|| "the sign-in was refused".into()) }),

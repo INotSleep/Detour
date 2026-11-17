@@ -397,8 +397,8 @@ pub(crate) async fn dispatch(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value
             Ok(json!(v.iter().map(|l| json!({ "provider": l.provider, "account": l.account, "signedIn": !l.access_token.is_empty() })).collect::<Vec<_>>()))
         }
         "drive_sign_in" => {
-            let a = args!(method, p, { provider: Provider });
-            ok(drive::auth::start(a.provider).await)
+            let a = args!(method, p, { provider: Provider, back: Option<String> });
+            ok(drive::auth::start(a.provider, a.back).await)
         }
         "drive_sign_in_poll" => {
             let a = args!(method, p, { provider: Provider });

@@ -1,11 +1,13 @@
 import AVFoundation
 import SwiftUI
 
-/// A code for joining sync, as another device shows it: `detour://join?code=…&repo=…` (its QR)
-/// or the code alone.
+/// A code for joining sync, as another device shows it: `detour://join?code=…&repo=…` or
+/// `…&drive=…` (its QR), or the code alone.
 struct JoinLink: Equatable {
     let code: String
     let repo: String?
+    /// The drive folder the vault syncs through (`drive=` as JSON).
+    var drive: DriveFolderRef?
 
     init?(_ text: String) {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -14,6 +16,7 @@ struct JoinLink: Equatable {
             guard let code = items.first(where: { $0.name == "code" })?.value, !code.isEmpty else { return nil }
             self.code = code
             repo = items.first(where: { $0.name == "repo" })?.value.flatMap { $0.isEmpty ? nil : $0 }
+            drive = items.first(where: { $0.name == "drive" })?.value.flatMap { try? JSONDecoder().decode(DriveFolderRef.self, from: Data($0.utf8)) }
         } else if t.range(of: #"^[A-Za-z0-9]{4}(-[A-Za-z0-9]{4}){3,}$"#, options: .regularExpression) != nil {
             code = t
             repo = nil
