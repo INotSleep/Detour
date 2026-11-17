@@ -264,10 +264,12 @@ function EnableDialog({ onClose }: { onClose: () => void }) {
 
 /* ---------- adding a device ---------- */
 
-/** What the phone scans: the code, and the repository when sync goes through one (a folder means nothing to it). */
+/** What the phone scans: the code, and the repository as the phone reaches it (over HTTPS; a folder means nothing to it). */
 function joinLink(code: string, repo: string | null): string {
   const q = new URLSearchParams({ code });
-  if (repo && /^(https?:\/\/|ssh:\/\/|git@)/.test(repo)) q.set("repo", repo);
+  const github = repo?.match(/^(?:git@github\.com:|ssh:\/\/git@github\.com\/)(.+?)(?:\.git)?\/?$/);
+  const url = github ? `https://github.com/${github[1]}` : repo && /^https?:\/\//.test(repo) ? repo : null;
+  if (url) q.set("repo", url);
   return `detour://join?${q}`;
 }
 
