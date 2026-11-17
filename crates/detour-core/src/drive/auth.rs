@@ -1,6 +1,6 @@
-//! Signing in to a drive with OAuth, as a public client (no secret of Detour's to keep):
-//! OneDrive with a code shown to the person (the device flow); Google Drive and Dropbox in
-//! the browser with PKCE, coming back to a port this device listens on.
+//! Signing in to a drive with OAuth, as a public client (no secret of Detour's to keep): in
+//! the browser with PKCE, coming back to a port this device listens on. (Microsoft's device
+//! code flow is not used: personal accounts get a phishing warning and a dead end with it.)
 //!
 //! Each device signs in itself; the sign-in is kept in the vault and never syncs.
 
@@ -23,11 +23,11 @@ use crate::{Error, Result};
 
 /// Detour's app ids, public by design. A build can use its own: `DETOUR_ONEDRIVE_CLIENT_ID`,
 /// `DETOUR_GDRIVE_CLIENT_ID` (+ `DETOUR_GDRIVE_CLIENT_SECRET`), `DETOUR_DROPBOX_CLIENT_ID`.
-const ONEDRIVE_CLIENT_ID: &str = "";
+const ONEDRIVE_CLIENT_ID: &str = "02e1bc0d-f5fb-4d4f-82f0-0c8096228794";
 const GDRIVE_CLIENT_ID: &str = "";
 /// Google calls it a secret, but for an installed app it is not one (Google says so).
 const GDRIVE_CLIENT_SECRET: &str = "";
-const DROPBOX_CLIENT_ID: &str = "";
+const DROPBOX_CLIENT_ID: &str = "07zhut87lxovpwt";
 /// Registered with Dropbox as the redirect: it takes exact addresses only.
 const DROPBOX_PORT: u16 = 53682;
 
@@ -99,7 +99,6 @@ struct Tokens {
 }
 
 enum Pending {
-    Device { device_code: String },
     Browser { verifier: String, redirect: Option<String>, done: Option<std::result::Result<Tokens, Error>> },
 }
 
@@ -137,36 +136,20 @@ fn challenge(verifier: &str) -> String {
 pub async fn start(p: Provider) -> Result<Start> {
     let client = client_id(p)?;
     match p {
-        Provider::OneDrive => {
-            #[derive(Deserialize)]
-            struct DeviceReply {
-                device_code: String,
-                user_code: String,
-                verification_uri: String,
-                #[serde(default)]
-                interval: Option<u64>,
-            }
-            let url = format!("{}/devicecode", ms_login());
-            let r: DeviceReply = blocking(move || {
-                let mut resp = AGENT.post(&url).send_form([("client_id", client.as_str()), ("scope", ONEDRIVE_SCOPE)]).map_err(|e| net_error(p, e))?;
-                let body = resp.body_mut().read_to_string().map_err(|e| net_error(p, e))?;
-                serde_json::from_str(&body).map_err(|_| Error::Drive { provider: p.id().into(), message: format!("sign-in answered {}", resp.status().as_u16()) })
-            })
-            .await?;
-            pending().insert(p, Pending::Device { device_code: r.device_code });
-            Ok(Start::Device { user_code: r.user_code, verification_uri: r.verification_uri, interval: r.interval.unwrap_or(5) })
-        }
-        Provider::GoogleDrive | Provider::Dropbox => {
+        Provider::OneDrive | Provider::GoogleDrive | Provider::Dropbox => {
             let verifier = random();
             let state = random();
             let port = if p == Provider::Dropbox { DROPBOX_PORT } else { 0 };
             let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await.ok();
             let redirect = match &listener {
+                // Microsoft takes loopback addresses by the name it was registered with.
+                Some(l) if p == Provider::OneDrive => Some(format!("http://localhost:{}/", l.local_addr()?.port())),
                 Some(l) => Some(format!("http://127.0.0.1:{}/", l.local_addr()?.port())),
                 None if p == Provider::Dropbox => None,
                 None => return Err(Error::Drive { provider: p.id().into(), message: "can't listen for the sign-in".into() }),
             };
             let mut url = match p {
+                Provider::OneDrive => format!("{}/authorize?client_id={}&response_type=code&response_mode=query&scope={}&prompt=select_account", ms_login(), enc(&client), enc(ONEDRIVE_SCOPE)),
                 Provider::GoogleDrive => format!(
                     "{}?client_id={}&response_type=code&scope={}&access_type=offline&prompt=consent",
                     std::env::var("DETOUR_GOOGLE_AUTH").unwrap_or_else(|_| "https://accounts.google.com/o/oauth2/v2/auth".into()),
@@ -214,6 +197,9 @@ fn exchange(p: Provider, client: &str, code: &str, verifier: &str, redirect: Opt
         && let Some(s) = env_or("DETOUR_GDRIVE_CLIENT_SECRET", GDRIVE_CLIENT_SECRET)
     {
         form.push(("client_secret", s));
+    }
+    if p == Provider::OneDrive {
+        form.push(("scope", ONEDRIVE_SCOPE.into()));
     }
     let t = post_form(p, &token_url(p), &form)?;
     match &t.access_token {
@@ -271,49 +257,23 @@ fn decode(s: &str) -> String {
 
 /// Has the person finished signing in? Once they have, the sign-in is kept on this device.
 pub async fn poll(store: &Mutex<Store>, p: Provider) -> Result<Poll> {
-    let client = client_id(p)?;
-    enum Next {
-        Gone,
-        Device(String),
-        Browser(Option<std::result::Result<Tokens, Error>>),
-    }
     // Taken out under the lock, which must not be held across the network calls below.
-    let next = {
+    let done = {
         let mut map = pending();
         match map.get_mut(&p) {
-            None => Next::Gone,
-            Some(Pending::Device { device_code }) => Next::Device(device_code.clone()),
+            None => return Ok(Poll::Expired),
             Some(Pending::Browser { done, .. }) => {
                 let d = done.take();
                 if d.is_some() {
                     map.remove(&p);
                 }
-                Next::Browser(d)
+                d
             }
         }
     };
-    let tokens = match next {
-        Next::Gone => return Ok(Poll::Expired),
-        Next::Browser(None) => return Ok(Poll::Pending),
-        Next::Browser(Some(r)) => r?,
-        Next::Device(device_code) => {
-            let form = vec![("client_id", client), ("grant_type", "urn:ietf:params:oauth:grant-type:device_code".to_string()), ("device_code", device_code)];
-            let t = blocking(move || post_form(p, &token_url(p), &form)).await?;
-            match t.error.as_deref() {
-                Some("authorization_pending") => return Ok(Poll::Pending),
-                Some("slow_down") => return Ok(Poll::SlowDown),
-                Some("expired_token" | "bad_verification_code") => {
-                    pending().remove(&p);
-                    return Ok(Poll::Expired);
-                }
-                Some("authorization_declined" | "access_denied") => {
-                    pending().remove(&p);
-                    return Ok(Poll::Denied);
-                }
-                Some(e) => return Err(Error::Drive { provider: p.id().into(), message: t.error_description.clone().unwrap_or_else(|| e.to_string()) }),
-                None => t,
-            }
-        }
+    let tokens = match done {
+        None => return Ok(Poll::Pending),
+        Some(r) => r?,
     };
     pending().remove(&p);
     let account = keep(store, p, tokens).await?;
