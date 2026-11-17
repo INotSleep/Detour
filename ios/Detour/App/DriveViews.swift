@@ -309,6 +309,7 @@ struct DriveBrowser: View {
                         Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
                     }
                 }
+                .tint(.primary)
             }
         }
         .overlay {

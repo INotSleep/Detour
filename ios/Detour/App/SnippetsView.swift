@@ -112,6 +112,8 @@ struct SnippetsView: View {
                 Text(s.command).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(2)
             }
         }
+        // A row, not a link: iOS 26 tints a list's buttons with the accent colour.
+        .tint(.primary)
     }
 
     private func load() async {

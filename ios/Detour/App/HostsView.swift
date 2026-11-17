@@ -42,6 +42,7 @@ struct HostsView: View {
                     Section(section.title) {
                         ForEach(section.hosts) { host in
                             Button { app.open(host) } label: { HostRow(host: host) }
+                                .tint(.primary)
                                 .swipeActions(edge: .trailing) {
                                     if host.vaultId == "personal" {
                                         Button(role: .destructive) { Task { await delete(host) } } label: { Label("Delete", systemImage: "trash") }
@@ -130,6 +131,9 @@ struct HostsView: View {
             }
             try? await Task.sleep(for: .seconds(1))
             app.terminals.first?.run(Shots.terminalCommands)
+            // The terminal whole, without the keyboard.
+            try? await Task.sleep(for: .seconds(2))
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         case "files": filesHost = local
         case "snippets": snippets = true
         case "keys": shotKeys = true

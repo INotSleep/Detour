@@ -46,7 +46,7 @@ enum Shots {
             host("db-primary", "Production", "10.0.2.5", "postgres"),
             host("staging", "Staging", "staging.example.com", "deploy"),
             host("ci-runner", "Staging", "10.0.9.3", "runner"),
-            host(localLabel, "Lab", "127.0.0.1", env["DETOUR_SHOTS_USER"] ?? "runner", key: localKey),
+            host(localLabel, "Lab", "127.0.0.1", env["DETOUR_SHOTS_USER"] ?? "deploy", key: localKey),
         ]
         let snippets: [PersonalVault.JSON] = [
             ["id": PersonalVault.newId(), "name": "Disk usage", "command": "df -h"],
@@ -60,7 +60,8 @@ enum Shots {
         }
     }
 
-    /// What the terminal shows: a few everyday commands on the Mac.
-    static let terminalCommands = "clear; uname -mrs; uptime; df -h / /System/Volumes/Data; ls -la ~"
+    /// What the terminal shows: a few everyday commands on the Mac (scripts/screenshots.sh puts
+    /// the log there), short enough for a phone's width.
+    static let terminalCommands = "clear\ndf -h / | awk '{print $2, $4, $5}'\ntail -n 7 logs/app.log"
 }
 #endif
