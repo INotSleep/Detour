@@ -11,9 +11,9 @@ encrypted end to end and signed on every change.
 
 [![CI](https://github.com/INotSleep/Detour/actions/workflows/ci.yml/badge.svg)](https://github.com/INotSleep/Detour/actions/workflows/ci.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-6e9bff)](LICENSE)
-![macOS | Windows | Linux](https://img.shields.io/badge/macOS%20%7C%20Windows%20%7C%20Linux-3ecf8e)
+![macOS | Windows | Linux | iOS](https://img.shields.io/badge/macOS%20%7C%20Windows%20%7C%20Linux%20%7C%20iOS-3ecf8e)
 
-[**Download**](https://github.com/INotSleep/Detour/releases/latest) · [Docs](https://inotsleep.com/projects/detour/wiki) · [Security design](docs/teams.md) · [Build from source](#build-from-source)
+[**Download**](https://github.com/INotSleep/Detour/releases/latest) · [App Store](https://apps.apple.com/app/id6836001774) · [Docs](https://inotsleep.com/projects/detour/wiki) · [Security design](docs/teams.md) · [Build from source](#build-from-source)
 
 <img src="docs/images/demo.gif" alt="Importing a key, adding a host, connecting, splitting the terminal and browsing files" width="100%">
 
@@ -27,6 +27,7 @@ encrypted end to end and signed on every change.
 - **Proxies.** Chains of jump hosts (`-J`), and saved proxies hosts go through: SOCKS5, HTTP, WireGuard (only for Detour, no system VPN) and VLESS over TCP or XHTTP with TLS, REALITY and Vision. From a `vless://` link or a `.conf` file.
 - **Import.** `~/.ssh/config` with `Include`, patterns and `ProxyJump`, keys and `known_hosts`.
 - **All your devices.** Your vault syncs between them. A new device joins with a one-time code.
+- **iPhone and iPad.** [Detour SSH](https://apps.apple.com/app/id6836001774) on the App Store: the terminal with a key bar of your own, files over SFTP, keys, snippets, Face ID, sync and teams.
 - **Teams.** Access per host, key and snippet, per person.
 - **Command line.** `detour` does everything the app does, in a terminal and on servers without a desktop. [More](https://inotsleep.com/projects/detour/wiki/command-line/cli)
 - **AI agents.** Claude Code, Codex, Cursor and others work on your servers over MCP, only where and for as long as you allow, without ever seeing a password or key. [More](https://inotsleep.com/projects/detour/wiki/command-line/agents)
@@ -65,6 +66,8 @@ The full design, including what cryptography can't protect against: [docs/teams.
 ## Install
 
 Installers for macOS, Windows and Linux are on the [Releases](https://github.com/INotSleep/Detour/releases/latest) page. Detour updates itself from there. They put the `detour` command line on your `PATH` too; for servers without a desktop, the release has it alone (`detour-cli-<version>-<system>`).
+
+For iPhone and iPad, get [Detour SSH](https://apps.apple.com/app/id6836001774) from the App Store.
 
 The interface is in English and Russian.
 
