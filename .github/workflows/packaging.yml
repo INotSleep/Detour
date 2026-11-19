@@ -1,9 +1,9 @@
 # Checks the package recipes kept in packaging/: the AUR package builds, installs and runs
-# on Arch, and its .SRCINFO matches the PKGBUILD.
+# on Arch, and its .SRCINFO matches the PKGBUILD; Glama's image starts and lists its tools.
 name: Packaging
 on:
   push:
-    paths: ["packaging/aur/**", ".github/workflows/packaging.yml"]
+    paths: ["packaging/aur/**", "packaging/glama/**", ".github/workflows/packaging.yml"]
   workflow_dispatch:
 
 jobs:
@@ -29,3 +29,16 @@ jobs:
           detour --version
           test -x /usr/bin/detour-desktop
           test -f /usr/share/applications/Detour.desktop
+
+  glama:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: docker build -t detour-mcp packaging/glama
+      - name: Introspect
+        run: |
+          printf '%s
+'             '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}'             '{"jsonrpc":"2.0","method":"notifications/initialized"}'             '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'             | timeout 30 docker run -i --rm detour-mcp > out.jsonl || true
+          cat out.jsonl | cut -c1-300
+          python3 -c "import json;r=[json.loads(l) for l in open('out.jsonl')];t=r[1]['result']['tools'];print(len(t),'tools');assert len(t)>20"
