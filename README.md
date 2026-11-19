@@ -98,7 +98,7 @@ npm run tauri build -- --config src-tauri/tauri.bundle.conf.json --config "{\"bu
 
 `tauri.bundle.conf.json` builds the command line (`scripts/sidecar.mjs`) and puts it into the installers, with the `PATH` set up on Windows (`src-tauri/windows/`).
 
-CI builds the macOS and Linux installers and the command line archives for every `v*` tag into a draft release. The Windows ones are signed with a Certum code signing certificate in SimplySign, so they are built locally and added to that draft by `scripts/release-windows.ps1`.
+CI builds the macOS and Linux installers and the command line archives for every `v*` tag into a draft release. The Windows ones are signed with a Certum code signing certificate in SimplySign, so they are built locally and added to that draft by `scripts/release-windows.ps1`. It then makes the MCP bundle (`detour-<version>.mcpb`, for Claude Desktop and the [MCP Registry](https://registry.modelcontextprotocol.io)) with `scripts/mcpb.py`, which also updates `server.json` for `mcp-publisher publish`.
 
 </details>
 

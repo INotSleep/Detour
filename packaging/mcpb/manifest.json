@@ -1,0 +1,61 @@
+{
+  "manifest_version": "0.3",
+  "name": "detour",
+  "display_name": "Detour",
+  "version": "0.0.0",
+  "description": "Work on your SSH servers through Detour without seeing a password or key. You approve each host and what is allowed there.",
+  "long_description": "Detour is an open-source SSH client. Its MCP server lets the AI work on your servers: run commands, read the terminal, edit files over SFTP, start tunnels. The AI never sees a password or key. It asks for the hosts and rights it needs and says why; you allow it in the Detour window for 2 hours, a day, a week or until you revoke it, and every command shows up there.\n\nInstall Detour from https://github.com/INotSleep/Detour/releases/latest for the window where you approve access. This extension uses the Detour installed on the computer and brings its own `detour` command line only for computers without it.",
+  "author": {
+    "name": "Vladyslav Muntian",
+    "url": "https://github.com/INotSleep"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/INotSleep/Detour.git"
+  },
+  "homepage": "https://inotsleep.com/projects/detour",
+  "documentation": "https://inotsleep.com/projects/detour/wiki/command-line/agents",
+  "support": "https://github.com/INotSleep/Detour/issues",
+  "icon": "icon.png",
+  "server": {
+    "type": "binary",
+    "entry_point": "server/launch.sh",
+    "mcp_config": {
+      "command": "/bin/sh",
+      "args": [
+        "${__dirname}/server/launch.sh"
+      ],
+      "env": {},
+      "platform_overrides": {
+        "win32": {
+          "command": "cmd.exe",
+          "args": [
+            "/d",
+            "/c",
+            "${__dirname}\\server\\launch.cmd"
+          ]
+        }
+      }
+    }
+  },
+  "tools": [],
+  "keywords": [
+    "ssh",
+    "sftp",
+    "terminal",
+    "servers",
+    "devops",
+    "tunnels"
+  ],
+  "license": "AGPL-3.0-only",
+  "privacy_policies": [
+    "https://inotsleep.com/projects/detour/wiki/reference/privacy"
+  ],
+  "compatibility": {
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ]
+  }
+}

@@ -1,0 +1,3 @@
+# The MCP bundle's launchers run as they are: sh needs LF, cmd CRLF.
+launch.sh text eol=lf
+launch.cmd text eol=crlf

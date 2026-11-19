@@ -2,9 +2,10 @@
 # certificate in SimplySign Desktop, and adds them to the tag's draft release that CI made
 # for the other systems, with their entries in latest.json. The command line (`detour`) is
 # signed first and goes into the installers and, zipped, into the release on its own.
+# Last, scripts/mcpb.py makes the MCP bundle from every system's command line.
 #
 # Needs: SimplySign Desktop signed in, the GitHub CLI signed in, the updater key at
-# ~/.tauri/detour-updater.key (or TAURI_SIGNING_PRIVATE_KEY). Its password comes from
+# ~/.tauri/detour-updater.key (or TAURI_SIGNING_PRIVATE_KEY), Python for the MCP bundle. Its password comes from
 # TAURI_SIGNING_PRIVATE_KEY_PASSWORD, or the build asks for it. PowerShell can't set
 # an empty variable, so for a key without a password start it from Git Bash:
 #
@@ -133,4 +134,10 @@ $latest.platforms | Add-Member -Force NoteProperty "windows-x86_64-nsis" (& $ent
 gh release upload $tag $latestPath -R $repo --clobber
 if ($LASTEXITCODE -ne 0) { throw "latest.json upload failed." }
 
-Write-Host "`nDone: the signed Windows installers are in the $tag draft." -ForegroundColor Green
+# The MCP bundle needs every system's command line, Windows' included, so it is made now.
+Step "MCP bundle"
+python scripts/mcpb.py $tag
+if ($LASTEXITCODE -ne 0) { throw "The MCP bundle failed." }
+
+Write-Host "`nDone: the signed Windows installers and the MCP bundle are in the $tag draft." -ForegroundColor Green
+Write-Host "After publishing the release: commit server.json, then mcp-publisher login github; mcp-publisher publish server.json" -ForegroundColor Green
