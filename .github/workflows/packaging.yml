@@ -1,0 +1,31 @@
+# Checks the package recipes kept in packaging/: the AUR package builds, installs and runs
+# on Arch, and its .SRCINFO matches the PKGBUILD.
+name: Packaging
+on:
+  push:
+    paths: ["packaging/aur/**", ".github/workflows/packaging.yml"]
+  workflow_dispatch:
+
+jobs:
+  aur:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: pacman -Syu --noconfirm --needed base-devel namcap sudo
+      - name: Build
+        run: |
+          useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/builder
+          cp -r packaging/aur /home/builder/pkg && chown -R builder /home/builder/pkg
+          cd /home/builder/pkg
+          sudo -u builder makepkg --printsrcinfo | diff - .SRCINFO
+          sudo -u builder makepkg -s --noconfirm
+          namcap PKGBUILD *.pkg.tar.zst || true
+      - name: Install and run
+        run: |
+          pacman -U --noconfirm /home/builder/pkg/*.pkg.tar.zst
+          detour --version
+          test -x /usr/bin/detour-desktop
+          test -f /usr/share/applications/Detour.desktop

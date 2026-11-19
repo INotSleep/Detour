@@ -1,0 +1,19 @@
+pkgbase = detour-bin
+	pkgdesc = Open-source SSH client with end-to-end encrypted sync and teams
+	pkgver = 0.5.0
+	pkgrel = 1
+	url = https://github.com/INotSleep/Detour
+	arch = x86_64
+	license = AGPL-3.0-only
+	depends = webkit2gtk-4.1
+	depends = gtk3
+	depends = libayatana-appindicator
+	depends = hicolor-icon-theme
+	provides = detour
+	conflicts = detour
+	options = !strip
+	options = !debug
+	source_x86_64 = https://github.com/INotSleep/Detour/releases/download/v0.5.0/Detour_0.5.0_amd64.deb
+	sha256sums_x86_64 = d63c376a1e3ef3803b85b1d0fa040728426fd7a25e80e72465b14716be8c1af4
+
+pkgname = detour-bin
