@@ -13,7 +13,7 @@ encrypted end to end and signed on every change.
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-6e9bff)](LICENSE)
 ![macOS | Windows | Linux | iOS](https://img.shields.io/badge/macOS%20%7C%20Windows%20%7C%20Linux%20%7C%20iOS-3ecf8e)
 
-[**Download**](https://github.com/INotSleep/Detour/releases/latest) · [App Store](https://apps.apple.com/app/id6836001774) · [Docs](https://inotsleep.com/projects/detour/wiki) · [Discussions](https://github.com/INotSleep/Detour/discussions) · [Security design](docs/teams.md) · [Build from source](#build-from-source)
+[**Download**](https://github.com/INotSleep/Detour/releases/latest) · [Website](https://detourssh.com) · [App Store](https://apps.apple.com/app/id6836001774) · [Docs](https://inotsleep.com/projects/detour/wiki) · [Discussions](https://github.com/INotSleep/Detour/discussions) · [Security design](docs/teams.md) · [Build from source](#build-from-source)
 
 <img src="docs/images/demo.gif" alt="Importing a key, adding a host, connecting, splitting the terminal and browsing files" width="100%">
 
