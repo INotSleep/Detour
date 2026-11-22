@@ -1,30 +1,64 @@
 import SwiftUI
 
 /// The app's screens with a tab bar of all seven at the bottom (the system's would fold the
-/// last ones into "More"). A tab is made when first opened and keeps its state after.
+/// last ones into "More"). A tab is made when first opened and keeps its state after. Going to
+/// another tab slides its screen in from that tab's side, as the tabs lie in the bar.
 struct MainView: View {
     @EnvironmentObject var app: AppModel
     @ObservedObject private var keyboard = KeyboardObserver.shared
     @State private var opened: Set<MainTab> = [.hosts]
+    /// Where each screen is pushed sideways while tabs change.
+    @State private var offsets: [MainTab: CGFloat] = [:]
+    /// The screen sliding out.
+    @State private var leaving: MainTab?
 
     var body: some View {
-        ZStack {
-            ForEach(MainTab.allCases) { tab in
-                if opened.contains(tab) {
-                    screen(tab)
-                        .opacity(app.tab == tab ? 1 : 0)
-                        .animation(.easeInOut(duration: 0.18), value: app.tab)
-                        .allowsHitTesting(app.tab == tab)
-                        .accessibilityHidden(app.tab != tab)
+        GeometryReader { geo in
+            ZStack {
+                ForEach(MainTab.allCases) { tab in
+                    if opened.contains(tab) {
+                        screen(tab)
+                            .offset(x: offsets[tab] ?? 0)
+                            .opacity(tab == app.tab || tab == leaving ? 1 : 0)
+                            .allowsHitTesting(app.tab == tab)
+                            .accessibilityHidden(app.tab != tab)
+                    }
                 }
             }
+            .clipped()
+            .onChange(of: app.tab) { old, new in slide(from: old, to: new, width: geo.size.width) }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if !keyboard.shown || app.showTerminals {
                 TabBar(selection: $app.tab, sessions: app.sessions.count)
             }
         }
-        .onChange(of: app.tab) { _, t in opened.insert(t) }
+    }
+
+    /// The new screen comes in from the side its tab is on, the old one goes out the other way.
+    private func slide(from old: MainTab, to new: MainTab, width: CGFloat) {
+        let all = MainTab.allCases
+        let dir: CGFloat = (all.firstIndex(of: new) ?? 0) > (all.firstIndex(of: old) ?? 0) ? 1 : -1
+        var still = Transaction()
+        still.disablesAnimations = true
+        withTransaction(still) {
+            opened.insert(new)
+            leaving = old
+            offsets[old] = 0
+            offsets[new] = dir * width
+        }
+        // The starting place has to be drawn before the move, or there is nothing to move from.
+        DispatchQueue.main.async {
+            withAnimation(.spring(response: 0.36, dampingFraction: 0.9)) {
+                offsets[new] = 0
+                offsets[old] = -dir * width
+            } completion: {
+                withTransaction(still) {
+                    if leaving == old { leaving = nil }
+                    if app.tab != old { offsets[old] = 0 }
+                }
+            }
+        }
     }
 
     @ViewBuilder private func screen(_ tab: MainTab) -> some View {
