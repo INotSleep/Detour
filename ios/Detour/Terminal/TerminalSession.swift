@@ -45,6 +45,10 @@ final class TerminalSession: ObservableObject, Identifiable {
     }
     var cols = 80
     var rows = 24
+    /// The size the server's terminal has: the shell wraps lines by it, so it must be the screen's.
+    private var sentCols = 0
+    private var sentRows = 0
+    private var resizing = false
 
     init(host: Host) {
         self.host = host
@@ -56,6 +60,9 @@ final class TerminalSession: ObservableObject, Identifiable {
         let s = Core.shared.newStream()
         stream = s
         Core.shared.watch(stream: s, data: { [weak self] d in self?.output(d) }, end: { [weak self] info in self?.ended(info) })
+        // The session opens at this size; a new one the screen takes meanwhile goes once it's open.
+        sentCols = cols
+        sentRows = rows
         let args: [String: Any] = ([
             "vaultId": host.vaultId, "hostId": host.id, "secret": secret, "trustFingerprint": trust, "cols": cols, "rows": rows,
         ] as [String: Any?]).compactMapValues { $0 }
@@ -65,6 +72,7 @@ final class TerminalSession: ObservableObject, Identifiable {
                 sessionId = r?["sessionId"] as? String
                 if let secret { typedSecret = secret }
                 state = .connected
+                sendSize()
             } catch let f as CoreFailure {
                 Core.shared.unwatch(stream: s)
                 switch f.kind {
@@ -223,8 +231,22 @@ final class TerminalSession: ObservableObject, Identifiable {
     func resize(cols: Int, rows: Int) {
         self.cols = cols
         self.rows = rows
-        guard let id = sessionId else { return }
-        Task { _ = try? await Core.shared.call("session_resize", ["sessionId": id, "cols": cols, "rows": rows]) }
+        sendSize()
+    }
+
+    /// Tells the server the screen's size, one call at a time so the last size is the one it
+    /// keeps (keyboards coming and going resize the terminal in quick steps).
+    private func sendSize() {
+        guard let id = sessionId, !resizing, (cols, rows) != (sentCols, sentRows) else { return }
+        let size = (cols: cols, rows: rows)
+        resizing = true
+        Task {
+            _ = try? await Core.shared.call("session_resize", ["sessionId": id, "cols": size.cols, "rows": size.rows])
+            sentCols = size.cols
+            sentRows = size.rows
+            resizing = false
+            sendSize()
+        }
     }
 
     func close() {

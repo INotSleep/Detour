@@ -151,17 +151,17 @@ struct HostsView: View {
                 try? await Task.sleep(for: .milliseconds(800))
                 Shots.dump(t, step)
             }
-            // Back in the history as a finger drags it, where the prompts showed twice.
-            if let view = t?.view as? DetourTerminalView {
-                view.fakeTracking = true
-                for _ in 0..<20 {
-                    view.contentOffset.y -= 7
-                    try? await Task.sleep(for: .milliseconds(40))
-                }
-                view.fakeTracking = false
+            // The server's size is the screen's, and the shell's history, a long command then
+            // short ones, draws each line once.
+            t?.run("stty size; echo a-command-long-enough-to-wrap-at-55-but-not-at-80-columns")
+            try? await Task.sleep(for: .milliseconds(600))
+            t?.run("ls")
+            try? await Task.sleep(for: .milliseconds(600))
+            for key in ["up", "up", "down", "up"] {
+                t?.input(KeyCodes.bytes(key, appCursor: t?.appCursor ?? false) ?? [])
+                try? await Task.sleep(for: .milliseconds(300))
             }
-            try? await Task.sleep(for: .milliseconds(800))
-            Shots.dump(t, "dragged up 140pt")
+            Shots.dump(t, "history arrows")
         case "sessions":
             app.open(local)
             app.openFiles(local)

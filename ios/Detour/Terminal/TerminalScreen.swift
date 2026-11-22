@@ -11,13 +11,6 @@ private typealias Color = SwiftUI.Color
 final class DetourTerminalView: TerminalView {
     override var hasText: Bool { true }
 
-    #if DEBUG
-    /// Screenshots scroll as a finger does: SwiftTerm takes a scroll for the person's only while
-    /// the view is tracking.
-    var fakeTracking = false
-    override var isTracking: Bool { fakeTracking || super.isTracking }
-    #endif
-
     /// Where the finger was when the space bar's trackpad last moved the cursor.
     private var trackpad: CGPoint?
 
