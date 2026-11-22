@@ -1,5 +1,6 @@
 #if DEBUG
-import Foundation
+import SwiftTerm
+import UIKit
 
 /// App Store screenshots (debug builds only): launched with `-shot <screen>`, the app fills a
 /// vault of its own with sample hosts and opens that screen. `scripts/screenshots.sh` runs it
@@ -63,5 +64,18 @@ enum Shots {
     /// What the terminal shows: a few everyday commands on the Mac (scripts/screenshots.sh puts
     /// the log there), short enough for a phone's width.
     static let terminalCommands = "clear\ndf -h / | awk '{print $2, $4, $5}'\ntail -n 7 logs/app.log"
+
+    /// The terminal's whole buffer with its size and cursor, added to Documents/<screen>.txt: the
+    /// text itself, which a screenshot can't tell from its drawing.
+    @MainActor static func dump(_ session: TerminalSession?, _ label: String) {
+        guard let view = session?.view, let screen,
+              let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        let s = view.terminalStateSnapshot()
+        var text = "== \(label): \(s.dimensions.cols)x\(s.dimensions.rows) cursor \(s.cursor.col),\(s.cursor.row) viewport \(s.viewportRow) bounds \(view.bounds.height) offset \(view.contentOffset.y)\n"
+        text += String(decoding: view.getBufferAsData(), as: UTF8.self)
+        let url = dir.appendingPathComponent("\(screen).txt")
+        let old = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        try? (old + text).write(to: url, atomically: true, encoding: .utf8)
+    }
 }
 #endif

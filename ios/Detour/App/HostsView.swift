@@ -126,6 +126,28 @@ struct HostsView: View {
                 try? await Task.sleep(for: .seconds(1))
                 app.terminals.first?.customizing = true
             }
+        case "resize", "resizebash":
+            // More than a screen of output, then the keyboard up and down: the terminal's rows change.
+            app.open(local)
+            for _ in 0..<60 {
+                if app.terminals.first?.state == .connected { break }
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+            try? await Task.sleep(for: .seconds(1))
+            let t = app.terminals.first
+            if screen == "resizebash" {
+                t?.run("exec /bin/bash --norc")
+                try? await Task.sleep(for: .milliseconds(500))
+                t?.run("PS1='deploy@build-mac:\\w$ '")
+            }
+            t?.run("seq 1 120")
+            try? await Task.sleep(for: .seconds(1))
+            Shots.dump(t, "output, keyboard up")
+            for step in ["keyboard down", "keyboard up", "keyboard down"] {
+                t?.toggleKeyboard(shown: step == "keyboard down")
+                try? await Task.sleep(for: .milliseconds(1500))
+                Shots.dump(t, step)
+            }
         case "sessions":
             app.open(local)
             app.openFiles(local)

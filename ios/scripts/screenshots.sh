@@ -91,8 +91,14 @@ shoot() {
     xcrun simctl terminate "$dev" dev.detour.ios 2>/dev/null || true
     xcrun simctl launch "$dev" dev.detour.ios -shot "$screen" -AppleLanguages "($lang)" -AppleLocale "${lang/-/_}"
     # The first launch makes the vault (and its key) first.
-    sleep $([ $n = 1 ] && echo 15 || echo 9)
+    case $screen in
+      resize*) sleep 22 ;;
+      *) sleep $([ $n = 1 ] && echo 15 || echo 9) ;;
+    esac
     xcrun simctl io "$dev" screenshot "$out/$kind-$n-$screen.png"
+    # What the debug screens wrote down (the terminal's text).
+    data=$(xcrun simctl get_app_container "$dev" dev.detour.ios data 2>/dev/null || true)
+    [ -f "$data/Documents/$screen.txt" ] && mv "$data/Documents/$screen.txt" "$out/$kind-$n-$screen.txt"
     n=$((n + 1))
   done
 }
