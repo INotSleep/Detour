@@ -16,12 +16,26 @@ final class DetourTerminalView: TerminalView {
 
     // Holding the space bar makes the keyboard a trackpad. SwiftTerm moves the cursor along the
     // line only (up and down in full-screen programs alone); here it is the arrows both ways
-    // everywhere, so up and down walk the shell's history.
-    override func beginFloatingCursor(at point: CGPoint) {
+    // everywhere, so up and down walk the shell's history. UIKit calls these by their
+    // Objective-C selectors, and SwiftTerm's are public but not open: ours are put in their
+    // place for this class when the app first makes a terminal.
+    static let installTrackpad: Void = {
+        let pairs: [(Selector, Selector)] = [
+            (#selector(UITextInput.beginFloatingCursor(at:)), #selector(DetourTerminalView.trackpadBegan(at:))),
+            (#selector(UITextInput.updateFloatingCursor(at:)), #selector(DetourTerminalView.trackpadMoved(at:))),
+            (#selector(UITextInput.endFloatingCursor), #selector(DetourTerminalView.trackpadEnded)),
+        ]
+        for (theirs, ours) in pairs {
+            guard let m = class_getInstanceMethod(DetourTerminalView.self, ours) else { continue }
+            class_addMethod(DetourTerminalView.self, theirs, method_getImplementation(m), method_getTypeEncoding(m))
+        }
+    }()
+
+    @objc private func trackpadBegan(at point: CGPoint) {
         trackpad = point
     }
 
-    override func updateFloatingCursor(at point: CGPoint) {
+    @objc private func trackpadMoved(at point: CGPoint) {
         guard let last = trackpad else { return }
         let dx = point.x - last.x
         let dy = point.y - last.y
@@ -34,7 +48,7 @@ final class DetourTerminalView: TerminalView {
         }
     }
 
-    override func endFloatingCursor() {
+    @objc private func trackpadEnded() {
         trackpad = nil
     }
 
@@ -55,6 +69,7 @@ struct TerminalHost: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(session: session) }
 
     func makeUIView(context: Context) -> TerminalView {
+        _ = DetourTerminalView.installTrackpad
         let tv = DetourTerminalView(frame: .zero)
         tv.terminalDelegate = context.coordinator
         tv.apply(settings.theme(dark: scheme == .dark), fontSize: settings.fontSize)
