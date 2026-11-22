@@ -1,5 +1,6 @@
 import Foundation
 import SwiftTerm
+import UIKit
 
 /// One terminal tab: an SSH session the core holds, its output drawn by SwiftTerm.
 @MainActor
