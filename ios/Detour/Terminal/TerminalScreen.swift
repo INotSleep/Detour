@@ -339,7 +339,9 @@ private struct SessionScreen: View {
                 if !keyboard.hardware && !keysUp {
                     TerminalBar(session: session, showKeys: showKeys, keyboardShown: keyboard.shown)
                         .padding(.bottom, lift)
-                        .animation(.easeOut(duration: keyboard.duration), value: lift)
+                        // Swapping keyboards, the bar goes straight to its place: following the
+                        // swap's frames made it jump above the keyboard and slide down.
+                        .animation(keyboard.swapping ? nil : .easeOut(duration: keyboard.duration), value: lift)
                 }
             }
         }

@@ -145,6 +145,7 @@ final class TerminalSession: ObservableObject, Identifiable {
         if on, kb.shown, !keysKeyboard {
             KeysInputView.matched = kb.height + (KeyBarStore.shared.hidden ? 0 : KeysInputView.barHeight)
         }
+        kb.swappingUntil = Date().addingTimeInterval(0.6)
         keysKeyboard = on
         guard let view else { return }
         if on { keysInput().fit() }

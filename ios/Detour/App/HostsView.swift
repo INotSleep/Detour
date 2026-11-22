@@ -65,7 +65,7 @@ struct HostsView: View {
                 }
             }
             .overlay { empty }
-            .overlay(alignment: .bottom) { undoBar }
+            .safeAreaInset(edge: .bottom) { undoBar }
             .searchable(text: $query)
             .refreshable { await app.syncNow() }
             .navigationTitle("Hosts")

@@ -122,7 +122,7 @@ struct SnippetsView: View {
             .sheet(isPresented: $adding) { SnippetEditor(snippet: nil, saved: { await load() }) }
             .sheet(item: $editing) { s in SnippetEditor(snippet: s, saved: { await load() }) }
             .sheet(item: $viewing) { s in SnippetViewer(snippet: s) }
-            .overlay(alignment: .bottom) { undoBar }
+            .safeAreaInset(edge: .bottom) { undoBar }
             .task { await load() }
             .refreshable { await load() }
         }

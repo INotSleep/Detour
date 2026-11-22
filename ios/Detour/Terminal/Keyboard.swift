@@ -11,6 +11,9 @@ final class KeyboardObserver: ObservableObject {
     @Published private(set) var top: CGFloat = .infinity
     /// The keyboard's height while it is shown.
     private(set) var height: CGFloat = 0
+    /// Until when the keyboard is being swapped for another: what sits on it moves at once.
+    var swappingUntil = Date.distantPast
+    var swapping: Bool { Date() < swappingUntil }
     @Published private(set) var duration: Double = 0.25
     @Published private(set) var hardware = KeyboardObserver.attached
 

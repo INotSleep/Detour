@@ -53,6 +53,8 @@ final class KeysKeyboardStore: ObservableObject {
 struct KeysKeyboardView: View {
     @ObservedObject var session: TerminalSession
     @ObservedObject private var store = KeysKeyboardStore.shared
+    /// A finger on the space key: the rows stop scrolling, so dragging up and down moves the cursor.
+    @State private var onSpace = false
 
     var body: some View {
         GeometryReader { geo in
@@ -78,13 +80,14 @@ struct KeysKeyboardView: View {
                         ForEach(store.blocks) { block in
                             HStack(spacing: 5) {
                                 ForEach(0..<KeyBlock.size, id: \.self) { i in
-                                    KeysKeyboardKey(key: block.keys.indices.contains(i) ? block.keys[i] : nil, session: session)
+                                    KeysKeyboardKey(key: block.keys.indices.contains(i) ? block.keys[i] : nil, session: session, onSpace: $onSpace)
                                 }
                             }
                         }
                     }
                     .padding(.bottom, 8)
                 }
+                .scrollDisabled(onSpace)
             }
             .padding(.horizontal, 6)
             .padding(.top, 6)
@@ -96,6 +99,7 @@ struct KeysKeyboardView: View {
 private struct KeysKeyboardKey: View {
     let key: BarKey?
     @ObservedObject var session: TerminalSession
+    @Binding var onSpace: Bool
     @State private var dragged: CGSize = .zero
     @State private var moved = false
 
@@ -105,8 +109,12 @@ private struct KeysKeyboardKey: View {
             KeyCap(key: key, height: 40)
                 .highPriorityGesture(
                     DragGesture(minimumDistance: 0)
-                        .onChanged { g in drag(g.translation) }
+                        .onChanged { g in
+                            if !onSpace { onSpace = true }
+                            drag(g.translation)
+                        }
                         .onEnded { _ in
+                            onSpace = false
                             if !moved { press(key) }
                             dragged = .zero
                             moved = false
