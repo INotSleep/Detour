@@ -40,9 +40,10 @@ struct HostsView: View {
                         ForEach(section.hosts) { host in
                             Button { app.open(host) } label: { HostRow(host: host) }
                                 .tint(.primary)
-                                .swipeActions(edge: .trailing) {
+                                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                     if host.vaultId == "personal" {
                                         Button(role: .destructive) { Task { await delete(host) } } label: { Label("Delete", systemImage: "trash") }
+                                            .tint(.red)
                                         Button { editing = EditTarget(id: host.id) } label: { Label("Edit", systemImage: "pencil") }
                                             .tint(.accentColor)
                                     }

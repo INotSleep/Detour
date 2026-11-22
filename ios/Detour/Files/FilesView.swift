@@ -179,8 +179,9 @@ private struct FolderView: View {
                 .foregroundStyle(.primary)
             }
         }
-        .swipeActions(edge: .trailing) {
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             Button(role: .destructive) { deleting = f } label: { Label("Delete", systemImage: "trash") }
+                .tint(.red)
             Button { newName = f.name; renaming = f } label: { Label("Rename", systemImage: "pencil") }.tint(.accentColor)
         }
         .contextMenu {

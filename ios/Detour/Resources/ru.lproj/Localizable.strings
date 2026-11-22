@@ -275,3 +275,9 @@
 "More" = "Ещё";
 "Move up" = "Выше";
 "Move down" = "Ниже";
+"From a file" = "Из файла";
+"The vless:// link from your server's panel or provider" = "Ссылка vless:// из панели сервера или от провайдера";
+"A WireGuard config: [Interface] and one [Peer]" = "Конфиг WireGuard: [Interface] и один [Peer]";
+"Login, if the proxy asks for one" = "Логин, если прокси его спрашивает";
+"This isn't a vless:// link or a WireGuard config" = "Это не ссылка vless:// и не конфиг WireGuard";
+"Detour can't do this yet: %@" = "Detour пока этого не умеет: %@";

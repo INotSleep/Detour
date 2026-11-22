@@ -9,6 +9,8 @@ final class KeyboardObserver: ObservableObject {
 
     /// The keyboard's top edge in window points; infinity while it is hidden.
     @Published private(set) var top: CGFloat = .infinity
+    /// The keyboard's height while it is shown.
+    private(set) var height: CGFloat = 0
     @Published private(set) var duration: Double = 0.25
     @Published private(set) var hardware = KeyboardObserver.attached
 
@@ -50,5 +52,6 @@ final class KeyboardObserver: ObservableObject {
             return
         }
         top = frame.minY
+        height = frame.height
     }
 }

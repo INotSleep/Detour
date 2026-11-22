@@ -5,6 +5,13 @@ import UIKit
 /// SwiftTerm has a `Color` of its own.
 private typealias Color = SwiftUI.Color
 
+/// SwiftTerm's view, with always something to delete. SwiftTerm says there is no text once what
+/// was typed since the last Enter is gone, and iOS then stops repeating a held delete key, while
+/// the shell's line may still have plenty: with no text of its own, SwiftTerm sends Backspace.
+final class DetourTerminalView: TerminalView {
+    override var hasText: Bool { true }
+}
+
 /// SwiftTerm's view for a session. Its own bar over the keyboard is off: ours sits in the
 /// layout under the terminal, where it can be used with the keyboard hidden too.
 struct TerminalHost: UIViewRepresentable {
@@ -15,7 +22,7 @@ struct TerminalHost: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(session: session) }
 
     func makeUIView(context: Context) -> TerminalView {
-        let tv = TerminalView(frame: .zero)
+        let tv = DetourTerminalView(frame: .zero)
         tv.terminalDelegate = context.coordinator
         tv.apply(settings.theme(dark: scheme == .dark), fontSize: settings.fontSize)
         tv.inputAccessoryView = nil
@@ -315,7 +322,10 @@ private struct SessionScreen: View {
             // How far the keyboard reaches into this screen.
             let lift = keyboard.shown ? max(0, geo.frame(in: .global).maxY - keyboard.top) : 0
             // The keys keyboard has the bar's keys and more: the bar steps aside while it is up.
-            let showKeys = !keys.hidden && !session.keysKeyboard
+            // The keys keyboard has the bar's keys (and the hide button) while it is up; with the
+            // keyboard down the bar is back.
+            let keysUp = session.keysKeyboard && keyboard.shown
+            let showKeys = !keys.hidden && !keysUp
             let bar = keyboard.hardware || !showKeys ? 0 : TerminalBar.height
             ZStack(alignment: .bottom) {
                 // The terminal takes its new size at once rather than following the keyboard's
@@ -326,7 +336,7 @@ private struct SessionScreen: View {
                 overlay
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .padding(.bottom, lift + bar)
-                if !keyboard.hardware {
+                if !keyboard.hardware && !keysUp {
                     TerminalBar(session: session, showKeys: showKeys, keyboardShown: keyboard.shown)
                         .padding(.bottom, lift)
                         .animation(.easeOut(duration: keyboard.duration), value: lift)

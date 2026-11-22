@@ -178,8 +178,9 @@ struct SessionsView: View {
                 ForEach(app.sessions) { s in
                     Button { app.show(s) } label: { SessionRow(session: s) }
                         .tint(.primary)
-                        .swipeActions(edge: .trailing) {
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                             Button(role: .destructive) { app.close(s) } label: { Label("Close", systemImage: "xmark") }
+                                .tint(.red)
                         }
                 }
             }

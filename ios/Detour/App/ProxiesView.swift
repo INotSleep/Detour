@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// A saved proxy, as the core shows it (`ProxyView`): its kind stays JSON, there are several.
 struct ProxyItem: Identifiable {
@@ -49,9 +50,10 @@ struct ProxiesView: View {
                         ForEach(g.proxies) { p in
                             Button { Task { await check(p) } } label: { row(p) }
                                 .tint(.primary)
-                                .swipeActions(edge: .trailing) {
+                                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                     if p.vaultId == "personal" {
                                         Button(role: .destructive) { Task { await delete(p) } } label: { Label("Delete", systemImage: "trash") }
+                                            .tint(.red)
                                     }
                                 }
                         }
@@ -145,30 +147,93 @@ struct ProxiesView: View {
     }
 }
 
-/// A proxy from a link (`vless://`, `socks5://`...) or a WireGuard config, pasted in.
+/// A new proxy, by kind: VLESS from its link, WireGuard from its config (pasted or a .conf
+/// file), SOCKS5 and HTTP from their address and login.
 private struct AddProxyView: View {
+    enum Kind: String, CaseIterable, Identifiable {
+        case vless, wireguard, socks5, http
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .vless: "VLESS"
+            case .wireguard: "WireGuard"
+            case .socks5: "SOCKS5"
+            case .http: "HTTP"
+            }
+        }
+    }
+
     let added: () async -> Void
     @Environment(\.dismiss) private var dismiss
+    @State private var kind: Kind = .vless
     @State private var text = ""
+    @State private var name = ""
+    @State private var address = ""
+    @State private var port = ""
+    @State private var user = ""
+    @State private var password = ""
+    @State private var picking = false
     @State private var busy = false
     @State private var error: String?
+
+    private var ready: Bool {
+        switch kind {
+        case .vless, .wireguard: !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .socks5, .http: !address.trimmingCharacters(in: .whitespaces).isEmpty && UInt16(port) != nil
+        }
+    }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    TextEditor(text: $text)
-                        .font(.footnote.monospaced())
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .frame(minHeight: 140)
-                    Button {
-                        if let s = UIPasteboard.general.string { text = s }
-                    } label: {
-                        Label("Paste", systemImage: "doc.on.clipboard")
+                    Picker("Kind", selection: $kind) {
+                        ForEach(Kind.allCases) { Text(verbatim: $0.title).tag($0) }
                     }
-                } header: {
-                    Text("Link or WireGuard config")
+                    .pickerStyle(.segmented)
+                }
+                switch kind {
+                case .vless:
+                    Section {
+                        TextField(text: $text, prompt: Text(verbatim: "vless://…"), axis: .vertical) { Text(verbatim: "VLESS") }
+                            .font(.footnote.monospaced())
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .lineLimit(3...8)
+                        pasteButton
+                    } footer: {
+                        Text("The vless:// link from your server's panel or provider")
+                    }
+                case .wireguard:
+                    Section {
+                        TextEditor(text: $text)
+                            .font(.footnote.monospaced())
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .frame(minHeight: 160)
+                        pasteButton
+                        Button { picking = true } label: { Label("From a file", systemImage: "doc") }
+                    } footer: {
+                        Text("A WireGuard config: [Interface] and one [Peer]")
+                    }
+                case .socks5, .http:
+                    Section {
+                        TextField("Name", text: $name)
+                        TextField("Address", text: $address)
+                            .keyboardType(.URL)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                        TextField("Port", text: $port, prompt: Text(verbatim: kind == .socks5 ? "1080" : "8080"))
+                            .keyboardType(.numberPad)
+                    }
+                    Section {
+                        TextField("User", text: $user)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                        SecureField("Password", text: $password)
+                    } header: {
+                        Text("Login, if the proxy asks for one")
+                    }
                 }
                 if let error {
                     Text(error).foregroundStyle(.red).font(.footnote)
@@ -179,9 +244,27 @@ private struct AddProxyView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    if busy { ProgressView() } else { Button("Add") { Task { await add() } }.disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
+                    if busy { ProgressView() } else { Button("Add") { Task { await add() } }.disabled(!ready) }
                 }
             }
+            .onChange(of: kind) { error = nil }
+            .fileImporter(isPresented: $picking, allowedContentTypes: [.data, .plainText]) { result in
+                guard case .success(let url) = result else { return }
+                let open = url.startAccessingSecurityScopedResource()
+                defer { if open { url.stopAccessingSecurityScopedResource() } }
+                if let t = try? String(contentsOf: url, encoding: .utf8) {
+                    text = t
+                    if name.isEmpty { name = url.deletingPathExtension().lastPathComponent }
+                }
+            }
+        }
+    }
+
+    private var pasteButton: some View {
+        Button {
+            if let s = UIPasteboard.general.string { text = s }
+        } label: {
+            Label("Paste", systemImage: "doc.on.clipboard")
         }
     }
 
@@ -190,22 +273,39 @@ private struct AddProxyView: View {
         error = nil
         defer { busy = false }
         do {
-            let parsed = try await Core.shared.call("proxy_parse", ["text": text.trimmingCharacters(in: .whitespacesAndNewlines)]) as? [String: Any] ?? [:]
-            let proxy: PersonalVault.JSON = [
-                "id": PersonalVault.newId(),
-                "name": parsed["name"] as? String ?? "proxy",
-                "kind": parsed["kind"] ?? [String: Any](),
-                "newSecrets": parsed["secrets"] ?? [String: Any](),
-            ]
+            var proxy: PersonalVault.JSON = ["id": PersonalVault.newId()]
+            switch kind {
+            case .vless, .wireguard:
+                let parsed = try await Core.shared.call("proxy_parse", ["text": text.trimmingCharacters(in: .whitespacesAndNewlines)]) as? [String: Any] ?? [:]
+                let given = name.trimmingCharacters(in: .whitespaces)
+                proxy["name"] = given.isEmpty ? parsed["name"] as? String ?? kind.title : given
+                proxy["kind"] = parsed["kind"] ?? [String: Any]()
+                proxy["newSecrets"] = parsed["secrets"] ?? [String: Any]()
+            case .socks5, .http:
+                let host = address.trimmingCharacters(in: .whitespaces)
+                let given = name.trimmingCharacters(in: .whitespaces)
+                proxy["name"] = given.isEmpty ? host : given
+                proxy["kind"] = ["type": kind.rawValue, "address": host, "port": Int(port) ?? 0, "user": user.trimmingCharacters(in: .whitespaces)] as [String: Any]
+                proxy["newSecrets"] = password.isEmpty ? [String: String]() : ["password": password]
+            }
             try await PersonalVault.edit { v in
                 v["proxies"] = (v["proxies"] as? [PersonalVault.JSON] ?? []) + [proxy]
             }
             await added()
             dismiss()
+        } catch let f as CoreFailure where f.kind == "proxy" {
+            error = Self.reason(f["reason"] ?? "")
         } catch let f as CoreFailure {
-            error = f.kind == "proxy" ? String(localized: "Detour can't read this proxy") : TerminalSession.describe(f)
+            error = TerminalSession.describe(f)
         } catch {
             self.error = error.localizedDescription
         }
+    }
+
+    /// What the core found wrong with a link or a config.
+    private static func reason(_ r: String) -> String {
+        if r == "protocol" { return String(localized: "This isn't a vless:// link or a WireGuard config") }
+        if r.hasPrefix("unsupported:") { return String(localized: "Detour can't do this yet: \(String(r.dropFirst("unsupported:".count)))") }
+        return String(localized: "Detour can't read this proxy")
     }
 }

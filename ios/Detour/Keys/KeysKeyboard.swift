@@ -58,12 +58,21 @@ struct KeysKeyboardView: View {
         GeometryReader { geo in
             let wide = geo.size.width >= 700
             VStack(spacing: 6) {
-                Button { session.customizing = true } label: {
-                    Label("Customize", systemImage: "slider.horizontal.3")
-                        .font(.subheadline.weight(.medium))
-                        .frame(maxWidth: .infinity, minHeight: 30)
+                HStack(spacing: 6) {
+                    Button { session.customizing = true } label: {
+                        Label("Customize", systemImage: "slider.horizontal.3")
+                            .font(.subheadline.weight(.medium))
+                            .frame(maxWidth: .infinity, minHeight: 30)
+                    }
+                    .buttonStyle(.bordered)
+                    Button { session.toggleKeyboard(shown: true) } label: {
+                        Image(systemName: "keyboard.chevron.compact.down")
+                            .font(.system(size: 16))
+                            .frame(width: 44, height: 30)
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityLabel("Hide keyboard")
                 }
-                .buttonStyle(.bordered)
                 ScrollView {
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 14), count: wide ? 2 : 1), spacing: 6) {
                         ForEach(store.blocks) { block in
@@ -92,8 +101,9 @@ private struct KeysKeyboardKey: View {
 
     var body: some View {
         if let key, key.kind == .key, key.value == "space" {
+            // Ahead of the keyboard's own scrolling, or a drag up or down would scroll it.
             KeyCap(key: key, height: 40)
-                .gesture(
+                .highPriorityGesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { g in drag(g.translation) }
                         .onEnded { _ in
@@ -147,9 +157,19 @@ private struct KeysKeyboardKey: View {
 /// The keys keyboard as the terminal's input view: iOS puts it where the keyboard goes.
 final class KeysInputView: UIInputView {
     private var host: UIHostingController<KeysKeyboardView>?
+    private var heightConstraint: NSLayoutConstraint?
 
-    /// As tall as the system keyboard with its suggestions: five rows show whole on a phone.
-    static var height: CGFloat { UIDevice.current.userInterfaceIdiom == .pad ? 330 : 336 }
+    /// The bar over the system keyboard (`TerminalBar.height`).
+    static let barHeight: CGFloat = 46
+    /// The system keyboard and the bar together, as last seen: the keys keyboard takes their place.
+    static var matched: CGFloat?
+    static var height: CGFloat { matched ?? (UIDevice.current.userInterfaceIdiom == .pad ? 376 : 382) }
+
+    /// Takes the height of the keyboard it replaces.
+    func fit() {
+        heightConstraint?.constant = Self.height
+        frame.size.height = Self.height
+    }
 
     init(session: TerminalSession) {
         super.init(frame: CGRect(x: 0, y: 0, width: UIScreen.main.bounds.width, height: Self.height), inputViewStyle: .keyboard)
@@ -162,8 +182,10 @@ final class KeysInputView: UIInputView {
             h.view.trailingAnchor.constraint(equalTo: trailingAnchor),
             h.view.topAnchor.constraint(equalTo: topAnchor),
             h.view.bottomAnchor.constraint(equalTo: safeAreaLayoutGuide.bottomAnchor),
-            heightAnchor.constraint(equalToConstant: Self.height),
         ])
+        let c = heightAnchor.constraint(equalToConstant: Self.height)
+        c.isActive = true
+        heightConstraint = c
         host = h
     }
 

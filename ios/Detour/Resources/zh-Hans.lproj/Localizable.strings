@@ -275,3 +275,9 @@
 "More" = "更多";
 "Move up" = "上移";
 "Move down" = "下移";
+"From a file" = "从文件导入";
+"The vless:// link from your server's panel or provider" = "服务器面板或服务商提供的 vless:// 链接";
+"A WireGuard config: [Interface] and one [Peer]" = "WireGuard 配置：[Interface] 和一个 [Peer]";
+"Login, if the proxy asks for one" = "登录信息（如果代理需要）";
+"This isn't a vless:// link or a WireGuard config" = "这不是 vless:// 链接，也不是 WireGuard 配置";
+"Detour can't do this yet: %@" = "Detour 暂不支持：%@";

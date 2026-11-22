@@ -275,3 +275,9 @@
 "More" = "Más";
 "Move up" = "Subir";
 "Move down" = "Bajar";
+"From a file" = "Desde un archivo";
+"The vless:// link from your server's panel or provider" = "El enlace vless:// del panel de tu servidor o de tu proveedor";
+"A WireGuard config: [Interface] and one [Peer]" = "Una configuración de WireGuard: [Interface] y un [Peer]";
+"Login, if the proxy asks for one" = "Inicio de sesión, si el proxy lo pide";
+"This isn't a vless:// link or a WireGuard config" = "Esto no es un enlace vless:// ni una configuración de WireGuard";
+"Detour can't do this yet: %@" = "Detour aún no admite esto: %@";

@@ -38,8 +38,9 @@ private struct TeamSnippets: Decodable {
     }
 }
 
-/// Snippets of the vault and its teams. With a session, a tap runs one in it; the personal
-/// vault's can be added, changed and deleted here.
+/// Snippets of the vault and its teams. With a session, a tap runs one in it; without one, a tap
+/// opens it (to change, for the personal vault's; to read and copy, for a team's). Deleting
+/// one can be undone for a few seconds.
 struct SnippetsView: View {
     /// Where a tap runs a snippet; nil only manages them.
     var session: TerminalSession?
@@ -53,8 +54,13 @@ struct SnippetsView: View {
         let snippets: [Snippet]
     }
     @State private var editing: Snippet?
+    /// A team's snippet, shown to read and copy.
+    @State private var viewing: Snippet?
     @State private var adding = false
     @State private var error: String?
+    /// A snippet just deleted, for Undo.
+    @State private var deleted: Snippet?
+    @State private var deletedAt = Date.distantPast
 
     var body: some View {
         NavigationStack {
@@ -62,9 +68,10 @@ struct SnippetsView: View {
                 if let mine {
                     Section {
                         ForEach(mine) { s in
-                            row(s)
-                                .swipeActions(edge: .trailing) {
+                            row(s, open: { editing = s })
+                                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                     Button(role: .destructive) { Task { await delete(s) } } label: { Label("Delete", systemImage: "trash") }
+                                        .tint(.red)
                                     Button { editing = s } label: { Label("Edit", systemImage: "pencil") }.tint(.accentColor)
                                 }
                                 .contextMenu {
@@ -80,7 +87,7 @@ struct SnippetsView: View {
                 ForEach(teams) { t in
                     Section(t.name) {
                         ForEach(t.snippets) { s in
-                            row(s).contextMenu {
+                            row(s, open: { viewing = s }).contextMenu {
                                 Button { UIPasteboard.general.string = s.command } label: { Label("Copy", systemImage: "doc.on.doc") }
                             }
                         }
@@ -114,14 +121,16 @@ struct SnippetsView: View {
             }
             .sheet(isPresented: $adding) { SnippetEditor(snippet: nil, saved: { await load() }) }
             .sheet(item: $editing) { s in SnippetEditor(snippet: s, saved: { await load() }) }
+            .sheet(item: $viewing) { s in SnippetViewer(snippet: s) }
+            .overlay(alignment: .bottom) { undoBar }
             .task { await load() }
             .refreshable { await load() }
         }
     }
 
-    private func row(_ s: Snippet) -> some View {
+    private func row(_ s: Snippet, open: @escaping () -> Void) -> some View {
         Button {
-            guard let session else { return }
+            guard let session else { return open() }
             session.run(s.command)
             dismiss()
         } label: {
@@ -143,7 +152,37 @@ struct SnippetsView: View {
         }
     }
 
+    @ViewBuilder private var undoBar: some View {
+        if let d = deleted {
+            HStack {
+                Text("Deleted \(d.name)").lineLimit(1)
+                Spacer()
+                Button("Undo") { Task { await undo() } }.bold()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+            .padding()
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+
+    private func undo() async {
+        guard let d = deleted else { return }
+        withAnimation { deleted = nil }
+        let item: PersonalVault.JSON = ["id": d.id, "name": d.name, "command": d.command]
+        try? await PersonalVault.edit { v in v["snippets"] = (v["snippets"] as? [PersonalVault.JSON] ?? []) + [item] }
+        await load()
+    }
+
     private func delete(_ s: Snippet) async {
+        withAnimation { deleted = s }
+        let at = Date()
+        deletedAt = at
+        Task {
+            try? await Task.sleep(for: .seconds(5))
+            if deletedAt == at { withAnimation { deleted = nil } }
+        }
         do {
             try await PersonalVault.edit { v in
                 v["snippets"] = (v["snippets"] as? [PersonalVault.JSON] ?? []).filter { $0["id"] as? String != s.id }
@@ -221,5 +260,35 @@ private struct SnippetEditor: View {
             self.error = error.localizedDescription
         }
         busy = false
+    }
+}
+
+/// A team's snippet: read it, copy it.
+private struct SnippetViewer: View {
+    let snippet: Snippet
+    @Environment(\.dismiss) private var dismiss
+    @State private var copies = 0
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Text(snippet.command).font(.body.monospaced()).textSelection(.enabled)
+                }
+                Section {
+                    Button {
+                        UIPasteboard.general.string = snippet.command
+                        copies += 1
+                    } label: {
+                        Label(copies > 0 ? String(localized: "Copied") : String(localized: "Copy"), systemImage: copies > 0 ? "checkmark" : "doc.on.doc")
+                    }
+                    .sensoryFeedback(.success, trigger: copies)
+                }
+            }
+            .navigationTitle(snippet.name)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+        .presentationDetents([.medium, .large])
     }
 }

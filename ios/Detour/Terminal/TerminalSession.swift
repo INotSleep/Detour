@@ -136,12 +136,19 @@ final class TerminalSession: ObservableObject, Identifiable {
         return v
     }
 
-    /// Swaps the system keyboard and the keys keyboard, and shows the one chosen.
+    /// Swaps the system keyboard and the keys keyboard, and shows the one chosen. The keys
+    /// keyboard takes the place of the system one and the bar over it together, so the terminal
+    /// keeps its size; the swap itself is not animated.
     func showKeysKeyboard(_ on: Bool) {
+        let kb = KeyboardObserver.shared
+        if on, kb.shown, !keysKeyboard {
+            KeysInputView.matched = kb.height + (KeyBarStore.shared.hidden ? 0 : KeysInputView.barHeight)
+        }
         keysKeyboard = on
         guard let view else { return }
+        if on { keysInput().fit() }
         view.inputView = on ? keysInput() : nil
-        view.reloadInputViews()
+        UIView.performWithoutAnimation { view.reloadInputViews() }
         if !view.isFirstResponder { _ = view.becomeFirstResponder() }
     }
 

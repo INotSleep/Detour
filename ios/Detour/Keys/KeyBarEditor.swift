@@ -53,8 +53,9 @@ struct KeyboardEditor: View {
                             .buttonStyle(.plain)
                         }
                     }
-                    .swipeActions(edge: .trailing) {
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                         Button(role: .destructive) { keys.blocks.removeAll { $0.id == block.id } } label: { Label("Delete", systemImage: "trash") }
+                            .tint(.red)
                     }
                     // Dragging a row moves it too; the menu is for when a key's button takes the drag.
                     .contextMenu {
