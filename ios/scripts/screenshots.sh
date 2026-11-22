@@ -92,7 +92,7 @@ shoot() {
     xcrun simctl launch "$dev" dev.detour.ios -shot "$screen" -AppleLanguages "($lang)" -AppleLocale "${lang/-/_}"
     # The first launch makes the vault (and its key) first.
     case $screen in
-      resize*) sleep 22 ;;
+      history*) sleep 15 ;;
       *) sleep $([ $n = 1 ] && echo 15 || echo 9) ;;
     esac
     xcrun simctl io "$dev" screenshot "$out/$kind-$n-$screen.png"

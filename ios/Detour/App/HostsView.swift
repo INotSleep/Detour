@@ -126,40 +126,31 @@ struct HostsView: View {
                 try? await Task.sleep(for: .seconds(1))
                 app.terminals.first?.customizing = true
             }
-        case "resize", "resizebash":
-            // More than a screen of output, then the keyboard up and down: the terminal's rows change.
+        case "history", "historyzsh":
+            // As a person does it: open the host and go straight to the shell's history (no
+            // keyboard swaps, which send the size anyway). A command that wraps at the phone's
+            // width but not at 80 columns, then a short one, then the arrows.
             app.open(local)
             for _ in 0..<60 {
                 if app.terminals.first?.state == .connected { break }
-                try? await Task.sleep(for: .milliseconds(250))
+                try? await Task.sleep(for: .milliseconds(100))
             }
-            try? await Task.sleep(for: .seconds(1))
             let t = app.terminals.first
-            if screen == "resizebash" {
+            if screen == "history" {
                 t?.run("exec /bin/bash --norc")
                 try? await Task.sleep(for: .milliseconds(500))
-                t?.run("PS1='deploy@build-mac:\\w$ '")
+                t?.run("PS1='deploy@build-mac:~$ '")
             }
-            t?.run("seq 1 120")
-            try? await Task.sleep(for: .seconds(1))
-            Shots.dump(t, "output, keyboard up")
-            // A command at each size, so there are prompts in the history to scroll back to.
-            for (i, step) in ["keyboard down", "keyboard up", "keyboard down"].enumerated() {
-                t?.toggleKeyboard(shown: step == "keyboard down")
-                try? await Task.sleep(for: .milliseconds(1200))
-                t?.run("echo step\(i + 1)")
-                try? await Task.sleep(for: .milliseconds(800))
-                Shots.dump(t, step)
-            }
-            // The server's size is the screen's, and the shell's history, a long command then
-            // short ones, draws each line once.
-            t?.run("stty size; echo a-command-long-enough-to-wrap-at-55-but-not-at-80-columns")
-            try? await Task.sleep(for: .milliseconds(600))
+            try? await Task.sleep(for: .milliseconds(500))
+            t?.run("stty size")
+            try? await Task.sleep(for: .milliseconds(500))
+            t?.run("echo a-command-that-wraps-at-55-not-at-80")
+            try? await Task.sleep(for: .milliseconds(500))
             t?.run("ls")
-            try? await Task.sleep(for: .milliseconds(600))
-            for key in ["up", "up", "down", "up"] {
+            try? await Task.sleep(for: .milliseconds(500))
+            for key in ["up", "up", "down", "up", "up"] {
                 t?.input(KeyCodes.bytes(key, appCursor: t?.appCursor ?? false) ?? [])
-                try? await Task.sleep(for: .milliseconds(300))
+                try? await Task.sleep(for: .milliseconds(400))
             }
             Shots.dump(t, "history arrows")
         case "sessions":
