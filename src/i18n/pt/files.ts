@@ -1,0 +1,77 @@
+// The SFTP file browser. Host key questions come from `terminal.hostKey`.
+import { pt as plural } from "../plural";
+import type en from "../en/files";
+
+const pt: typeof en = {
+  units: ["B", "KB", "MB", "GB", "TB"],
+  perSecond: "/s",
+  bar: {
+    up: "Acima · Backspace",
+    home: "Pasta pessoal",
+    refresh: "Atualizar · F5",
+    terminalHere: "Terminal nesta pasta",
+    newFolder: "Nova pasta",
+    uploadFolder: "Enviar pasta",
+    upload: "Enviar",
+  },
+  selected: (n: number) => `${n} ${plural(n, { one: "selecionado", other: "selecionados" })}`,
+  select: "Selecionar",
+  download: "Baixar",
+  downloadTo: (dir: string) => `Baixar para ${dir}`,
+  local: {
+    title: "Este computador",
+    drives: "Este computador",
+    upload: "Enviar",
+    uploadTo: (dir: string) => `Enviar para ${dir}`,
+    trash: "Mover para a lixeira",
+    trashed: (what: string) => `Movido para a lixeira: ${what}`,
+    hide: "Ocultar este computador",
+    show: "Mostrar este computador",
+  },
+  pick: { title: "Conectar a um host", search: "Host ou endereço", nothingFound: "Nada encontrado", noHosts: "Ainda não há hosts" },
+  clearSelection: "Limpar seleção · Esc",
+  columns: { name: "Nome", size: "Tamanho", modified: "Modificado", permissions: "Permissões" },
+  newFolderName: "Nova pasta",
+  more: "Mais",
+  menu: { open: "Abrir", copyPath: "Copiar caminho", permissions: "Permissões", edit: "Editar", editIn: "Editar em…" },
+  items: (n: number) => `${n} ${plural(n, { one: "item", other: "itens" })}`,
+  editor: { title: "Editar em", other: "Outro programa…", remember: "Lembrar", open: "Abrir" },
+  empty: "Esta pasta está vazia",
+  uploadFiles: "Enviar arquivos",
+  dropTo: (where: string) => `Enviar para ${where}`,
+  modeSet: (name: string, mode: string) => `Permissões de "${name}": ${mode}`,
+  pathCopied: (path: string) => `Copiado: ${path}`,
+  confirm: {
+    removeOne: (name: string) => `Excluir "${name}"?`,
+    removeMany: (n: number) => `Excluir ${n} ${plural(n, { one: "item", other: "itens" })}?`,
+    withContents: "As pastas são excluídas com tudo o que contêm",
+    replaceOne: (name: string) => `Substituir "${name}"?`,
+    replaceMany: (n: number) => `Substituir ${n} ${plural(n, { one: "item", other: "itens" })}?`,
+    replace: "Substituir",
+  },
+  perms: {
+    title: (name: string) => `Permissões de "${name}"`,
+    owner: "Dono",
+    group: "Grupo",
+    others: "Outros",
+    read: "Leitura",
+    write: "Escrita",
+    execute: "Execução",
+    octal: "Octal",
+  },
+  transfer: {
+    amount: (done: string, total: string) => `${done} de ${total}`,
+    uploaded: "Enviado",
+    downloaded: "Baixado",
+    removed: "Excluído",
+    cancel: "Cancelar",
+    dismiss: "Dispensar",
+  },
+  gate: {
+    passphrase: "Frase secreta da chave",
+    password: (login: string) => `Senha de ${login}`,
+    remember: "Salvar no cofre",
+  },
+};
+
+export default pt;

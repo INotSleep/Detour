@@ -331,4 +331,6 @@ export interface Settings {
   terminalTheme: string;
   /** Themes made or imported on this device. */
   customThemes: import("./themes").Theme[];
+  /** Keyboard shortcuts chosen instead of the defaults. */
+  shortcuts: import("./shortcuts").Overrides;
 }

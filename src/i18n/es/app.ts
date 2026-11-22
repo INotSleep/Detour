@@ -1,0 +1,78 @@
+// The frame of the app: navigation, tabs, quick connect, lock screen.
+import { es as plural } from "../plural";
+import type en from "../en/app";
+
+const es: typeof en = {
+  personal: "Personal",
+  section: { hosts: "Hosts", keys: "Claves", snippets: "Fragmentos", tunnels: "Túneles", proxies: "Proxies", team: "Equipo", teams: "Equipos", settings: "Ajustes" },
+  quickConnect: "Conectar",
+  newConnection: "Nueva conexión · Ctrl K",
+  newSftp: "Nueva pestaña SFTP",
+  crash: {
+    title: "Detour ha encontrado un error",
+    reload: "Recargar la ventana",
+    copy: "Copiar el error",
+    copied: "Copiado",
+    openLog: "Abrir el registro",
+  },
+  tabs: {
+    close: "Cerrar",
+    closeOthers: "Cerrar las demás",
+    closeLeft: "Cerrar pestañas a la izquierda",
+    closeRight: "Cerrar pestañas a la derecha",
+    closeAll: "Cerrar todas",
+  },
+  collapse: "Contraer menú",
+  expand: "Expandir menú",
+  sftp: "SFTP",
+  conflictWith: (name: string) => `Conflicto: ${name}`,
+  conflicts: (n: number) => `${n} ${plural(n, { one: "conflicto", other: "conflictos" })}`,
+  resolve: "Resolver",
+  conflict: "Conflicto",
+  removedFromTeam: "Te han quitado del equipo",
+  waitingToBeAdded: "Esperando a que te añadan",
+  repoUnreachable: "No se puede acceder al repositorio",
+  notSent: "No enviado",
+  createTeam: "Crear equipo",
+  joinTeam: "Unirse a un equipo",
+  updateAvailable: (version: string) => `La versión ${version} está disponible`,
+  update: "Actualizar",
+  tray: {
+    open: "Abrir Detour",
+    lock: "Bloquear",
+    quit: "Salir de Detour",
+    unlocked: "Desbloqueado",
+    locked: "Bloqueado",
+    sessions: (n: number) => `${n} ${plural(n, { one: "sesión", other: "sesiones" })}`,
+    tunnels: (n: number) => `${n} ${plural(n, { one: "túnel", other: "túneles" })}`,
+  },
+  trustTerminal: {
+    title: "Un terminal quiere usar Detour",
+    shell: (shell: string, host: string | null, pid: number) => (host ? `${shell} en ${host} (PID ${pid})` : `${shell} (PID ${pid})`),
+    allow: "Permitir",
+    deny: "Denegar",
+  },
+  palette: {
+    title: "Conexión rápida",
+    placeholder: "Host, dirección o sección",
+    pickHost: "Host para abrir al lado",
+    nothingFound: "No se encontró nada",
+    hosts: "Hosts",
+    goTo: "Ir a",
+    lock: "Bloquear",
+  },
+  lock: {
+    setupTitle: "Contraseña maestra",
+    lockedTitle: "Detour está bloqueado",
+    newPassword: "Nueva contraseña maestra",
+    password: "Contraseña maestra",
+    repeat: "Repetir",
+    minLength: (n: number) => `Al menos ${n} caracteres`,
+    mismatch: "Las contraseñas no coinciden",
+    noRecovery: "Una contraseña maestra olvidada no se puede recuperar.",
+    create: "Crear bóveda",
+    unlock: "Desbloquear",
+  },
+};
+
+export default es;

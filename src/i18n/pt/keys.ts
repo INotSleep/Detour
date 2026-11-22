@@ -1,0 +1,65 @@
+import { pt as plural } from "../plural";
+import type en from "../en/keys";
+
+const pt: typeof en = {
+  title: "Chaves",
+  import: "Importar",
+  createKey: "Criar chave",
+  empty: "Nenhuma chave",
+  more: "Mais",
+  restore: "Desfazer",
+  passphraseSaved: "Frase secreta salva",
+  withPassphrase: "Frase secreta",
+  copyPublic: "Copiar chave pública",
+  savePublic: "Salvar chave pública",
+  exportPrivate: "Exportar chave privada",
+  changePassphrase: "Alterar frase secreta",
+  setPassphrase: "Definir frase secreta",
+  publicCopied: (name: string) => `Chave pública de "${name}" copiada`,
+  saved: (where: string) => `Salvo: ${where}`,
+  removed: (name: string) => `Chave "${name}" excluída`,
+  deleteConfirm: {
+    title: (name: string) => `Excluir "${name}"?`,
+    body: (n: number) => `${n} ${plural(n, { one: "host usa", other: "hosts usam" })} esta chave e ${plural(n, { one: "deixará", other: "deixarão" })} de conectar.`,
+  },
+  passphrase: "Frase secreta",
+  savePassphrase: "Salvar frase secreta no cofre",
+  noPassphrase: "Sem frase secreta",
+  name: "Nome",
+  create: {
+    title: "Nova chave",
+    type: "Tipo",
+    created: (name: string) => `Chave "${name}" criada`,
+    copyPublic: "Copiar chave pública",
+  },
+  importDialog: {
+    title: "Importar chave",
+    fileTooBig: "O arquivo é grande demais para ser uma chave",
+    imported: (name: string) => `Chave "${name}" importada`,
+    passphraseRequired: "A chave tem frase secreta: digite-a",
+    chooseFile: "Escolher arquivo",
+    orDrop: "ou solte um arquivo aqui",
+    detected: (format: string) => `Chave ${format}`,
+    passphrasePlaceholder: "Se a chave tiver uma",
+  },
+  export: {
+    title: (name: string) => `Exportar "${name}"`,
+    saveFile: "Salvar arquivo",
+    keepsPassphrase: "O arquivo será protegido com a frase secreta atual da chave.",
+    filePassphrase: "Frase secreta do arquivo",
+  },
+  passphraseDialog: {
+    title: (name: string) => `Frase secreta de "${name}"`,
+    removed: "Frase secreta removida",
+    changed: "Frase secreta alterada",
+    wrongCurrent: "Frase secreta atual incorreta",
+    remove: "Remover frase secreta",
+    current: "Frase secreta atual",
+    next: "Nova frase secreta",
+    emptyRemoves: "Deixe vazio para remover",
+    repeat: "Confirmar",
+    mismatch: "As frases secretas não coincidem",
+  },
+};
+
+export default pt;

@@ -19,8 +19,13 @@ pub struct Ctx {
 
 /* ---------- output ---------- */
 
+/// Columns of a terminal a text takes: Chinese and Japanese characters take two.
+fn cols(s: &str) -> usize {
+    unicode_width::UnicodeWidthStr::width(s)
+}
+
 pub fn table(headers: &[&str], rows: Vec<Vec<String>>) {
-    let width = |i: usize| rows.iter().map(|r| r[i].chars().count()).chain([headers[i].chars().count()]).max().unwrap_or(0);
+    let width = |i: usize| rows.iter().map(|r| cols(&r[i])).chain([cols(headers[i])]).max().unwrap_or(0);
     let widths: Vec<usize> = (0..headers.len()).map(width).collect();
     let line = |cells: Vec<&str>| {
         let mut out = String::new();
@@ -28,7 +33,8 @@ pub fn table(headers: &[&str], rows: Vec<Vec<String>>) {
             if i + 1 == cells.len() {
                 out.push_str(c);
             } else {
-                out.push_str(&format!("{c:<w$}  ", w = widths[i]));
+                out.push_str(c);
+                out.push_str(&" ".repeat(widths[i] - cols(c) + 2));
             }
         }
         println!("{}", out.trim_end());
@@ -340,40 +346,44 @@ async fn mine_of(ctx: &Ctx) -> Res<(Value, Value)> {
     Ok((d, layout))
 }
 
-/// Groups of mine in order (with their ids), then the hosts in none of them under their shared groups.
+/// Groups of mine in order (with their ids), then my own "No group" (empty name): its hosts in my
+/// order, then hosts placed nowhere yet in the shared order. Shared groups are not mixed in.
 fn ordered_mine<'a>(d: &'a Value, layout: &Value) -> Vec<(String, Option<String>, Vec<&'a Value>)> {
     let hosts: Vec<&Value> = d["hosts"].as_array().into_iter().flatten().collect();
     let mut placed = std::collections::HashSet::new();
+    let mut take = |ids: &Value| -> Vec<&'a Value> {
+        ids.as_array().into_iter().flatten().filter_map(|id| hosts.iter().copied().find(|h| h["id"] == *id)).filter(|h| placed.insert(s(&h["id"]))).collect()
+    };
+    let groups: Vec<&Value> = layout["groups"].as_array().into_iter().flatten().collect();
     let mut out = vec![];
-    for g in layout["groups"].as_array().into_iter().flatten() {
-        let list: Vec<&Value> = g["hosts"].as_array().into_iter().flatten().filter_map(|id| hosts.iter().copied().find(|h| h["id"] == *id)).collect();
-        placed.extend(list.iter().map(|h| s(&h["id"])));
-        out.push((s(&g["name"]), Some(s(&g["id"])), list));
+    for g in groups.iter().filter(|g| !s(&g["name"]).is_empty()) {
+        out.push((s(&g["name"]), Some(s(&g["id"])), take(&g["hosts"])));
     }
+    let none = groups.iter().find(|g| s(&g["name"]).is_empty());
+    let mut list = none.map(|g| take(&g["hosts"])).unwrap_or_default();
     let mut rest = d.clone();
-    if let Some(list) = rest["hosts"].as_array_mut() {
-        list.retain(|h| !placed.contains(&s(&h["id"])));
+    if let Some(all) = rest["hosts"].as_array_mut() {
+        all.retain(|h| !placed.contains(&s(&h["id"])));
     }
-    let rest_names: Vec<(String, Vec<String>)> = ordered_groups(&rest, false).into_iter().map(|(g, h)| (g, h.iter().map(|h| s(&h["id"])).collect())).collect();
-    for (g, ids) in rest_names {
-        out.push((g, None, ids.iter().filter_map(|id| hosts.iter().copied().find(|h| s(&h["id"]) == *id)).collect()));
+    for (_, hs) in ordered_groups(&rest, false) {
+        list.extend(hs.iter().filter_map(|h| hosts.iter().copied().find(|x| x["id"] == h["id"])));
+    }
+    if !list.is_empty() {
+        out.push((String::new(), none.map(|g| s(&g["id"])), list));
     }
     out
 }
 
-/// A group of mine by name or id: its place in the layout.
+/// A group of mine by name or id: its place in the layout (never my "No group").
 fn find_mine(layout: &Value, name: &str) -> Option<usize> {
-    layout["groups"].as_array()?.iter().position(|g| s(&g["id"]) == name || s(&g["name"]).eq_ignore_ascii_case(name))
+    layout["groups"].as_array()?.iter().position(|g| !s(&g["name"]).is_empty() && (s(&g["id"]) == name || s(&g["name"]).eq_ignore_ascii_case(name)))
 }
 
-/// Shared groups shown below mine become mine, so they can be ordered among them.
-fn materialize(d: &Value, layout: &mut Value) {
-    let extra: Vec<Value> = ordered_mine(d, layout)
-        .into_iter()
-        .filter(|(g, id, _)| id.is_none() && !g.is_empty())
-        .map(|(g, _, hosts)| json!({ "id": detour_core::new_id(), "name": g, "hosts": hosts.iter().map(|h| h["id"].clone()).collect::<Vec<_>>() }))
-        .collect();
-    layout["groups"].as_array_mut().unwrap().extend(extra);
+/// My "No group" stays after my groups.
+fn none_last(layout: &mut Value) {
+    if let Some(list) = layout["groups"].as_array_mut() {
+        list.sort_by_key(|g| s(&g["name"]).is_empty());
+    }
 }
 
 async fn layout_put(ctx: &Ctx, layout: &Value) -> Res<()> {
@@ -387,16 +397,14 @@ pub async fn mine_group_add(ctx: &Ctx, name: &str) -> Res<()> {
         return fail(format!("{}: {name}", t().group_exists));
     }
     layout["groups"].as_array_mut().unwrap().push(json!({ "id": detour_core::new_id(), "name": name, "hosts": [] }));
+    none_last(&mut layout);
     layout_put(ctx, &layout).await?;
     eprintln!("{}: {name}", t().group_added);
     Ok(())
 }
 
 pub async fn mine_group_rename(ctx: &Ctx, name: &str, to: &str) -> Res<()> {
-    let (d, mut layout) = mine_of(ctx).await?;
-    if find_mine(&layout, name).is_none() {
-        materialize(&d, &mut layout);
-    }
+    let (_, mut layout) = mine_of(ctx).await?;
     let i = find_mine(&layout, name).ok_or_else(|| Fail(format!("{}: {name}", t().unknown_group)))?;
     layout["groups"][i]["name"] = json!(to);
     layout_put(ctx, &layout).await?;
@@ -414,8 +422,7 @@ pub async fn mine_group_rm(ctx: &Ctx, name: &str) -> Res<()> {
 }
 
 pub async fn mine_group_move(ctx: &Ctx, name: &str, before: Option<&str>) -> Res<()> {
-    let (d, mut layout) = mine_of(ctx).await?;
-    materialize(&d, &mut layout);
+    let (_, mut layout) = mine_of(ctx).await?;
     let i = find_mine(&layout, name).ok_or_else(|| Fail(format!("{}: {name}", t().unknown_group)))?;
     let moving = layout["groups"].as_array_mut().unwrap().remove(i);
     let at = match before {
@@ -423,13 +430,14 @@ pub async fn mine_group_move(ctx: &Ctx, name: &str, before: Option<&str>) -> Res
         None => layout["groups"].as_array().unwrap().len(),
     };
     layout["groups"].as_array_mut().unwrap().insert(at, moving.clone());
+    none_last(&mut layout);
     layout_put(ctx, &layout).await?;
     eprintln!("{}: {}", t().group_saved, s(&moving["name"]));
     Ok(())
 }
 
-/// Moves a host into a group of mine (a new one if there is none of that name; `none`: out of
-/// mine, under its shared group), before another host or last.
+/// Moves a host into a group of mine (a new one if there is none of that name; `none`: into my
+/// "No group"), before another host or last.
 pub async fn mine_host_move(ctx: &Ctx, name: &str, group: Option<&str>, before: Option<&str>) -> Res<()> {
     let (d, mut layout) = mine_of(ctx).await?;
     let host = find(&d["hosts"], name, "label", t().unknown_host)?.clone();
@@ -438,30 +446,44 @@ pub async fn mine_host_move(ctx: &Ctx, name: &str, group: Option<&str>, before: 
     let shown = ordered_mine(&d, &layout);
     let current = shown.iter().find(|(_, _, hosts)| hosts.iter().any(|h| h["id"] == id)).map(|(g, _, _)| g.clone()).unwrap_or_default();
     let target = match group {
-        Some(g) if g.is_empty() || g.eq_ignore_ascii_case("none") => None,
-        Some(g) => Some(g.to_string()),
-        None => Some(current).filter(|g| !g.is_empty()),
+        Some(g) if g.is_empty() || g.eq_ignore_ascii_case("none") => String::new(),
+        Some(g) => g.to_string(),
+        None => current,
     };
-    for g in layout["groups"].as_array_mut().unwrap() {
+    // My "No group" keeps the whole section in the order shown, so the host lands where asked.
+    let none_shown: Vec<Value> = shown.iter().find(|(g, _, _)| g.is_empty()).map(|(_, _, hs)| hs.iter().map(|h| h["id"].clone()).collect()).unwrap_or_default();
+    let groups = layout["groups"].as_array_mut().unwrap();
+    for g in groups.iter_mut() {
         if let Some(list) = g["hosts"].as_array_mut() {
             list.retain(|h| *h != id);
         }
     }
-    if let Some(target) = target {
-        let i = match find_mine(&layout, &target) {
+    let i = if target.is_empty() {
+        let shown: Vec<Value> = none_shown.into_iter().filter(|h| *h != id).collect();
+        match groups.iter().position(|g| s(&g["name"]).is_empty()) {
+            Some(i) => {
+                groups[i]["hosts"] = json!(shown);
+                i
+            }
+            None => {
+                groups.push(json!({ "id": detour_core::new_id(), "name": "", "hosts": shown }));
+                groups.len() - 1
+            }
+        }
+    } else {
+        match find_mine(&layout, &target) {
             Some(i) => i,
             None => {
-                // A shared group shown below becomes mine with its hosts; else a new group.
-                let hosts: Vec<Value> = shown.iter().find(|(g, gid, _)| gid.is_none() && g.eq_ignore_ascii_case(&target)).map(|(_, _, hs)| hs.iter().map(|h| h["id"].clone()).filter(|h| *h != id).collect()).unwrap_or_default();
-                let name = shown.iter().find(|(g, _, _)| g.eq_ignore_ascii_case(&target)).map(|(g, _, _)| g.clone()).unwrap_or(target);
-                layout["groups"].as_array_mut().unwrap().push(json!({ "id": detour_core::new_id(), "name": name, "hosts": hosts }));
-                layout["groups"].as_array().unwrap().len() - 1
+                let groups = layout["groups"].as_array_mut().unwrap();
+                groups.push(json!({ "id": detour_core::new_id(), "name": target, "hosts": [] }));
+                groups.len() - 1
             }
-        };
-        let list = layout["groups"][i]["hosts"].as_array_mut().unwrap();
-        let at = before_id.and_then(|b| list.iter().position(|h| *h == b)).unwrap_or(list.len());
-        list.insert(at, id);
-    }
+        }
+    };
+    let list = layout["groups"][i]["hosts"].as_array_mut().unwrap();
+    let at = before_id.and_then(|b| list.iter().position(|h| *h == b)).unwrap_or(list.len());
+    list.insert(at, id);
+    none_last(&mut layout);
     layout_put(ctx, &layout).await?;
     eprintln!("{}: {name}", t().host_saved);
     Ok(())
@@ -832,6 +854,38 @@ pub async fn host_import(ctx: &Ctx, aliases: Vec<String>, known_hosts: bool) -> 
         return Ok(());
     }
     eprintln!("{}: {} hosts, {} keys, {} known hosts", t().imported, s(&r["hosts"]), s(&r["keys"]), s(&r["known"]));
+    Ok(())
+}
+
+/// Hosts of another SSH client (`hosts import --from putty`): all new ones, or those named.
+pub async fn host_import_foreign(ctx: &Ctx, from: &str, file: Option<std::path::PathBuf>, names: Vec<String>) -> Res<()> {
+    let path = file.map(|f| std::path::absolute(&f).unwrap_or(f).display().to_string());
+    // Termius gives a CSV or an SSH config; the file's name says which.
+    let client = match from {
+        "termius" if path.as_deref().is_some_and(|p| p.to_lowercase().ends_with(".csv") || p.to_lowercase().ends_with(".txt")) => "csv",
+        "termius" | "ssh-config" => "sshConfig",
+        other => other,
+    };
+    let found = ctx.c.call("foreign_preview", json!({ "client": client, "path": path })).await?;
+    let hosts: Vec<&Value> = found["hosts"].as_array().into_iter().flatten().collect();
+    let pick: Vec<String> = if names.is_empty() {
+        hosts.iter().filter(|h| h["exists"] == false).map(|h| s(&h["key"])).collect()
+    } else {
+        names
+            .iter()
+            .map(|n| hosts.iter().find(|h| s(&h["label"]) == *n || s(&h["key"]) == *n).map(|h| s(&h["key"])).ok_or_else(|| Fail(format!("{}: {n}", t().unknown_host))))
+            .collect::<Res<_>>()?
+    };
+    if pick.is_empty() {
+        eprintln!("{}", t().nothing_to_import);
+        return Ok(());
+    }
+    let r = ctx.c.call("foreign_import", json!({ "client": client, "path": path, "keys": pick })).await?;
+    if ctx.json {
+        print_json(&r);
+        return Ok(());
+    }
+    eprintln!("{}: {} hosts, {} keys, {} tunnels", t().imported, s(&r["hosts"]), s(&r["keys"]), s(&r["tunnels"]));
     Ok(())
 }
 
@@ -1460,6 +1514,195 @@ pub async fn team_leave(ctx: &Ctx) -> Res<()> {
     Ok(())
 }
 
+/* ---------- a team's history and going back ---------- */
+
+fn coll_word(coll: &Value) -> &'static str {
+    let i = ["host", "key", "snippet", "tunnel", "proxy", "group"].iter().position(|c| coll.as_str() == Some(c));
+    i.map_or("", |i| t().colls[i])
+}
+
+/// One change of a log entry, in a line.
+fn change_line(c: &Value) -> String {
+    let what = format!("{} {}", coll_word(&c["coll"]), s(&c["name"])).trim().to_string();
+    let fields: Vec<String> = c["fields"].as_object().into_iter().flatten().map(|(k, v)| if v.is_string() || v.is_number() { format!("{k}={}", s(v)) } else { k.clone() }).chain(c["secrets"].as_array().into_iter().flatten().map(s)).collect();
+    match c["kind"].as_str().unwrap_or("") {
+        "created" => format!("+ {what}"),
+        "deleted" => format!("- {what}"),
+        "restored" => format!("+ {what} {}", t().restored_mark),
+        "changed" => format!("~ {what}: {}", fields.join(", ")),
+        "access" => format!("{what}: {} -> {}", s(&c["member"]), s(&c["level"])),
+        "teamCreated" => format!("{}: {}", t().log_team_created, s(&c["name"])),
+        "teamRenamed" => format!("{}: {}", t().team_renamed, s(&c["name"])),
+        "memberAdded" => format!("{}: {}", t().member_added, s(&c["name"])),
+        "memberChanged" => format!("{}: {}", t().member_changed, s(&c["name"])),
+        "memberRemoved" => format!("{}: {}", t().member_removed, s(&c["name"])),
+        other => other.to_string(),
+    }
+}
+
+fn print_log(entries: &[Value]) {
+    if entries.is_empty() {
+        eprintln!("{}", t().log_empty);
+        return;
+    }
+    let rows = entries
+        .iter()
+        .flat_map(|e| {
+            let device = if e["thisDevice"] == true { t().this_device.to_string() } else { s(&e["device"]).chars().take(8).collect() };
+            let who = if e["isYou"] == true { t().you.trim_matches(|c| c == '(' || c == ')').to_string() } else { s(&e["authorName"]) };
+            let entry: String = s(&e["entry"]).chars().take(12).collect();
+            e["changes"].as_array().into_iter().flatten().enumerate().map(move |(i, c)| if i == 0 { vec![when(&e["at"]), who.clone(), device.clone(), entry.clone(), change_line(c)] } else { vec![String::new(), String::new(), String::new(), String::new(), change_line(c)] })
+        })
+        .collect();
+    table(&t().headers_log, rows);
+}
+
+async fn team_log_entries(ctx: &Ctx) -> Res<Vec<Value>> {
+    Ok(ctx.c.call("team_log", json!({ "id": ctx.vault })).await?.as_array().cloned().unwrap_or_default())
+}
+
+pub async fn team_log(ctx: &Ctx, limit: Option<usize>) -> Res<()> {
+    let mut entries = team_log_entries(ctx).await?;
+    if let Some(n) = limit {
+        entries = entries.split_off(entries.len().saturating_sub(n));
+    }
+    if ctx.json {
+        print_json(&Value::Array(entries));
+    } else {
+        print_log(&entries);
+    }
+    Ok(())
+}
+
+/// A record of the team by its name: those shown now, then the deleted ones.
+async fn record_id(ctx: &Ctx, name: &str) -> Res<String> {
+    let d = data(ctx).await?;
+    let shown = ["hosts", "keys", "snippets", "tunnels", "proxies"].iter().find_map(|coll| find(&d[*coll], name, if *coll == "hosts" { "label" } else { "name" }, "").ok().map(|r| s(&r["id"])));
+    if let Some(id) = shown {
+        return Ok(id);
+    }
+    let deleted = ctx.c.call("team_deleted", json!({ "id": ctx.vault })).await?;
+    Ok(s(&find(&deleted, name, "name", t().unknown_host)?["record"]))
+}
+
+pub async fn team_history(ctx: &Ctx, name: &str) -> Res<()> {
+    let record = record_id(ctx, name).await?;
+    let entries = ctx.c.call("team_history", json!({ "id": ctx.vault, "record": record })).await?;
+    if ctx.json {
+        print_json(&entries);
+    } else {
+        print_log(entries.as_array().map(Vec::as_slice).unwrap_or_default());
+    }
+    Ok(())
+}
+
+pub async fn team_deleted(ctx: &Ctx) -> Res<()> {
+    let list = ctx.c.call("team_deleted", json!({ "id": ctx.vault })).await?;
+    if ctx.json {
+        print_json(&list);
+        return Ok(());
+    }
+    let rows: Vec<Vec<String>> = list.as_array().into_iter().flatten().map(|d| vec![s(&d["name"]), coll_word(&d["coll"]).to_string(), s(&d["authorName"]), when(&d["at"])]).collect();
+    if rows.is_empty() {
+        eprintln!("{}", t().no_deleted);
+    } else {
+        table(&t().headers_deleted, rows);
+    }
+    Ok(())
+}
+
+/// What `teams revert` was asked to go back to.
+pub struct RevertTo {
+    pub undo: Option<String>,
+    pub after: Option<String>,
+    pub device: Option<String>,
+    pub member: Option<String>,
+    pub since: Option<String>,
+    pub record: Option<String>,
+    pub entry: Option<String>,
+    pub restore: Option<String>,
+}
+
+/// A log entry by the start of its id.
+fn entry_by<'a>(log: &'a [Value], prefix: &str) -> Res<&'a Value> {
+    let found: Vec<&Value> = log.iter().filter(|e| s(&e["entry"]).starts_with(prefix)).collect();
+    match found.as_slice() {
+        [one] => Ok(one),
+        [] => fail(t().unknown_entry),
+        _ => fail(t().which_entry),
+    }
+}
+
+fn plan_line(i: &Value) -> String {
+    let what = format!("{} {}", coll_word(&i["coll"]), s(&i["name"]));
+    let line = match i["action"].as_str().unwrap_or("") {
+        "restore" => format!("+ {what} {}", t().restored_mark),
+        "remove" => format!("- {what}"),
+        _ => {
+            let fields: Vec<String> = i["fields"].as_array().into_iter().flatten().map(|f| if f["secret"] == true { s(&f["field"]) } else { format!("{} {} -> {}", s(&f["field"]), s(&f["from"]), s(&f["to"])) }).collect();
+            format!("~ {what}: {}", fields.join(", "))
+        }
+    };
+    if i["allowed"] == true { line } else { format!("{line} {}", t().no_edit_access) }
+}
+
+pub async fn team_revert(ctx: &Ctx, to: RevertTo, yes: bool) -> Res<()> {
+    let log = team_log_entries(ctx).await?;
+    let at = |prefix: &str| -> Res<u64> { Ok(entry_by(&log, prefix)?["at"].as_u64().unwrap_or(0)) };
+    let target = if let Some(e) = &to.undo {
+        json!({ "kind": "undo", "entry": s(&entry_by(&log, e)?["entry"]) })
+    } else if let Some(e) = &to.after {
+        json!({ "kind": "at", "at": at(e)? })
+    } else if to.device.is_some() || to.member.is_some() {
+        let after = match &to.since { Some(e) => at(e)?, None => 0 };
+        let device = match &to.device {
+            Some(d) => Some(log.iter().map(|e| s(&e["device"])).find(|x| x.starts_with(d.as_str())).ok_or_else(|| Fail(t().unknown_entry.into()))?),
+            None => None,
+        };
+        let author = match &to.member {
+            Some(m) => Some(member_id(ctx, m).await?),
+            None => None,
+        };
+        json!({ "kind": "without", "device": device, "author": author, "after": after })
+    } else if let Some(name) = &to.record {
+        let Some(e) = &to.entry else { return fail(t().record_needs_entry) };
+        json!({ "kind": "record", "record": record_id(ctx, name).await?, "entry": s(&entry_by(&log, e)?["entry"]) })
+    } else if let Some(name) = &to.restore {
+        json!({ "kind": "restore", "record": record_id(ctx, name).await? })
+    } else {
+        return fail(t().revert_needs);
+    };
+
+    let plan = ctx.c.call("team_rollback_plan", json!({ "id": ctx.vault, "to": target })).await?;
+    let items = plan["items"].as_array().cloned().unwrap_or_default();
+    if items.is_empty() {
+        eprintln!("{}", t().nothing_to_revert);
+        return Ok(());
+    }
+    if !ctx.json || !yes {
+        for i in &items {
+            eprintln!("{}", plan_line(i));
+        }
+    }
+    if !yes && !confirm(t().revert_question) {
+        return Ok(());
+    }
+    let r = ctx.c.call("team_rollback", json!({ "id": ctx.vault, "to": target })).await?;
+    let done = &r["done"];
+    if ctx.json {
+        print_json(done);
+        return Ok(());
+    }
+    eprintln!("{}: {}", t().reverted, s(&done["applied"]));
+    if done["skipped"].as_u64().unwrap_or(0) > 0 {
+        eprintln!("{}: {}", s(&done["skipped"]), t().skipped);
+    }
+    if let Some(e) = done["entry"].as_str() {
+        eprintln!("{}: detour --team {} teams revert --undo {}", t().undo_with, ctx.vault, e.chars().take(12).collect::<String>());
+    }
+    Ok(())
+}
+
 pub async fn my_id(c: &Client, json_out: bool) -> Res<()> {
     let id = c.call("my_id", json!({})).await?;
     if json_out {
@@ -1469,4 +1712,23 @@ pub async fn my_id(c: &Client, json_out: bool) -> Res<()> {
     println!("{}", s(&id["detourId"]));
     eprintln!("{}", s(&id["fingerprint"]));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mine_lists_only_my_groups_then_my_no_group() {
+        let h = |id: &str, group: &str| json!({ "id": id, "label": id, "group": group });
+        let d = json!({ "hosts": [h("a", "Web"), h("b", "Web"), h("c", ""), h("d", "Db"), h("new", "")], "groups": [] });
+        // "a" is in a group of mine; my "No group" has its own order with "d" first; "new" came since.
+        let layout = json!({ "groups": [{ "id": "n", "name": "", "hosts": ["d", "c"] }, { "id": "m1", "name": "Mine", "hosts": ["a"] }] });
+        let shown: Vec<(String, Vec<String>)> = ordered_mine(&d, &layout).into_iter().map(|(g, _, hs)| (g, hs.iter().map(|h| s(&h["id"])).collect())).collect();
+        assert_eq!(shown, vec![("Mine".to_string(), vec!["a".to_string()]), (String::new(), vec!["d".into(), "c".into(), "b".into(), "new".into()])]);
+        assert_eq!(find_mine(&layout, ""), None);
+        let mut l = layout.clone();
+        none_last(&mut l);
+        assert_eq!(s(&l["groups"][1]["name"]), "");
+    }
 }

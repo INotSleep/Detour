@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AppWindow, ArrowUp, ChevronDown, ChevronUp, Copy, CornerDownLeft, ExternalLink, File, FilePen, Folder, FolderOpen, FolderPlus, House, Link2, Loader2, Monitor, RotateCw, Search, Upload } from "lucide-react";
+import { AppWindow, ArrowUp, ChevronDown, ChevronUp, Copy, CornerDownLeft, ExternalLink, File, FilePen, Folder, FolderOpen, FolderPlus, House, Link2, Loader2, Monitor, RotateCw, PanelLeftClose, Search, Trash2, Upload, X } from "lucide-react";
 import { api, errorText, type Editor, type FileEntry, type LocalFile } from "../lib/api";
 import { EditorChooser, openIn } from "./Editors";
-import { copyText, shortcutKey, useStore } from "../lib/store";
+import { hit, keysOf } from "../lib/shortcuts";
+import { copyText, useStore } from "../lib/store";
 import { tr, useT } from "../i18n";
 import { Button, ContextMenu, IconButton, type MenuItem } from "./ui";
 import { HostIcon } from "./common";
-import { NameInput, RowActions, formatBytes, formatModified, sortEntries, WindowedRows, revealRow, type SortBy, type StartDrag } from "./FilesView";
+import { NameInput, RowActions, RowLead, formatBytes, formatModified, sortEntries, WindowedRows, revealRow, type SortBy, type StartDrag } from "./FilesView";
 
 /* ---------- paths on this computer: C:\Users\me on Windows, /home/me elsewhere ---------- */
 
@@ -38,7 +39,7 @@ export const lastPart = (dir: string) => dir.replace(/[\\/]+$/, "").split(/[\\/]
  * This computer's side of a file browser: browse, make folders, and send what
  * is picked to the server's folder (`target`, null while there is none).
  */
-export function LocalPane({ dir, onDir, refreshKey, target, onUpload, onDragRows }: { dir: string | null; onDir: (d: string) => void; refreshKey: number; target: string | null; onUpload: (items: LocalFile[]) => void; onDragRows: StartDrag }) {
+export function LocalPane({ dir, onDir, refreshKey, target, onUpload, onDragRows, onHide }: { dir: string | null; onDir: (d: string) => void; refreshKey: number; target: string | null; onUpload: (items: LocalFile[]) => void; onDragRows: StartDrag; onHide?: () => void }) {
   const t = useT();
   const { toast, settings } = useStore();
   const [entries, setEntries] = useState<FileEntry[] | null>(null);
@@ -137,7 +138,8 @@ export function LocalPane({ dir, onDir, refreshKey, target, onUpload, onDragRows
   const rowMenu = (e: FileEntry): MenuItem[] => {
     const many = picked.length > 1 && sel.includes(e.name);
     const send = target && here ? [{ label: t.files.local.uploadTo(target), icon: Upload, onSelect: () => upload(many ? picked : [e]) }] : [];
-    if (many) return send;
+    const remove = here ? [{ label: t.files.local.trash, icon: Trash2, danger: true, hint: keysOf("removeFile"), onSelect: () => void trash(many ? picked : [e]) }] : [];
+    if (many) return [...send, ...remove];
     const isDir = e.kind === "dir" || !here;
     return [
       { label: t.files.menu.open, icon: isDir ? FolderOpen : ExternalLink, onSelect: () => (isDir ? void go(localJoin(here, e.name)) : void openWith(e, null)) },
@@ -145,7 +147,23 @@ export function LocalPane({ dir, onDir, refreshKey, target, onUpload, onDragRows
       ...(!isDir ? [{ label: t.files.menu.editIn, icon: AppWindow, onSelect: () => setChoosing(e) }] : []),
       ...send,
       ...(here ? [{ label: t.files.menu.copyPath, icon: Copy, onSelect: () => void copyPath(e) }] : []),
+      ...remove,
     ];
+  };
+
+  /** To the system's trash: it can come back from there, so nothing asks first. */
+  const trash = async (items: FileEntry[]) => {
+    if (!here || items.length === 0) return;
+    try {
+      await api.localTrash(items.map((e) => localJoin(here, e.name)));
+      toast({ text: t.files.local.trashed(items.length === 1 ? items[0]!.name : t.files.items(items.length)), tone: "success" });
+      const names = sorted?.map((e) => e.name) ?? [];
+      // The cursor moves to what was below the last one removed.
+      const next = names.slice(names.indexOf(items[items.length - 1]!.name) + 1).find((n) => !items.some((e) => e.name === n));
+      void go(here, next ?? null);
+    } catch (e) {
+      toast({ text: errorText(e), tone: "error" });
+    }
   };
 
   const mkdir = async (name: string) => {
@@ -175,24 +193,30 @@ export function LocalPane({ dir, onDir, refreshKey, target, onUpload, onDragRows
       else selectOnly(e.name);
       revealRow(listRef.current, sorted.indexOf(e));
     };
-    const ctrl = ev.ctrlKey || ev.metaKey;
     if (ev.key === "ArrowDown") move(i + 1);
     else if (ev.key === "ArrowUp") move(i - 1);
     else if (ev.key === "Home") move(0);
     else if (ev.key === "End") move(sorted.length - 1);
     else if (ev.key === "Enter" && cur) picked.length > 1 ? upload(picked) : enter(cur);
-    else if (ev.key === "Backspace") up();
+    else if (hit(ev, "parentDir")) up();
+    else if (hit(ev, "removeFile") && picked.length) void trash(picked);
     else if (ev.key === "Escape" && sel.length > 1) selectOnly(cursor);
-    else if (ev.key === "F5") {
+    else if (hit(ev, "refresh")) {
       ev.preventDefault();
       void go(here, cursor);
-    } else if (ctrl && shortcutKey(ev) === "a") {
+    } else if (hit(ev, "selectAll")) {
       ev.preventDefault();
       setSel(sorted.map((e) => e.name));
-    } else if (ctrl && shortcutKey(ev) === "l") {
+    } else if (hit(ev, "editPath")) {
       ev.preventDefault();
       setEditingPath(here);
     }
+  };
+
+  const toggleRow = (name: string) => {
+    setSel((s) => (s.includes(name) ? s.filter((n) => n !== name) : [...s, name]));
+    setCursor(name);
+    anchor.current = name;
   };
 
   const clickRow = (ev: React.MouseEvent, name: string) => {
@@ -208,8 +232,8 @@ export function LocalPane({ dir, onDir, refreshKey, target, onUpload, onDragRows
 
   // As on the server's side: rows are made again only when what they show changes;
   // their handlers reach the latest state through `live`.
-  const live = useRef({ clickRow, enter, onDragRows, upload, selectOnly, setMenuAt, picked });
-  live.current = { clickRow, enter, onDragRows, upload, selectOnly, setMenuAt, picked };
+  const live = useRef({ clickRow, toggleRow, enter, onDragRows, upload, selectOnly, setMenuAt, picked });
+  live.current = { clickRow, toggleRow, enter, onDragRows, upload, selectOnly, setMenuAt, picked };
   const renderRow = useCallback(
     (e: FileEntry) => {
       const Icon = e.kind === "dir" ? Folder : e.kind === "link" ? Link2 : File;
@@ -234,7 +258,7 @@ export function LocalPane({ dir, onDir, refreshKey, target, onUpload, onDragRows
             live.current.setMenuAt({ x: ev.clientX, y: ev.clientY, entry: e });
           }}
         >
-          <Icon size={15} className={`files-icon ${e.kind}`} />
+          {here ? <RowLead icon={Icon} kind={e.kind} checked={isSel} onToggle={() => live.current.toggleRow(e.name)} /> : <Icon size={15} className={`files-icon ${e.kind}`} />}
           <span className="files-name">{e.name}</span>
           <span className="files-size">{e.kind === "dir" ? "" : formatBytes(e.size)}</span>
           <span className="files-date">{formatModified(e.modified)}</span>
@@ -284,12 +308,23 @@ export function LocalPane({ dir, onDir, refreshKey, target, onUpload, onDragRows
         <Button size="sm" variant="primary" icon={Upload} disabled={!canUpload} title={target ? t.files.local.uploadTo(target) : undefined} onClick={() => upload(picked)}>
           {t.files.local.upload}
         </Button>
+        {onHide && <IconButton icon={PanelLeftClose} label={t.files.local.hide} onClick={onHide} />}
       </div>
+
+      {picked.length > 1 && (
+        <div className="files-selbar">
+          <span>{t.files.selected(picked.length)}</span>
+          {canUpload && <Button size="sm" icon={Upload} onClick={() => upload(picked)}>{t.files.local.upload}</Button>}
+          <Button size="sm" variant="ghost" icon={Trash2} className="danger-text" onClick={() => void trash(picked)}>{t.files.local.trash}</Button>
+          <span className="grow" />
+          <IconButton icon={X} label={t.files.clearSelection} onClick={() => selectOnly(cursor)} />
+        </div>
+      )}
 
       {error && !sorted ? (
         <div className="files-center"><span className="err-text">{error}</span></div>
       ) : (
-        <div className="files-list" ref={listRef} tabIndex={0} onKeyDown={onKey} role="grid" aria-label={here || t.files.local.drives} aria-multiselectable>
+        <div className={`files-list ${picked.length > 1 ? "multi" : ""}`} ref={listRef} tabIndex={0} onKeyDown={onKey} role="grid" aria-label={here || t.files.local.drives} aria-multiselectable>
           <div className="files-row local files-head" role="row">
             <span />
             <button className="files-sort" onClick={() => toggleSort("name")}>{t.files.columns.name} <SortMark by="name" /></button>

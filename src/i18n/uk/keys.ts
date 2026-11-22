@@ -1,0 +1,65 @@
+import { uk as plural } from "../plural";
+import type en from "../en/keys";
+
+const uk: typeof en = {
+  title: "Ключі",
+  import: "Імпортувати",
+  createKey: "Створити ключ",
+  empty: "Немає ключів",
+  more: "Ще",
+  restore: "Повернути",
+  passphraseSaved: "пароль збережено",
+  withPassphrase: "з паролем",
+  copyPublic: "Копіювати публічний ключ",
+  savePublic: "Зберегти публічний ключ",
+  exportPrivate: "Експортувати приватний ключ",
+  changePassphrase: "Змінити пароль ключа",
+  setPassphrase: "Задати пароль ключа",
+  publicCopied: (name: string) => `Публічний ключ «${name}» скопійовано`,
+  saved: (where: string) => `Збережено: ${where}`,
+  removed: (name: string) => `Ключ «${name}» видалено`,
+  deleteConfirm: {
+    title: (name: string) => `Видалити «${name}»?`,
+    body: (n: number) => `Ключ використовується в ${n} ${plural(n, { one: "хості", few: "хостах", many: "хостах" })}, вони перестануть підключатися.`,
+  },
+  passphrase: "Пароль ключа",
+  savePassphrase: "Зберегти пароль у сховищі",
+  noPassphrase: "Без пароля",
+  name: "Назва",
+  create: {
+    title: "Новий ключ",
+    type: "Тип",
+    created: (name: string) => `Ключ «${name}» створено`,
+    copyPublic: "Копіювати публічний",
+  },
+  importDialog: {
+    title: "Імпорт ключа",
+    fileTooBig: "Файл завеликий для ключа",
+    imported: (name: string) => `Ключ «${name}» імпортовано`,
+    passphraseRequired: "Ключ захищено паролем, введіть його",
+    chooseFile: "Вибрати файл",
+    orDrop: "або перетягніть файл сюди",
+    detected: (format: string) => `Ключ ${format}`,
+    passphrasePlaceholder: "Якщо ключ захищено паролем",
+  },
+  export: {
+    title: (name: string) => `Експорт «${name}»`,
+    saveFile: "Зберегти файл",
+    keepsPassphrase: "Файл буде захищено поточним паролем ключа.",
+    filePassphrase: "Пароль для файлу",
+  },
+  passphraseDialog: {
+    title: (name: string) => `Пароль ключа «${name}»`,
+    removed: "Пароль ключа знято",
+    changed: "Пароль ключа змінено",
+    wrongCurrent: "Неправильний поточний пароль",
+    remove: "Зняти пароль",
+    current: "Поточний пароль",
+    next: "Новий пароль",
+    emptyRemoves: "Порожнє: зняти пароль",
+    repeat: "Ще раз",
+    mismatch: "Паролі не збігаються",
+  },
+};
+
+export default uk;

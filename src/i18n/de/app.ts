@@ -1,0 +1,78 @@
+// The frame of the app: navigation, tabs, quick connect, lock screen.
+import { de as plural } from "../plural";
+import type en from "../en/app";
+
+const de: typeof en = {
+  personal: "Persönlich",
+  section: { hosts: "Hosts", keys: "Schlüssel", snippets: "Snippets", tunnels: "Tunnel", proxies: "Proxys", team: "Team", teams: "Teams", settings: "Einstellungen" },
+  quickConnect: "Verbinden",
+  newConnection: "Neue Verbindung · Ctrl K",
+  newSftp: "Neuer SFTP-Tab",
+  crash: {
+    title: "In Detour ist ein Fehler aufgetreten",
+    reload: "Fenster neu laden",
+    copy: "Fehler kopieren",
+    copied: "Kopiert",
+    openLog: "Protokoll öffnen",
+  },
+  tabs: {
+    close: "Schließen",
+    closeOthers: "Andere schließen",
+    closeLeft: "Tabs links schließen",
+    closeRight: "Tabs rechts schließen",
+    closeAll: "Alle schließen",
+  },
+  collapse: "Menü einklappen",
+  expand: "Menü ausklappen",
+  sftp: "SFTP",
+  conflictWith: (name: string) => `Konflikt: ${name}`,
+  conflicts: (n: number) => `${n} ${plural(n, { one: "Konflikt", other: "Konflikte" })}`,
+  resolve: "Lösen",
+  conflict: "Konflikt",
+  removedFromTeam: "Du wurdest entfernt",
+  waitingToBeAdded: "Wartet auf Aufnahme",
+  repoUnreachable: "Repository nicht erreichbar",
+  notSent: "Nicht gesendet",
+  createTeam: "Team erstellen",
+  joinTeam: "Team beitreten",
+  updateAvailable: (version: string) => `Version ${version} ist verfügbar`,
+  update: "Aktualisieren",
+  tray: {
+    open: "Detour öffnen",
+    lock: "Sperren",
+    quit: "Detour beenden",
+    unlocked: "Entsperrt",
+    locked: "Gesperrt",
+    sessions: (n: number) => `${n} ${plural(n, { one: "Sitzung", other: "Sitzungen" })}`,
+    tunnels: (n: number) => `${n} Tunnel`,
+  },
+  trustTerminal: {
+    title: "Ein Terminal möchte Detour nutzen",
+    shell: (shell: string, host: string | null, pid: number) => (host ? `${shell} in ${host} (PID ${pid})` : `${shell} (PID ${pid})`),
+    allow: "Erlauben",
+    deny: "Ablehnen",
+  },
+  palette: {
+    title: "Schnellverbindung",
+    placeholder: "Host, Adresse oder Bereich",
+    pickHost: "Host daneben öffnen",
+    nothingFound: "Nichts gefunden",
+    hosts: "Hosts",
+    goTo: "Gehe zu",
+    lock: "Sperren",
+  },
+  lock: {
+    setupTitle: "Master-Passwort",
+    lockedTitle: "Detour ist gesperrt",
+    newPassword: "Neues Master-Passwort",
+    password: "Master-Passwort",
+    repeat: "Wiederholen",
+    minLength: (n: number) => `Mindestens ${n} Zeichen`,
+    mismatch: "Passwörter stimmen nicht überein",
+    noRecovery: "Ein vergessenes Master-Passwort lässt sich nicht wiederherstellen.",
+    create: "Tresor erstellen",
+    unlock: "Entsperren",
+  },
+};
+
+export default de;

@@ -1,0 +1,77 @@
+// The SFTP file browser. Host key questions come from `terminal.hostKey`.
+import { uk as plural } from "../plural";
+import type en from "../en/files";
+
+const uk: typeof en = {
+  units: ["Б", "КБ", "МБ", "ГБ", "ТБ"],
+  perSecond: "/с",
+  bar: {
+    up: "Угору · Backspace",
+    home: "Домашня папка",
+    refresh: "Оновити · F5",
+    terminalHere: "Термінал у цій папці",
+    newFolder: "Папка",
+    uploadFolder: "Вивантажити папку",
+    upload: "Вивантажити",
+  },
+  selected: (n: number) => `Вибрано: ${n}`,
+  select: "Вибрати",
+  download: "Завантажити",
+  downloadTo: (dir: string) => `Завантажити в ${dir}`,
+  local: {
+    title: "Цей комп'ютер",
+    drives: "Цей комп'ютер",
+    upload: "Вивантажити",
+    uploadTo: (dir: string) => `Вивантажити в ${dir}`,
+    trash: "У кошик",
+    trashed: (what: string) => `У кошику: ${what}`,
+    hide: "Сховати цей комп'ютер",
+    show: "Показати цей комп'ютер",
+  },
+  pick: { title: "Підключитися до хоста", search: "Хост або адреса", nothingFound: "Нічого не знайдено", noHosts: "Хостів поки немає" },
+  clearSelection: "Зняти виділення · Esc",
+  columns: { name: "Назва", size: "Розмір", modified: "Змінено", permissions: "Права" },
+  newFolderName: "Нова папка",
+  more: "Ще",
+  menu: { open: "Відкрити", copyPath: "Копіювати шлях", permissions: "Права доступу", edit: "Змінити", editIn: "Змінити в…" },
+  items: (n: number) => `${n} ${plural(n, { one: "елемент", few: "елементи", many: "елементів" })}`,
+  editor: { title: "Змінити в", other: "Інша програма…", remember: "Запам'ятати", open: "Відкрити" },
+  empty: "Папка порожня",
+  uploadFiles: "Вивантажити файли",
+  dropTo: (where: string) => `Вивантажити в ${where}`,
+  modeSet: (name: string, mode: string) => `Права «${name}»: ${mode}`,
+  pathCopied: (path: string) => `Скопійовано: ${path}`,
+  confirm: {
+    removeOne: (name: string) => `Видалити «${name}»?`,
+    removeMany: (n: number) => `Видалити ${n} ${plural(n, { one: "елемент", few: "елементи", many: "елементів" })}?`,
+    withContents: "Папки видаляються разом з усім вмістом",
+    replaceOne: (name: string) => `Замінити «${name}»?`,
+    replaceMany: (n: number) => `Замінити ${n} ${plural(n, { one: "елемент", few: "елементи", many: "елементів" })}?`,
+    replace: "Замінити",
+  },
+  perms: {
+    title: (name: string) => `Права «${name}»`,
+    owner: "Власник",
+    group: "Група",
+    others: "Інші",
+    read: "Читання",
+    write: "Запис",
+    execute: "Виконання",
+    octal: "Числом",
+  },
+  transfer: {
+    amount: (done: string, total: string) => `${done} з ${total}`,
+    uploaded: "Вивантажено",
+    downloaded: "Завантажено",
+    removed: "Видалено",
+    cancel: "Скасувати",
+    dismiss: "Прибрати",
+  },
+  gate: {
+    passphrase: "Пароль ключа",
+    password: (login: string) => `Пароль для ${login}`,
+    remember: "Зберегти у сховищі",
+  },
+};
+
+export default uk;

@@ -37,6 +37,8 @@ const BUFFER: usize = 256 * 1024;
 const IDLE: Duration = Duration::from_secs(120);
 /// How long the first handshake may take before connections through it fail.
 const HANDSHAKE: Duration = Duration::from_secs(10);
+/// A session whose last handshake is older than this is no longer trusted to work (WireGuard's REJECT_AFTER_TIME).
+const FRESH: Duration = Duration::from_secs(180);
 const MTU: usize = 1420;
 /// Room for a WireGuard packet around the largest IP packet.
 const PACKET: usize = 65536 + 64;
@@ -332,6 +334,10 @@ struct Pump {
     local: Vec<PendingLocal>,
     handshake_waiting: Vec<oneshot::Sender<Result<()>>>,
     shaken: bool,
+    /// A check asked for a new handshake: sent on the next turn.
+    rehandshake: bool,
+    /// The session expired for good: the tunnel ends, the next connection starts a new one.
+    expired: bool,
     started: std::time::Instant,
     notify: Arc<Notify>,
     next_port: u16,
@@ -374,6 +380,8 @@ impl Pump {
             local: vec![],
             handshake_waiting: vec![],
             shaken: false,
+            rehandshake: false,
+            expired: false,
             started: std::time::Instant::now(),
             notify: Arc::new(Notify::new()),
             next_port: 49152 + rand::random::<u16>() % 16000,
@@ -411,7 +419,14 @@ impl Pump {
                 _ = timers.tick() => self.timers().await,
                 _ = tokio::time::sleep(delay) => {}
             }
+            if std::mem::take(&mut self.rehandshake) {
+                self.start_handshake().await;
+            }
             self.step().await;
+            // Handshakes failed for too long: boringtun stops trying on this tunnel, so it ends.
+            if self.expired {
+                break;
+            }
             if self.links.is_empty() && self.lookups.is_empty() && self.local.is_empty() && self.handshake_waiting.is_empty() {
                 let since = *idle_since.get_or_insert_with(std::time::Instant::now);
                 if since.elapsed() > IDLE {
@@ -425,6 +440,11 @@ impl Pump {
                 break;
             }
         }
+    }
+
+    /// The peer answered a handshake recently enough for the session to work.
+    fn fresh(&self) -> bool {
+        self.tunn.time_since_last_handshake().is_some_and(|t| t < FRESH)
     }
 
     async fn start_handshake(&mut self) {
@@ -472,7 +492,7 @@ impl Pump {
         for p in out {
             let _ = self.udp.send(&p).await;
         }
-        if !self.shaken && self.tunn.time_since_last_handshake().is_some() {
+        if self.fresh() {
             self.shaken = true;
             for w in self.handshake_waiting.drain(..) {
                 let _ = w.send(Ok(()));
@@ -485,17 +505,22 @@ impl Pump {
             TunnResult::WriteToNetwork(p) => {
                 let _ = self.udp.send(p).await;
             }
-            TunnResult::Err(boringtun::noise::errors::WireGuardError::ConnectionExpired) => self.fail_all("handshake"),
+            TunnResult::Err(boringtun::noise::errors::WireGuardError::ConnectionExpired) => {
+                self.fail_all("handshake");
+                self.expired = true;
+            }
             _ => {}
         }
     }
 
     fn command(&mut self, cmd: Cmd) {
         match cmd {
+            // Only a recent handshake says the peer answers now; an old session may be long dead.
             Cmd::Handshake { reply } => {
-                if self.shaken {
+                if self.fresh() {
                     let _ = reply.send(Ok(()));
                 } else {
+                    self.rehandshake |= self.shaken;
                     self.handshake_waiting.push(reply);
                 }
             }

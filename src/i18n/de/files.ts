@@ -1,0 +1,77 @@
+// The SFTP file browser. Host key questions come from `terminal.hostKey`.
+import { de as plural } from "../plural";
+import type en from "../en/files";
+
+const de: typeof en = {
+  units: ["B", "KB", "MB", "GB", "TB"],
+  perSecond: "/s",
+  bar: {
+    up: "Nach oben · Backspace",
+    home: "Home-Ordner",
+    refresh: "Aktualisieren · F5",
+    terminalHere: "Terminal in diesem Ordner",
+    newFolder: "Neuer Ordner",
+    uploadFolder: "Ordner hochladen",
+    upload: "Hochladen",
+  },
+  selected: (n: number) => `${n} ausgewählt`,
+  select: "Auswählen",
+  download: "Herunterladen",
+  downloadTo: (dir: string) => `Nach ${dir} herunterladen`,
+  local: {
+    title: "Dieser Computer",
+    drives: "Dieser PC",
+    upload: "Hochladen",
+    uploadTo: (dir: string) => `Nach ${dir} hochladen`,
+    trash: "In den Papierkorb",
+    trashed: (what: string) => `Im Papierkorb: ${what}`,
+    hide: "Diesen Computer ausblenden",
+    show: "Diesen Computer anzeigen",
+  },
+  pick: { title: "Mit Host verbinden", search: "Host oder Adresse", nothingFound: "Nichts gefunden", noHosts: "Noch keine Hosts" },
+  clearSelection: "Auswahl aufheben · Esc",
+  columns: { name: "Name", size: "Größe", modified: "Geändert", permissions: "Rechte" },
+  newFolderName: "Neuer Ordner",
+  more: "Mehr",
+  menu: { open: "Öffnen", copyPath: "Pfad kopieren", permissions: "Rechte", edit: "Bearbeiten", editIn: "Bearbeiten mit…" },
+  items: (n: number) => `${n} ${plural(n, { one: "Element", other: "Elemente" })}`,
+  editor: { title: "Bearbeiten mit", other: "Anderes Programm…", remember: "Merken", open: "Öffnen" },
+  empty: "Dieser Ordner ist leer",
+  uploadFiles: "Dateien hochladen",
+  dropTo: (where: string) => `Nach ${where} hochladen`,
+  modeSet: (name: string, mode: string) => `Rechte für „${name}“: ${mode}`,
+  pathCopied: (path: string) => `Kopiert: ${path}`,
+  confirm: {
+    removeOne: (name: string) => `„${name}“ löschen?`,
+    removeMany: (n: number) => `${n} ${plural(n, { one: "Element", other: "Elemente" })} löschen?`,
+    withContents: "Ordner werden samt Inhalt gelöscht",
+    replaceOne: (name: string) => `„${name}“ ersetzen?`,
+    replaceMany: (n: number) => `${n} ${plural(n, { one: "Element", other: "Elemente" })} ersetzen?`,
+    replace: "Ersetzen",
+  },
+  perms: {
+    title: (name: string) => `Rechte für „${name}“`,
+    owner: "Besitzer",
+    group: "Gruppe",
+    others: "Andere",
+    read: "Lesen",
+    write: "Schreiben",
+    execute: "Ausführen",
+    octal: "Oktal",
+  },
+  transfer: {
+    amount: (done: string, total: string) => `${done} von ${total}`,
+    uploaded: "Hochgeladen",
+    downloaded: "Heruntergeladen",
+    removed: "Gelöscht",
+    cancel: "Abbrechen",
+    dismiss: "Ausblenden",
+  },
+  gate: {
+    passphrase: "Passphrase",
+    password: (login: string) => `Passwort für ${login}`,
+    remember: "Im Tresor speichern",
+  },
+};
+
+export default de;

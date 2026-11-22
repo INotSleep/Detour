@@ -1,0 +1,65 @@
+import { ru as plural } from "../plural";
+import type en from "../en/keys";
+
+const ru: typeof en = {
+  title: "Ключи",
+  import: "Импортировать",
+  createKey: "Создать ключ",
+  empty: "Нет ключей",
+  more: "Ещё",
+  restore: "Вернуть",
+  passphraseSaved: "пароль сохранён",
+  withPassphrase: "с паролем",
+  copyPublic: "Копировать публичный ключ",
+  savePublic: "Сохранить публичный ключ",
+  exportPrivate: "Экспортировать приватный ключ",
+  changePassphrase: "Изменить пароль ключа",
+  setPassphrase: "Задать пароль ключа",
+  publicCopied: (name: string) => `Публичный ключ «${name}» скопирован`,
+  saved: (where: string) => `Сохранено: ${where}`,
+  removed: (name: string) => `Ключ «${name}» удалён`,
+  deleteConfirm: {
+    title: (name: string) => `Удалить «${name}»?`,
+    body: (n: number) => `Ключ используется в ${n} ${plural(n, { one: "хосте", few: "хостах", many: "хостах" })}, они перестанут подключаться.`,
+  },
+  passphrase: "Пароль ключа",
+  savePassphrase: "Сохранить пароль в vault",
+  noPassphrase: "Без пароля",
+  name: "Название",
+  create: {
+    title: "Новый ключ",
+    type: "Тип",
+    created: (name: string) => `Ключ «${name}» создан`,
+    copyPublic: "Копировать публичный",
+  },
+  importDialog: {
+    title: "Импорт ключа",
+    fileTooBig: "Файл слишком большой для ключа",
+    imported: (name: string) => `Ключ «${name}» импортирован`,
+    passphraseRequired: "Ключ защищён паролем, введите его",
+    chooseFile: "Выбрать файл",
+    orDrop: "или перетащите файл сюда",
+    detected: (format: string) => `${format} ключ`,
+    passphrasePlaceholder: "Если ключ защищён паролем",
+  },
+  export: {
+    title: (name: string) => `Экспорт «${name}»`,
+    saveFile: "Сохранить файл",
+    keepsPassphrase: "Файл будет защищён текущим паролем ключа.",
+    filePassphrase: "Пароль для файла",
+  },
+  passphraseDialog: {
+    title: (name: string) => `Пароль ключа «${name}»`,
+    removed: "Пароль ключа снят",
+    changed: "Пароль ключа изменён",
+    wrongCurrent: "Неверный текущий пароль",
+    remove: "Снять пароль",
+    current: "Текущий пароль",
+    next: "Новый пароль",
+    emptyRemoves: "Пусто: снять пароль",
+    repeat: "Ещё раз",
+    mismatch: "Пароли не совпадают",
+  },
+};
+
+export default ru;

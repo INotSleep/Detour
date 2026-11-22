@@ -32,11 +32,14 @@ interface Options {
   askHostKey: (q: HostKeyQuestion) => Promise<HostKeyAnswer>;
   /** Highlight the output (read on every write, so it follows the setting). */
   highlight: () => boolean;
+  /** The core's session is up: its id, for showing it again elsewhere. */
+  onSession?: (id: string) => void;
 }
 
 const MAX_SECRET_ATTEMPTS = 3;
 
-export function runRealSession(term: Terminal, host: Host, opts: Options): () => void {
+/** Returns what stops it; `keep` leaves the core's session open, for showing it elsewhere. */
+export function runRealSession(term: Terminal, host: Host, opts: Options): (keep?: boolean) => void {
   let disposed = false;
   let mode: "busy" | "live" | "secret" | "failed" = "busy";
   let sessionId: string | null = null;
@@ -65,7 +68,8 @@ export function runRealSession(term: Terminal, host: Host, opts: Options): () =>
   };
 
   const events = {
-    onData: (bytes: Uint8Array) => output.write(bytes),
+    // A pane moved elsewhere still hears its session until it closes: only the new one shows it.
+    onData: (bytes: Uint8Array) => void (disposed || output.write(bytes)),
     onClosed: (exitStatus: number | null) => {
       if (sessionId) shownSessions.delete(sessionId);
       sessionId = null;
@@ -89,6 +93,7 @@ export function runRealSession(term: Terminal, host: Host, opts: Options): () =>
       await api.sessionAttach(id, events);
       if (disposed) return;
       sessionId = id;
+      opts.onSession?.(id);
       mode = "live";
       opts.onStatus("connected");
       // Shown in a tab in the background: the session keeps its size until the tab comes forward.
@@ -109,6 +114,7 @@ export function runRealSession(term: Terminal, host: Host, opts: Options): () =>
         return;
       }
       sessionId = opened.sessionId;
+      opts.onSession?.(opened.sessionId);
       shownSessions.add(opened.sessionId);
       mode = "live";
       attemptsLeft = MAX_SECRET_ATTEMPTS;
@@ -222,14 +228,14 @@ export function runRealSession(term: Terminal, host: Host, opts: Options): () =>
     void open();
   }
 
-  return () => {
+  return (keep = false) => {
     disposed = true;
     output.flush();
     data.dispose();
     resize.dispose();
     if (sessionId) {
       shownSessions.delete(sessionId);
-      void api.sessionClose(sessionId);
+      if (!keep) void api.sessionClose(sessionId);
     }
   };
 }

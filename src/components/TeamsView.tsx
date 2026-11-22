@@ -8,6 +8,7 @@ import type { ActivityItem, Coll, Level, Member, Problem, Role, Vault } from "..
 import { tr, useT, type Dict } from "../i18n";
 import { Avatar, SyncIcon, VaultAvatar, syncTarget } from "./common";
 import { Button, ConfirmDialog, Empty, IconButton, Menu, Modal, PageHeader, Segmented } from "./ui";
+import { TeamHistory } from "./TeamHistory";
 import { AddMemberDialog, CreateTeamDialog, JoinTeamDialog, MyIdDialog, RepoLoginFields, githubIssue, githubRepo, useMyId } from "./TeamDialogs";
 
 export function TeamsView() {
@@ -75,7 +76,7 @@ function TeamPage({ vault }: { vault: Vault }) {
   // With sync on, leaving takes the team off all of this person's devices.
   const everywhere = !!personalSync?.enabled;
   const me = useMyId();
-  const [tab, setTab] = useState<"members" | "access">("members");
+  const [tab, setTab] = useState<"members" | "access" | "history">("members");
   const [adding, setAdding] = useState(false);
   const [removing, setRemoving] = useState<Member | null>(null);
   const [showFingerprint, setShowFingerprint] = useState(false);
@@ -277,11 +278,13 @@ function TeamPage({ vault }: { vault: Vault }) {
       {vault.joined && !offline && (
         <>
           <div className="team-tabs">
-            <Segmented value={tab} onChange={setTab} options={[{ value: "members", label: t.teams.page.tabMembers }, { value: "access", label: t.teams.page.tabAccess }]} />
+            <Segmented value={tab} onChange={setTab} options={[{ value: "members", label: t.teams.page.tabMembers }, { value: "access", label: t.teams.page.tabAccess }, ...(api.real ? [{ value: "history" as const, label: t.teams.page.tabHistory }] : [])]} />
           </div>
 
           {tab === "access" ? (
             <AccessMatrix vault={vault} />
+          ) : tab === "history" ? (
+            <TeamHistory vault={vault} />
           ) : (
             <div className="team-grid">
               <section>

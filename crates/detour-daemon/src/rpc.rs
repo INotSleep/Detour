@@ -10,6 +10,7 @@ use detour_core::sftp;
 use detour_core::ssh;
 use detour_core::store::{PERSONAL, Store, VaultUpdate};
 use detour_core::team::AccessChange;
+use detour_core::team::history::Rollback;
 use detour_core::team::git::GitRemote;
 use detour_core::team::state::{Coll, Level, Role};
 use detour_core::drive::{self, DriveRemote, Provider};
@@ -66,7 +67,7 @@ fn git_remote(url: String, auth: Auth, token: Option<String>, github: Option<boo
 /// Methods that only read: everything else may change what clients show.
 pub(crate) const READ_ONLY: &[&str] = &[
     "hello", "core_info", "vault_status", "vault_get", "ssh_import_preview", "sync_status", "teams_pending", "sync_recovery_key", "sync_add_device",
-    "host_password", "key_export", "my_id", "id_inspect", "recovery_key_new", "teams_list", "team_inspect", "team_inspect_git",
+    "host_password", "key_export", "my_id", "id_inspect", "recovery_key_new", "teams_list", "team_inspect", "team_inspect_git", "team_log", "team_history", "team_deleted", "team_rollback_plan",
     "github_user", "github_start", "github_repo_access", "drive_accounts", "drive_sign_in", "drive_browse", "drive_link", "team_inspect_drive", "session_input", "session_resize", "session_check", "session_attach", "session_detach", "sessions_list", "session_runs",
     "files_open", "files_list", "files_resolve", "files_cancel", "files_close", "tunnels_status", "tunnel_start", "tunnel_stop", "proxy_check", "proxy_parse", "proxy_export", "settings_get",
     "settings_set", "activity", "log_write", "log_tail", "quit", "trust_request", "trust_answer", "trust_with_password", "hosts_export",
@@ -321,6 +322,16 @@ pub(crate) async fn dispatch(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value
         "ssh_import" => {
             let a = args!(method, p, { aliases: Vec<String>, known_hosts: bool });
             let r = s!().ssh_import(&a.aliases, a.known_hosts);
+            ok(pushed(core, PERSONAL, r))
+        }
+        // Hosts of another SSH client: from its file or folder, or where it keeps them.
+        "foreign_preview" => {
+            let a = args!(method, p, { client: detour_core::foreign::Client, path: Option<String> });
+            ok(s!().foreign_preview(a.client, a.path.as_deref().map(std::path::Path::new)))
+        }
+        "foreign_import" => {
+            let a = args!(method, p, { client: detour_core::foreign::Client, path: Option<String>, keys: Vec<String> });
+            let r = s!().foreign_import(a.client, a.path.as_deref().map(std::path::Path::new), &a.keys);
             ok(pushed(core, PERSONAL, r))
         }
 
@@ -632,6 +643,27 @@ pub(crate) async fn dispatch(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value
         "team_resolve_deleted" => {
             let a = args!(method, p, { id: String, coll: Coll, record: String, keep: bool });
             let r = s!().team_resolve_deleted(&a.id, a.coll, &a.record, a.keep);
+            ok(pushed(core, &a.id, r))
+        }
+        "team_log" => {
+            let a = args!(method, p, { id: String });
+            ok(s!().team_log(&a.id))
+        }
+        "team_history" => {
+            let a = args!(method, p, { id: String, record: String });
+            ok(s!().team_history(&a.id, &a.record))
+        }
+        "team_deleted" => {
+            let a = args!(method, p, { id: String });
+            ok(s!().team_deleted(&a.id))
+        }
+        "team_rollback_plan" => {
+            let a = args!(method, p, { id: String, to: Rollback });
+            ok(s!().team_rollback_plan(&a.id, &a.to))
+        }
+        "team_rollback" => {
+            let a = args!(method, p, { id: String, to: Rollback });
+            let r = s!().team_rollback(&a.id, &a.to).map(|(view, done)| json!({ "view": view, "done": done }));
             ok(pushed(core, &a.id, r))
         }
 

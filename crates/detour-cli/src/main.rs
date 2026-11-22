@@ -133,6 +133,8 @@ enum Hosts {
         known_hosts: bool,
         #[arg(long, value_name = "FILE", conflicts_with = "known_hosts")]
         file: Option<PathBuf>,
+        #[arg(long, value_name = "CLIENT", conflicts_with = "known_hosts", value_parser = ["putty", "kitty", "mobaxterm", "securecrt", "termius", "csv", "ssh-config"])]
+        from: Option<String>,
     },
     Export {
         hosts: Vec<String>,
@@ -344,6 +346,32 @@ enum Teams {
         level: String,
     },
     Leave,
+    Log {
+        #[arg(long)]
+        limit: Option<usize>,
+    },
+    History { record: String },
+    Deleted,
+    Revert {
+        #[arg(long, group = "to")]
+        undo: Option<String>,
+        #[arg(long, group = "to")]
+        after: Option<String>,
+        #[arg(long, group = "to")]
+        device: Option<String>,
+        #[arg(long, group = "to")]
+        member: Option<String>,
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long, group = "to")]
+        record: Option<String>,
+        #[arg(long, requires = "record")]
+        entry: Option<String>,
+        #[arg(long, group = "to")]
+        restore: Option<String>,
+        #[arg(long, short)]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -487,8 +515,9 @@ async fn run(command: Command, dir: &std::path::Path, team: Option<String>, json
         Command::Groups(Groups::Move { group, before, last: _, mine: true }) => cmds::mine_group_move(&ctx, &group, before.as_deref()).await?,
         Command::Groups(Groups::Move { group, before, last: _, mine: false }) => cmds::group_move(&ctx, &group, before.as_deref()).await?,
         Command::Groups(Groups::Set { group, opts }) => cmds::group_set(&ctx, &group, opts).await?,
+        Command::Hosts(Hosts::Import { aliases, file, from: Some(from), .. }) => cmds::host_import_foreign(&ctx, &from, file, aliases).await?,
         Command::Hosts(Hosts::Import { aliases, file: Some(file), .. }) => cmds::host_import_file(&ctx, &file, aliases).await?,
-        Command::Hosts(Hosts::Import { aliases, known_hosts, file: None }) => cmds::host_import(&ctx, aliases, known_hosts).await?,
+        Command::Hosts(Hosts::Import { aliases, known_hosts, file: None, from: None }) => cmds::host_import(&ctx, aliases, known_hosts).await?,
         Command::Hosts(Hosts::Export { hosts, file: Some(file), leave_out, .. }) => cmds::host_export_file(&ctx, hosts, &file, leave_out).await?,
         Command::Hosts(Hosts::Export { hosts, output, keys, .. }) => cmds::host_export(&ctx, hosts, output, keys).await?,
         Command::Ssh { host } => return term::ssh(&ctx, &host).await,
@@ -563,6 +592,13 @@ async fn run(command: Command, dir: &std::path::Path, team: Option<String>, json
                 Teams::Role { member, role } => cmds::member_role(&ctx, &member, &role).await?,
                 Teams::Access { record, member, level } => cmds::access(&ctx, &record, &member, &level).await?,
                 Teams::Leave => cmds::team_leave(&ctx).await?,
+                Teams::Log { limit } => cmds::team_log(&ctx, limit).await?,
+                Teams::History { record } => cmds::team_history(&ctx, &record).await?,
+                Teams::Deleted => cmds::team_deleted(&ctx).await?,
+                Teams::Revert { undo, after, device, member, since, record, entry, restore, yes } => {
+                    let to = cmds::RevertTo { undo, after, device, member, since, record, entry, restore };
+                    cmds::team_revert(&ctx, to, yes).await?
+                }
                 Teams::Ls | Teams::Create { .. } | Teams::Join { .. } | Teams::Recover { .. } => unreachable!(),
             }
         }

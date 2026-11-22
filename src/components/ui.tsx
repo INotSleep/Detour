@@ -1,5 +1,5 @@
 import { useT } from "../i18n";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Check, Eye, EyeOff, Loader2, X, type LucideIcon } from "lucide-react";
 import type { ToastInput } from "../lib/store";
@@ -189,6 +189,8 @@ interface ModalProps {
 
 /** Open dialogs, newest last: Esc closes only the one on top. */
 const openModals: object[] = [];
+/** Whether a dialog is open: shortcuts for what lies behind it wait. */
+export const modalOpen = () => openModals.length > 0;
 
 export function Modal({ title, onClose, children, footer, width = 440, onSubmit }: ModalProps) {
   const t = useT().common;
@@ -267,6 +269,8 @@ export interface MenuItem {
   icon?: LucideIcon;
   danger?: boolean;
   hint?: string;
+  /** A line above it, between groups of items. */
+  sepBefore?: boolean;
   onSelect: () => void;
 }
 
@@ -317,19 +321,21 @@ export function Menu({ trigger, items: itemsOrMake, align = "end", header }: { t
           <div ref={menu} className="menu" role="menu" style={pos ? { top: pos.top, left: pos.left } : { visibility: "hidden", top: 0, left: 0 }}>
             {header && <div className="menu-header">{header}</div>}
             {items.map((it) => (
-              <button
-                key={it.label}
-                role="menuitem"
-                className={it.danger ? "danger" : ""}
-                onClick={() => {
-                  setOpen(false);
-                  it.onSelect();
-                }}
-              >
-                {it.icon && <it.icon size={14} />}
-                <span>{it.label}</span>
-                {it.hint && <span className="menu-hint">{it.hint}</span>}
-              </button>
+              <Fragment key={it.label}>
+                {it.sepBefore && <div className="menu-sep" />}
+                <button
+                  role="menuitem"
+                  className={it.danger ? "danger" : ""}
+                  onClick={() => {
+                    setOpen(false);
+                    it.onSelect();
+                  }}
+                >
+                  {it.icon && <it.icon size={14} />}
+                  <span>{it.label}</span>
+                  {it.hint && <span className="menu-hint">{it.hint}</span>}
+                </button>
+              </Fragment>
             ))}
           </div>,
           document.body,
@@ -369,19 +375,21 @@ export function ContextMenu({ at, items, onClose }: { at: { x: number; y: number
   return createPortal(
     <div ref={menu} className="menu" role="menu" style={pos ? { top: pos.top, left: pos.left } : { visibility: "hidden", top: 0, left: 0 }} onContextMenu={(e) => e.preventDefault()}>
       {items.map((it) => (
-        <button
-          key={it.label}
-          role="menuitem"
-          className={it.danger ? "danger" : ""}
-          onClick={() => {
-            onClose();
-            it.onSelect();
-          }}
-        >
-          {it.icon && <it.icon size={14} />}
-          <span>{it.label}</span>
-          {it.hint && <span className="menu-hint">{it.hint}</span>}
-        </button>
+        <Fragment key={it.label}>
+          {it.sepBefore && <div className="menu-sep" />}
+          <button
+            role="menuitem"
+            className={it.danger ? "danger" : ""}
+            onClick={() => {
+              onClose();
+              it.onSelect();
+            }}
+          >
+            {it.icon && <it.icon size={14} />}
+            <span>{it.label}</span>
+            {it.hint && <span className="menu-hint">{it.hint}</span>}
+          </button>
+        </Fragment>
       ))}
     </div>,
     document.body,

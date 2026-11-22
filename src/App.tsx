@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeftRight, Bot, Code, FolderOpen, FolderPlus, KeyRound, Plus, Server, Settings as SettingsIcon, Shield, Users, X } from "lucide-react";
+import { ArrowLeftRight, Bot, Code, Columns2, FolderOpen, FolderPlus, KeyRound, Plus, Rows2, Server, Settings as SettingsIcon, Shield, Users, X } from "lucide-react";
 import { LangContext, lang as currentLang, resolveLang, setLang, tr, useT } from "./i18n";
 import { api, errorText, fromView, isCoreError, type AgentRequest, type CoreInfo, type SyncInfo, type TeamView, type VaultView } from "./lib/api";
 import { shownSessions } from "./lib/realSession";
 import { applyTeamEntries, applyTeamView, dataOf, removeVault, writable } from "./lib/teams";
 import { mockWorkspace } from "./lib/mockData";
-import { StoreContext, shortcutKey, uid, type Section, type Store, type UpdateState } from "./lib/store";
+import { StoreContext, uid, type Section, type Store, type UpdateState } from "./lib/store";
+import { hit, keysOf, recording, setOverrides } from "./lib/shortcuts";
+import { MAX_PANES, carried, insert, isPane, neighbour, panes as panesOf, remove as removePane, type Layout, type Side, type SplitDir } from "./lib/panes";
 import { checkForUpdate, installUpdate as installFound, updateErrorText } from "./lib/updates";
 import type { Settings, Workspace } from "./lib/types";
 import { SAME_AS_APP, SYSTEM, appColors, builtinThemes, findTheme, isLight, terminalColors, type Theme } from "./lib/themes";
@@ -21,7 +23,7 @@ import { ProxiesView, savedAfter } from "./components/ProxiesView";
 import { FilesView } from "./components/FilesView";
 import { CommandPalette } from "./components/CommandPalette";
 import { ConflictDialog } from "./components/ConflictDialog";
-import { Button, ContextMenu, IconButton, Modal, TipLayer, useToaster, type MenuItem } from "./components/ui";
+import { Button, ContextMenu, IconButton, Modal, TipLayer, modalOpen, useToaster, type MenuItem } from "./components/ui";
 import { LockScreen } from "./components/LockScreen";
 import { AgentRequestDialog } from "./components/Agents";
 
@@ -38,7 +40,15 @@ interface Session {
   attach?: string;
   /** The AI agent whose session it is. */
   agent?: string;
+  /** A terminal tab's panes, and the one with focus. */
+  layout?: Layout;
+  focused?: string;
 }
+
+const onePane = (hostId: string, extra: { command?: string; attach?: string } = {}) => {
+  const id = uid("p");
+  return { layout: { pane: { id, hostId, ...extra } } as Layout, focused: id };
+};
 
 const sectionIcon: Record<Section, typeof Server> = {
   hosts: Server,
@@ -50,7 +60,7 @@ const sectionIcon: Record<Section, typeof Server> = {
   settings: SettingsIcon,
 };
 
-const defaultSettings: Settings = { theme: "detour-dark", language: "system", fontSize: 13, scrollback: 5000, autoLockMinutes: 15, clipboard: "ssh", highlight: true, autoUpdate: true, editor: null, sidebarCollapsed: false, terminalTheme: SAME_AS_APP, customThemes: [] };
+const defaultSettings: Settings = { theme: "detour-dark", language: "system", fontSize: 13, scrollback: 5000, autoLockMinutes: 15, clipboard: "ssh", highlight: true, autoUpdate: true, editor: null, sidebarCollapsed: false, terminalTheme: SAME_AS_APP, customThemes: [], shortcuts: {} };
 const SETTINGS_KEY = "detour.settings";
 const VAULT_KEY = "detour.vault";
 
@@ -100,6 +110,11 @@ export default function App() {
   const [startError, setStartError] = useState<unknown>(null);
   // What each vault looked like when last saved to / read from detour-core.
   const lastSaved = useRef(new Map<string, string>());
+  // What each vault looks like as the core last sent it. Saving compares with it: a workspace
+  // showing exactly that is the core's state, not an edit. Taking a sent state must never mark it
+  // saved before the window shows it: an older picture still on screen would then look like an
+  // edit back to old values, and saving it once undid other members' changes and deleted a host.
+  const received = useRef(new Map<string, string>());
   const [ws, setWs] = useState<Workspace | null>(null);
   const [coreInfo, setCoreInfo] = useState<CoreInfo | null>(null);
   // The vault shown when the window was last closed; the personal one if that team is gone.
@@ -127,6 +142,7 @@ export default function App() {
   /** What AI agents wait on, oldest first. */
   const [agentAsks, setAgentAsks] = useState<AgentRequest[]>([]);
   const [settings, setSettingsState] = useState<Settings>(loadSettings);
+  setOverrides(settings.shortcuts);
   const appliedVars = useRef<string[]>([]);
   useEffect(() => {
     try {
@@ -144,14 +160,15 @@ export default function App() {
     const list = await api.sessionsList().catch(() => []);
     const hosts = wsRef.current?.hosts ?? [];
     setSessions((tabs) => {
-      const fresh = list.filter((c) => !c.transient && !shownSessions.has(c.id) && !tabs.some((t) => t.attach === c.id) && hosts.some((h) => h.id === c.hostId && h.vaultId === c.vaultId));
+      const shown = (id: string) => tabs.some((t) => t.attach === id || (t.layout && panesOf(t.layout).some((p) => p.attach === id)));
+      const fresh = list.filter((c) => !c.transient && !shownSessions.has(c.id) && !shown(c.id) && hosts.some((h) => h.id === c.hostId && h.vaultId === c.vaultId));
       if (!fresh.length) return tabs;
       return [
         ...tabs,
         ...fresh.map((c) => {
           const host = hosts.find((h) => h.id === c.hostId)!;
           const agent = c.owner.type === "agent" ? c.owner.agent : undefined;
-          return { id: uid("s"), hostId: c.hostId, kind: "terminal" as const, title: host.label, status: "connected" as const, attach: c.id, agent };
+          return { id: uid("s"), hostId: c.hostId, kind: "terminal" as const, title: host.label, status: "connected" as const, attach: c.id, agent, ...onePane(c.hostId, { attach: c.id }) };
         }),
       ];
     });
@@ -210,12 +227,14 @@ export default function App() {
     const base = wsRef.current;
     if (!base) return;
     const saved = lastSaved.current.get(view.id);
-    const pending = saved !== undefined && saved !== JSON.stringify(dataOf(base, view.id));
+    const shown = JSON.stringify(dataOf(base, view.id));
+    const pending = saved !== undefined && shown !== saved && shown !== received.current.get(view.id);
     const next = applyTeamView(base, view, !pending);
-    if (!pending) lastSaved.current.set(view.id, JSON.stringify(dataOf(next, view.id)));
+    if (!pending) received.current.set(view.id, JSON.stringify(dataOf(next, view.id)));
     wsRef.current = next;
-    // Edited in the meantime: keep those edits, take only members, conflicts and activity.
-    setWs((cur) => (cur === base ? next : cur && applyTeamView(cur, view, false)));
+    // Changed in the meantime: take the data only if this team's part is still the same,
+    // else keep those edits and take only members, conflicts and activity.
+    setWs((cur) => (cur === base ? next : cur && applyTeamView(cur, view, !pending && JSON.stringify(dataOf(cur, view.id)) === shown)));
     // An edit of a Git team is pushed in the background; look again once it had time to go out.
     if (view.remote?.pending && !view.remote.error) {
       clearTimeout(recheck.current.get(view.id));
@@ -230,24 +249,29 @@ export default function App() {
     const base = wsRef.current;
     if (!base) return;
     const saved = lastSaved.current.get("personal");
-    if (saved !== undefined && saved !== JSON.stringify(dataOf(base, "personal"))) return;
+    const shown = JSON.stringify(dataOf(base, "personal"));
+    if (saved !== undefined && shown !== saved && shown !== received.current.get("personal")) return;
     const data = fromView(view);
     const others = <T extends { vaultId: string }>(xs: T[]) => xs.filter((x) => x.vaultId !== "personal");
-    // A tunnel's switch and connections belong to this session, not to the vault.
-    const running = new Map(base.tunnels.map((t) => [t.id, t]));
-    const next: Workspace = {
-      ...base,
-      hosts: [...data.hosts, ...others(base.hosts)],
-      keys: [...data.keys, ...others(base.keys)],
-      snippets: [...data.snippets, ...others(base.snippets)],
-      tunnels: [...data.tunnels.map((t) => ({ ...t, state: running.get(t.id)?.state ?? t.state, connections: running.get(t.id)?.connections, error: running.get(t.id)?.error })), ...others(base.tunnels)],
-      proxies: [...data.proxies, ...others(base.proxies)],
-      groups: [...data.groups, ...others(base.groups)],
-      groupPrefs: groupPrefs ?? base.groupPrefs,
+    const take = (w: Workspace): Workspace => {
+      // A tunnel's switch and connections belong to this session, not to the vault.
+      const running = new Map(w.tunnels.map((t) => [t.id, t]));
+      return {
+        ...w,
+        hosts: [...data.hosts, ...others(w.hosts)],
+        keys: [...data.keys, ...others(w.keys)],
+        snippets: [...data.snippets, ...others(w.snippets)],
+        tunnels: [...data.tunnels.map((t) => ({ ...t, state: running.get(t.id)?.state ?? t.state, connections: running.get(t.id)?.connections, error: running.get(t.id)?.error })), ...others(w.tunnels)],
+        proxies: [...data.proxies, ...others(w.proxies)],
+        groups: [...data.groups, ...others(w.groups)],
+        groupPrefs: groupPrefs ?? w.groupPrefs,
+      };
     };
-    lastSaved.current.set("personal", JSON.stringify(dataOf(next, "personal")));
+    const next = take(base);
+    received.current.set("personal", JSON.stringify(dataOf(next, "personal")));
     wsRef.current = next;
-    setWs((cur) => (cur === base ? next : cur));
+    // Changed in the meantime: take the vault only if its part is still the same.
+    setWs((cur) => (cur === base ? next : cur && JSON.stringify(dataOf(cur, "personal")) === shown ? take(cur) : cur));
   }, []);
 
   /* ---------- new versions ---------- */
@@ -323,6 +347,10 @@ export default function App() {
       }
       if (json === prev) continue;
       lastSaved.current.set(v.id, json);
+      // The core's own state, now on screen: nothing to save.
+      const sent = received.current.get(v.id);
+      received.current.delete(v.id);
+      if (json === sent) continue;
       const fail = (e: unknown) => toaster.push({ text: tr().common.saveFailed(errorText(e)), tone: "error" });
       const base = JSON.parse(prev) as typeof data;
       if (v.kind === "personal") {
@@ -338,7 +366,7 @@ export default function App() {
               hosts: base.hosts.map(({ newPassword: _p, newProxyPassword: _q, ...h }) => h),
               proxies: base.proxies.map(({ newSecrets, ...p }) => (newSecrets ? { ...p, saved: savedAfter(p.saved, newSecrets) } : p)),
             };
-            lastSaved.current.set(v.id, JSON.stringify(dataOf(next, v.id)));
+            received.current.set(v.id, JSON.stringify(dataOf(next, v.id)));
             wsRef.current = next;
             setWs((cur) => (cur === base ? next : cur));
           })
@@ -504,13 +532,10 @@ export default function App() {
     return () => window.removeEventListener("contextmenu", block);
   }, []);
 
+  // Shortcuts that work anywhere: what each does is read when it fires.
+  const globalKey = useRef<(e: KeyboardEvent) => void>(() => {});
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && shortcutKey(e) === "k") {
-        e.preventDefault();
-        setPalette((p) => !p);
-      }
-    };
+    const onKey = (e: KeyboardEvent) => globalKey.current(e);
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   }, []);
@@ -522,7 +547,7 @@ export default function App() {
       const id = uid("s");
       setSessions((list) => {
         const same = list.filter((s) => s.hostId === hostId && s.kind === kind).length;
-        return [...list, { id, hostId, kind, title: same ? `${host.label} (${same + 1})` : host.label, status: "connecting", command }];
+        return [...list, { id, hostId, kind, title: same ? `${host.label} (${same + 1})` : host.label, status: "connecting", command, ...(kind === "terminal" ? onePane(hostId, { command }) : {}) }];
       });
       setActiveId(id);
     },
@@ -558,12 +583,161 @@ export default function App() {
     setSessions(next);
     if (!next.some((s) => s.id === activeId) && activeId !== "home") setActiveId(keep && next.some((s) => s.id === keep) ? keep : next.at(-1)?.id ?? "home");
   };
+  // The tabs as they are now, for changes with side effects (they stay out of state updaters).
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
+  const patchSession = (id: string, patch: (s: Session) => Partial<Session>) => setSessions((list) => list.map((s) => (s.id === id ? { ...s, ...patch(s) } : s)));
+
+  /** Where a split waits for the host to open in it. */
+  const [splitPick, setSplitPick] = useState<{ tab: string; pane: string; dir: SplitDir } | null>(null);
+  const splitPane = (tab: string, pane: string, dir: SplitDir, hostId?: string) => {
+    const s = sessionsRef.current.find((x) => x.id === tab);
+    if (!s?.layout || panesOf(s.layout).length >= MAX_PANES) return;
+    const from = panesOf(s.layout).find((p) => p.id === pane);
+    if (!from) return;
+    const add = { id: uid("p"), hostId: hostId ?? from.hostId };
+    patchSession(tab, (x) => ({ layout: insert(x.layout!, pane, dir === "row" ? "right" : "bottom", { pane: add }), focused: add.id }));
+  };
+  const closePane = (tab: string, pane: string) => {
+    const s = sessionsRef.current.find((x) => x.id === tab);
+    if (!s?.layout) return;
+    const next = removePane(s.layout, pane);
+    if (!next) return closeSession(tab);
+    const focus = s.focused === pane ? (neighbour(s.layout, pane, "left") ?? neighbour(s.layout, pane, "top") ?? panesOf(next)[0]!.id) : s.focused;
+    patchSession(tab, () => ({ layout: next, focused: focus }));
+  };
+  const moveFocus = (tab: string, pane: string, side: Side) => {
+    const s = sessionsRef.current.find((x) => x.id === tab);
+    const to = s?.layout && neighbour(s.layout, pane, side);
+    if (to) patchSession(tab, () => ({ focused: to }));
+  };
+  /** A pane out of its tab into a tab of its own, its session as it is. */
+  const detachPane = (tab: string, pane: string) => {
+    const list = sessionsRef.current;
+    const s = list.find((x) => x.id === tab);
+    const p = s?.layout && panesOf(s.layout).find((x) => x.id === pane);
+    if (!s?.layout || !p) return;
+    const rest = removePane(s.layout, pane);
+    if (!rest) return;
+    const host = ws?.hosts.find((h) => h.id === p.hostId);
+    const moved = carried({ pane: p });
+    const id = uid("s");
+    const at = list.indexOf(s);
+    const focus = s.focused === pane ? panesOf(rest)[0]!.id : s.focused;
+    setSessions([...list.slice(0, at), { ...s, layout: rest, focused: focus }, { id, hostId: p.hostId, kind: "terminal", title: host?.label ?? s.title, status: "connected", layout: moved, focused: pane }, ...list.slice(at + 1)]);
+    setActiveId(id);
+  };
+  /** The terminal tab `from` put into the tab `to`, on `side` of its pane `pane`. */
+  const mergeTab = (from: string, to: string, pane: string, side: Side) => {
+    const list = sessionsRef.current;
+    const src = list.find((x) => x.id === from);
+    const dst = list.find((x) => x.id === to);
+    if (!src?.layout || !dst?.layout || from === to || panesOf(src.layout).length + panesOf(dst.layout).length > MAX_PANES) return;
+    const moved = carried(src.layout);
+    setSessions(list.filter((x) => x.id !== from).map((x) => (x.id === to ? { ...x, layout: insert(x.layout!, pane, side, moved), focused: src.focused } : x)));
+    setActiveId(to);
+  };
+  /** Moves a tab to the place of `before` (null: the end). */
+  const moveTab = (id: string, before: string | null) =>
+    setSessions((list) => {
+      const s = list.find((x) => x.id === id);
+      if (!s || before === id) return list;
+      const rest = list.filter((x) => x.id !== id);
+      const at = before === null ? rest.length : rest.findIndex((x) => x.id === before);
+      return [...rest.slice(0, at), s, ...rest.slice(at)];
+    });
+
+  /** A tab being dragged: to a new place in the row, or (a terminal) into a pane of the tab in front. */
+  const [tabDrag, setTabDrag] = useState<{ id: string; drop: { pane: string; side: Side; rect: { left: number; top: number; width: number; height: number } } | null } | null>(null);
+  const draggedTab = useRef(false);
+  const startTabDrag = (id: string, e: React.MouseEvent) => {
+    if (e.button !== 0 || (e.target as HTMLElement).closest(".tab-close")) return;
+    const [x0, y0] = [e.clientX, e.clientY];
+    let on = false;
+    let drop: NonNullable<typeof tabDrag>["drop"] = null;
+    const move = (ev: MouseEvent) => {
+      if (!on && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 6) return;
+      on = true;
+      draggedTab.current = true;
+      document.body.classList.add("dragging-tab");
+      const el = document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null;
+      const over = el?.closest<HTMLElement>("[data-tab-id]");
+      drop = null;
+      if (over && over.dataset.tabId !== id) {
+        const r = over.getBoundingClientRect();
+        const list = sessionsRef.current;
+        const i = list.findIndex((x) => x.id === over.dataset.tabId);
+        moveTab(id, ev.clientX < r.left + r.width / 2 ? over.dataset.tabId! : list[i + 1]?.id ?? null);
+      }
+      const paneEl = el?.closest<HTMLElement>(".view:not(.hidden) [data-pane]");
+      const src = sessionsRef.current.find((x) => x.id === id);
+      if (paneEl && src?.layout && !paneEl.closest(`[data-view="${id}"]`)) {
+        const r = paneEl.getBoundingClientRect();
+        const [px, py] = [(ev.clientX - r.left) / r.width, (ev.clientY - r.top) / r.height];
+        const side = ([["left", px], ["right", 1 - px], ["top", py], ["bottom", 1 - py]] as const).reduce((a, b) => (b[1] < a[1] ? b : a))[0];
+        const half = side === "left" || side === "right" ? { width: r.width / 2, height: r.height, top: r.top, left: side === "left" ? r.left : r.left + r.width / 2 } : { width: r.width, height: r.height / 2, left: r.left, top: side === "top" ? r.top : r.top + r.height / 2 };
+        drop = { pane: paneEl.dataset.pane!, side, rect: half };
+      }
+      setTabDrag({ id, drop });
+    };
+    const up = () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      document.body.classList.remove("dragging-tab");
+      setTabDrag(null);
+      if (on && drop) {
+        const target = sessionsRef.current.find((x) => x.id === activeIdRef.current);
+        if (target) mergeTab(id, target.id, drop.pane, drop.side);
+      }
+      // The click that ends a drag doesn't open the tab.
+      setTimeout(() => (draggedTab.current = false));
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  };
+  const activeIdRef = useRef(activeId);
+  activeIdRef.current = activeId;
+
+  globalKey.current = (e) => {
+    if (recording.on || phase !== "ready") return;
+    const take = (run: () => void) => {
+      e.preventDefault();
+      e.stopPropagation();
+      run();
+    };
+    if (hit(e, "palette")) return take(() => setPalette((p) => !p));
+    if (palette || modalOpen()) return;
+    if (hit(e, "settings")) return take(() => (setSection("settings"), setActiveId("home")));
+    if (hit(e, "lock") && api.real) return take(() => void lock());
+    const order = ["home", ...sessions.map((s) => s.id)];
+    const at = order.indexOf(activeId);
+    if (hit(e, "nextTab")) return take(() => setActiveId(order[(at + 1) % order.length]!));
+    if (hit(e, "prevTab")) return take(() => setActiveId(order[(at - 1 + order.length) % order.length]!));
+    const cur = sessions.find((s) => s.id === activeId);
+    if (!cur) return;
+    if (hit(e, "closeTab")) return take(() => (cur.layout && !isPane(cur.layout) && cur.focused ? closePane(cur.id, cur.focused) : closeSession(cur.id)));
+    const i = sessions.indexOf(cur);
+    if (hit(e, "moveTabLeft")) return take(() => i > 0 && moveTab(cur.id, sessions[i - 1]!.id));
+    if (hit(e, "moveTabRight")) return take(() => i < sessions.length - 1 && moveTab(cur.id, sessions[i + 2]?.id ?? null));
+  };
+
   const [tabMenu, setTabMenu] = useState<{ x: number; y: number; id: string } | null>(null);
   const tabMenuItems = (id: string): MenuItem[] => {
     const at = sessions.findIndex((s) => s.id === id);
     const t = tr().app.tabs;
+    const s = sessions[at]!;
+    const pane = s.layout && s.focused;
+    const split = s.layout && pane && panesOf(s.layout).length < MAX_PANES
+      ? [
+          { label: tr().terminal.menu.splitRight, icon: Columns2, hint: keysOf("splitRight"), onSelect: () => splitPane(id, pane, "row") },
+          { label: tr().terminal.menu.splitDown, icon: Rows2, hint: keysOf("splitDown"), onSelect: () => splitPane(id, pane, "col") },
+          { label: tr().terminal.menu.splitRightWith, icon: Columns2, onSelect: () => setSplitPick({ tab: id, pane, dir: "row" }) },
+          { label: tr().terminal.menu.splitDownWith, icon: Rows2, onSelect: () => setSplitPick({ tab: id, pane, dir: "col" }) },
+        ]
+      : [];
     return [
-      { label: t.close, onSelect: () => closeSession(id) },
+      ...split,
+      { label: t.close, hint: activeId === id ? keysOf("closeTab") : undefined, sepBefore: split.length > 0, onSelect: () => closeSession(id) },
       ...(sessions.length > 1 ? [{ label: t.closeOthers, onSelect: () => closeSessions((i) => i !== at, id) }] : []),
       ...(at > 0 ? [{ label: t.closeLeft, onSelect: () => closeSessions((i) => i < at, id) }] : []),
       ...(at < sessions.length - 1 ? [{ label: t.closeRight, onSelect: () => closeSessions((i) => i > at, id) }] : []),
@@ -639,10 +813,12 @@ export default function App() {
                     key={s.id}
                     role="tab"
                     tabIndex={0}
+                    data-tab-id={s.id}
                     aria-selected={activeId === s.id}
-                    className={`tab ${activeId === s.id ? "active" : ""}`}
+                    className={`tab ${activeId === s.id ? "active" : ""} ${tabDrag?.id === s.id ? "dragging" : ""}`}
                     title={s.agent && tr().agents.tab(s.agent)}
-                    onClick={() => setActiveId(s.id)}
+                    onMouseDown={(e) => startTabDrag(s.id, e)}
+                    onClick={() => !draggedTab.current && setActiveId(s.id)}
                     onAuxClick={(e) => e.button === 1 && closeSession(s.id)}
                     onContextMenu={(e) => {
                       e.preventDefault();
@@ -681,23 +857,49 @@ export default function App() {
               </div>
               {sessions.map((s) => {
                 const host = ws!.hosts.find((h) => h.id === s.hostId) ?? null;
+                if (s.kind === "terminal" && s.layout && s.focused) {
+                  return (
+                    <div key={s.id} data-view={s.id} className={`view ${activeId === s.id ? "" : "hidden"}`}>
+                      <TerminalTab
+                        layout={s.layout}
+                        focused={s.focused}
+                        active={activeId === s.id}
+                        agent={s.agent}
+                        agentSession={s.attach}
+                        onLayout={(fn) => patchSession(s.id, (x) => ({ layout: fn(x.layout!) }))}
+                        onFocus={(pane) => patchSession(s.id, () => ({ focused: pane }))}
+                        onStatus={(st) => setStatus(s.id, st)}
+                        onSplit={(pane, dir, other) => (other ? setSplitPick({ tab: s.id, pane, dir }) : splitPane(s.id, pane, dir))}
+                        onClosePane={(pane) => closePane(s.id, pane)}
+                        onMoveFocus={(pane, side) => moveFocus(s.id, pane, side)}
+                        onDetach={(pane) => detachPane(s.id, pane)}
+                      />
+                    </div>
+                  );
+                }
                 if (!host && !(s.kind === "files" && s.hostId === null)) return null;
                 return (
-                  <div key={s.id} className={`view ${activeId === s.id ? "" : "hidden"}`}>
-                    {s.kind === "files" || !host ? (
-                      <FilesView host={host} active={activeId === s.id} onStatus={(st) => setStatus(s.id, st)} onClose={() => closeSession(s.id)} onPickHost={(hostId) => pickHost(s.id, hostId)} />
-                    ) : (
-                      <TerminalTab host={host} active={activeId === s.id} initialCommand={s.command} attach={s.attach} agent={s.agent} onStatus={(st) => setStatus(s.id, st)} onExit={() => closeSession(s.id)} />
-                    )}
+                  <div key={s.id} data-view={s.id} className={`view ${activeId === s.id ? "" : "hidden"}`}>
+                    <FilesView host={host} active={activeId === s.id} onStatus={(st) => setStatus(s.id, st)} onClose={() => closeSession(s.id)} onPickHost={(hostId) => pickHost(s.id, hostId)} />
                   </div>
                 );
               })}
+              {tabDrag?.drop && <div className="pane-drop" style={tabDrag.drop.rect} />}
             </div>
           </main>
         </div>
 
         {tabMenu && sessions.some((s) => s.id === tabMenu.id) && <ContextMenu at={tabMenu} items={tabMenuItems(tabMenu.id)} onClose={() => setTabMenu(null)} />}
         {palette && <CommandPalette onClose={() => setPalette(false)} />}
+        {splitPick && (
+          <CommandPalette
+            onClose={() => setSplitPick(null)}
+            onPickHost={(hostId) => {
+              splitPane(splitPick.tab, splitPick.pane, splitPick.dir, hostId);
+              setActiveId(splitPick.tab);
+            }}
+          />
+        )}
         {conflictVault && conflictVault.conflicts.length > 0 && <ConflictDialog vault={conflictVault} onClose={() => setConflictVaultId(null)} />}
         {trustAsk && (
           <Modal

@@ -1,0 +1,78 @@
+// The frame of the app: navigation, tabs, quick connect, lock screen.
+import { zh as plural } from "../plural";
+import type en from "../en/app";
+
+const zh: typeof en = {
+  personal: "个人",
+  section: { hosts: "主机", keys: "密钥", snippets: "代码片段", tunnels: "隧道", proxies: "代理", team: "团队", teams: "团队", settings: "设置" },
+  quickConnect: "连接",
+  newConnection: "新建连接 · Ctrl K",
+  newSftp: "新建 SFTP 标签页",
+  crash: {
+    title: "Detour 出错了",
+    reload: "重新加载窗口",
+    copy: "复制错误信息",
+    copied: "已复制",
+    openLog: "打开日志",
+  },
+  tabs: {
+    close: "关闭",
+    closeOthers: "关闭其他",
+    closeLeft: "关闭左侧标签页",
+    closeRight: "关闭右侧标签页",
+    closeAll: "全部关闭",
+  },
+  collapse: "收起菜单",
+  expand: "展开菜单",
+  sftp: "SFTP",
+  conflictWith: (name: string) => `冲突：${name}`,
+  conflicts: (n: number) => `${n} ${plural(n, { other: "个冲突" })}`,
+  resolve: "解决",
+  conflict: "冲突",
+  removedFromTeam: "你已被移除",
+  waitingToBeAdded: "等待被添加",
+  repoUnreachable: "无法连接仓库",
+  notSent: "未发送",
+  createTeam: "创建团队",
+  joinTeam: "加入团队",
+  updateAvailable: (version: string) => `新版本 ${version} 可用`,
+  update: "更新",
+  tray: {
+    open: "打开 Detour",
+    lock: "锁定",
+    quit: "退出 Detour",
+    unlocked: "已解锁",
+    locked: "已锁定",
+    sessions: (n: number) => `${n} ${plural(n, { other: "个会话" })}`,
+    tunnels: (n: number) => `${n} ${plural(n, { other: "个隧道" })}`,
+  },
+  trustTerminal: {
+    title: "有终端请求使用 Detour",
+    shell: (shell: string, host: string | null, pid: number) => (host ? `${host} 中的 ${shell}（PID ${pid}）` : `${shell}（PID ${pid}）`),
+    allow: "允许",
+    deny: "拒绝",
+  },
+  palette: {
+    title: "快速连接",
+    placeholder: "主机、地址或页面",
+    pickHost: "在旁边打开的主机",
+    nothingFound: "未找到结果",
+    hosts: "主机",
+    goTo: "转到",
+    lock: "锁定",
+  },
+  lock: {
+    setupTitle: "主密码",
+    lockedTitle: "Detour 已锁定",
+    newPassword: "新主密码",
+    password: "主密码",
+    repeat: "再次输入",
+    minLength: (n: number) => `至少 ${n} 个字符`,
+    mismatch: "两次输入的密码不一致",
+    noRecovery: "主密码忘记后无法找回。",
+    create: "创建保险库",
+    unlock: "解锁",
+  },
+};
+
+export default zh;

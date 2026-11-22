@@ -1,0 +1,78 @@
+// The frame of the app: navigation, tabs, quick connect, lock screen.
+import { uk as plural } from "../plural";
+import type en from "../en/app";
+
+const uk: typeof en = {
+  personal: "Особисте",
+  section: { hosts: "Хости", keys: "Ключі", snippets: "Сніпети", tunnels: "Тунелі", proxies: "Проксі", team: "Команда", teams: "Команди", settings: "Налаштування" },
+  quickConnect: "Підключитися",
+  newConnection: "Нове підключення · Ctrl K",
+  newSftp: "Нова вкладка SFTP",
+  crash: {
+    title: "У Detour сталася помилка",
+    reload: "Перезавантажити вікно",
+    copy: "Скопіювати помилку",
+    copied: "Скопійовано",
+    openLog: "Відкрити журнал",
+  },
+  tabs: {
+    close: "Закрити",
+    closeOthers: "Закрити інші",
+    closeLeft: "Закрити вкладки ліворуч",
+    closeRight: "Закрити вкладки праворуч",
+    closeAll: "Закрити всі",
+  },
+  collapse: "Згорнути меню",
+  expand: "Розгорнути меню",
+  sftp: "SFTP",
+  conflictWith: (name: string) => `Конфлікт: ${name}`,
+  conflicts: (n: number) => `${n} ${plural(n, { one: "конфлікт", few: "конфлікти", many: "конфліктів" })}`,
+  resolve: "Розв'язати",
+  conflict: "Конфлікт",
+  removedFromTeam: "Вас видалено",
+  waitingToBeAdded: "Очікує на додавання",
+  repoUnreachable: "Немає зв'язку з репозиторієм",
+  notSent: "Не надіслано",
+  createTeam: "Створити команду",
+  joinTeam: "Приєднатися до команди",
+  updateAvailable: (version: string) => `Доступна версія ${version}`,
+  update: "Оновити",
+  tray: {
+    open: "Відкрити Detour",
+    lock: "Заблокувати",
+    quit: "Вийти з Detour",
+    unlocked: "Розблоковано",
+    locked: "Заблоковано",
+    sessions: (n: number) => `${n} ${plural(n, { one: "сеанс", few: "сеанси", many: "сеансів" })}`,
+    tunnels: (n: number) => `${n} ${plural(n, { one: "тунель", few: "тунелі", many: "тунелів" })}`,
+  },
+  trustTerminal: {
+    title: "Термінал просить доступ до Detour",
+    shell: (shell: string, host: string | null, pid: number) => (host ? `${shell} на ${host} (PID ${pid})` : `${shell} (PID ${pid})`),
+    allow: "Дозволити",
+    deny: "Відхилити",
+  },
+  palette: {
+    title: "Швидке підключення",
+    placeholder: "Хост, адреса або розділ",
+    pickHost: "Який хост відкрити поруч",
+    nothingFound: "Нічого не знайдено",
+    hosts: "Хости",
+    goTo: "Перейти",
+    lock: "Заблокувати",
+  },
+  lock: {
+    setupTitle: "Майстер-пароль",
+    lockedTitle: "Detour заблоковано",
+    newPassword: "Новий майстер-пароль",
+    password: "Майстер-пароль",
+    repeat: "Ще раз",
+    minLength: (n: number) => `Щонайменше ${n} ${plural(n, { one: "символ", few: "символи", many: "символів" })}`,
+    mismatch: "Паролі не збігаються",
+    noRecovery: "Забутий майстер-пароль відновити неможливо.",
+    create: "Створити сховище",
+    unlock: "Розблокувати",
+  },
+};
+
+export default uk;

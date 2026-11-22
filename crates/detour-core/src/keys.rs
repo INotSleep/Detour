@@ -68,6 +68,10 @@ pub fn generate(name: &str, algorithm: KeyAlgorithm, passphrase: Option<&str>, r
 
 /// Does this private key text need a passphrase to be read?
 pub fn is_encrypted(text: &str) -> bool {
+    // PuTTY: `Encryption: none` or `aes256-cbc`.
+    if text.contains("PuTTY-User-Key-File") {
+        return text.lines().find_map(|l| l.strip_prefix("Encryption:")).is_some_and(|e| e.trim() != "none");
+    }
     match PrivateKey::from_openssh(text.trim()) {
         Ok(k) => k.is_encrypted(),
         // Legacy PEM formats mark encryption in their headers.
@@ -75,14 +79,11 @@ pub fn is_encrypted(text: &str) -> bool {
     }
 }
 
-/// Decrypts any private key format russh understands (OpenSSH, PKCS#1, PKCS#8).
+/// Decrypts any private key format russh understands (OpenSSH, PKCS#1, PKCS#8, PuTTY .ppk).
 fn decode(text: &str, passphrase: Option<&str>) -> Result<PrivateKey> {
     let text = text.trim();
     if text.starts_with("ssh-") || text.starts_with("ecdsa-") {
         return Err(invalid("this is a public key, a private key is needed"));
-    }
-    if text.contains("PuTTY-User-Key-File") {
-        return Err(invalid("PuTTY format: export the key as OpenSSH first"));
     }
     if is_encrypted(text) && passphrase.is_none_or(str::is_empty) {
         return Err(Error::PassphraseRequired);
@@ -102,6 +103,10 @@ pub fn import(name: &str, text: &str, passphrase: Option<&str>, remember: bool) 
 /// Takes an OpenSSH key still encrypted with its passphrase, as it is: its public
 /// half is readable without it, and the passphrase is asked when the key is used.
 pub fn import_locked(name: &str, text: &str) -> Result<KeyEntry> {
+    // A PuTTY key without a passphrase becomes an OpenSSH one; one with a passphrase needs it now.
+    if text.contains("PuTTY-User-Key-File") {
+        return import(name, text, None, false);
+    }
     let key = PrivateKey::from_openssh(text.trim()).map_err(|e| invalid(e.to_string()))?;
     if !key.is_encrypted() {
         return import(name, text, None, false);

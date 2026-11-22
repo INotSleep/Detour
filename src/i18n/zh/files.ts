@@ -1,0 +1,77 @@
+// The SFTP file browser. Host key questions come from `terminal.hostKey`.
+import { zh as plural } from "../plural";
+import type en from "../en/files";
+
+const zh: typeof en = {
+  units: ["B", "KB", "MB", "GB", "TB"],
+  perSecond: "/s",
+  bar: {
+    up: "上一级 · Backspace",
+    home: "主目录",
+    refresh: "刷新 · F5",
+    terminalHere: "在此文件夹中打开终端",
+    newFolder: "新建文件夹",
+    uploadFolder: "上传文件夹",
+    upload: "上传",
+  },
+  selected: (n: number) => `已选择 ${n} 项`,
+  select: "选择",
+  download: "下载",
+  downloadTo: (dir: string) => `下载到 ${dir}`,
+  local: {
+    title: "本机",
+    drives: "此电脑",
+    upload: "上传",
+    uploadTo: (dir: string) => `上传到 ${dir}`,
+    trash: "移到回收站",
+    trashed: (what: string) => `已移到回收站：${what}`,
+    hide: "隐藏本机",
+    show: "显示本机",
+  },
+  pick: { title: "连接到主机", search: "主机或地址", nothingFound: "未找到结果", noHosts: "还没有主机" },
+  clearSelection: "取消选择 · Esc",
+  columns: { name: "名称", size: "大小", modified: "修改时间", permissions: "权限" },
+  newFolderName: "新建文件夹",
+  more: "更多",
+  menu: { open: "打开", copyPath: "复制路径", permissions: "权限", edit: "编辑", editIn: "编辑方式…" },
+  items: (n: number) => `${n} ${plural(n, { other: "项" })}`,
+  editor: { title: "编辑方式", other: "其他程序…", remember: "记住选择", open: "打开" },
+  empty: "此文件夹为空",
+  uploadFiles: "上传文件",
+  dropTo: (where: string) => `上传到 ${where}`,
+  modeSet: (name: string, mode: string) => `“${name}”的权限：${mode}`,
+  pathCopied: (path: string) => `已复制：${path}`,
+  confirm: {
+    removeOne: (name: string) => `删除“${name}”？`,
+    removeMany: (n: number) => `删除 ${n} ${plural(n, { other: "项" })}？`,
+    withContents: "文件夹将连同其中的所有内容一起删除",
+    replaceOne: (name: string) => `替换“${name}”？`,
+    replaceMany: (n: number) => `替换 ${n} ${plural(n, { other: "项" })}？`,
+    replace: "替换",
+  },
+  perms: {
+    title: (name: string) => `“${name}”的权限`,
+    owner: "所有者",
+    group: "组",
+    others: "其他人",
+    read: "读取",
+    write: "写入",
+    execute: "执行",
+    octal: "八进制",
+  },
+  transfer: {
+    amount: (done: string, total: string) => `${done} / ${total}`,
+    uploaded: "已上传",
+    downloaded: "已下载",
+    removed: "已删除",
+    cancel: "取消",
+    dismiss: "关闭",
+  },
+  gate: {
+    passphrase: "密钥密码短语",
+    password: (login: string) => `${login} 的密码`,
+    remember: "保存到保险库",
+  },
+};
+
+export default zh;

@@ -1,0 +1,65 @@
+import { zh as plural } from "../plural";
+import type en from "../en/keys";
+
+const zh: typeof en = {
+  title: "密钥",
+  import: "导入",
+  createKey: "创建密钥",
+  empty: "没有密钥",
+  more: "更多",
+  restore: "撤销",
+  passphraseSaved: "密码短语已保存",
+  withPassphrase: "密码短语",
+  copyPublic: "复制公钥",
+  savePublic: "保存公钥",
+  exportPrivate: "导出私钥",
+  changePassphrase: "更改密码短语",
+  setPassphrase: "设置密码短语",
+  publicCopied: (name: string) => `已复制“${name}”的公钥`,
+  saved: (where: string) => `已保存：${where}`,
+  removed: (name: string) => `已删除密钥“${name}”`,
+  deleteConfirm: {
+    title: (name: string) => `删除“${name}”？`,
+    body: (n: number) => `${n} ${plural(n, { other: "个主机" })}使用此密钥，删除后将无法连接。`,
+  },
+  passphrase: "密码短语",
+  savePassphrase: "将密码短语保存到保险库",
+  noPassphrase: "无密码短语",
+  name: "名称",
+  create: {
+    title: "新建密钥",
+    type: "类型",
+    created: (name: string) => `已创建密钥“${name}”`,
+    copyPublic: "复制公钥",
+  },
+  importDialog: {
+    title: "导入密钥",
+    fileTooBig: "文件太大，不可能是密钥",
+    imported: (name: string) => `已导入密钥“${name}”`,
+    passphraseRequired: "该密钥有密码短语：请输入",
+    chooseFile: "选择文件",
+    orDrop: "或将文件拖到这里",
+    detected: (format: string) => `${format} 密钥`,
+    passphrasePlaceholder: "如果密钥有密码短语",
+  },
+  export: {
+    title: (name: string) => `导出“${name}”`,
+    saveFile: "保存文件",
+    keepsPassphrase: "文件将使用该密钥当前的密码短语保护。",
+    filePassphrase: "文件密码短语",
+  },
+  passphraseDialog: {
+    title: (name: string) => `“${name}”的密码短语`,
+    removed: "已移除密码短语",
+    changed: "已更改密码短语",
+    wrongCurrent: "当前密码短语错误",
+    remove: "移除密码短语",
+    current: "当前密码短语",
+    next: "新密码短语",
+    emptyRemoves: "留空即移除",
+    repeat: "确认",
+    mismatch: "两次输入的密码短语不一致",
+  },
+};
+
+export default zh;

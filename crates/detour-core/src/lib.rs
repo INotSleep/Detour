@@ -9,6 +9,7 @@ pub mod agent;
 pub mod bundle;
 pub mod drive;
 pub mod export;
+pub mod foreign;
 pub mod github;
 pub mod identity;
 pub mod import;
@@ -127,6 +128,9 @@ pub enum Error {
     WrongFilePassword,
     #[error("this is not a Detour file")]
     NotADetourFile,
+    /// A list to import from has no column with host addresses.
+    #[error("no column with host addresses")]
+    NoAddressColumn,
     /// The key this device logs in to a repository with (sync or a team's): not to be deleted.
     #[error("this key logs in to a repository")]
     KeyInUse,

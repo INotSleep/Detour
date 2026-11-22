@@ -3,7 +3,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import "@xterm/xterm/css/xterm.css";
-import { ChevronDown, ChevronUp, ClipboardPaste, Columns2, Copy, Rows2, Search, ShieldAlert, ShieldQuestion, X } from "lucide-react";
+import { AppWindow, ChevronDown, ChevronUp, ClipboardPaste, Columns2, Copy, Rows2, Search, ShieldAlert, ShieldQuestion, X } from "lucide-react";
 import type { Host } from "../lib/types";
 import { terminalColors } from "../lib/themes";
 import { runFakeSession, type SessionSecret, type SessionStatus } from "../lib/fakeShell";
@@ -11,11 +11,13 @@ import { runRealSession, type HostKeyAnswer, type HostKeyQuestion } from "../lib
 import { api, errorText, type SecretKind } from "../lib/api";
 import { mockSecrets } from "../lib/mockData";
 import { shortcutKey, useStore } from "../lib/store";
+import { comboLabel, hit, keysOf } from "../lib/shortcuts";
+import { movingPanes, paneSession, type Side, type SplitDir } from "../lib/panes";
 import { loginUser } from "../lib/groups";
 import { tr, useT } from "../i18n";
 import { Button, IconButton } from "./ui";
 
-export type SplitDir = "row" | "col";
+export type { SplitDir };
 
 interface Props {
   host: Host;
@@ -25,10 +27,14 @@ interface Props {
   attach?: string;
   onStatus: (s: SessionStatus) => void;
   onExit: () => void;
-  /** Splits the tab, opening another session to this host beside or below. */
-  onSplit?: (dir: SplitDir) => void;
-  /** The ways this pane may split: a tab already split one way only adds panes that way. */
-  splitDirs?: SplitDir[];
+  /** The pane this terminal is, for showing its session again when the pane moves. */
+  paneId?: string;
+  /** Splits the pane, opening another session beside or below: to this host, or to one chosen (`other`). */
+  onSplit?: (dir: SplitDir, other: boolean) => void;
+  /** Focus goes to the pane on that side. */
+  onMoveFocus?: (side: Side) => void;
+  /** Takes the pane out into a tab of its own. */
+  onDetach?: () => void;
   /** Keys typed here go to this pane. */
   onFocus?: () => void;
 }
@@ -42,7 +48,7 @@ const SEARCH_COLORS = {
   activeMatchColorOverviewRuler: "#e5a54b",
 };
 
-export function TerminalView({ host, active, initialCommand, attach, onStatus, onExit, onSplit, splitDirs = ["row", "col"], onFocus }: Props) {
+export function TerminalView({ host, paneId, active, initialCommand, attach, onStatus, onExit, onSplit, onMoveFocus, onDetach, onFocus }: Props) {
   const { settings, themes, ws, update, toast, applyTeamView } = useStore();
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -51,8 +57,8 @@ export function TerminalView({ host, active, initialCommand, attach, onStatus, o
   const [question, setQuestion] = useState<Question | null>(null);
   const [searching, setSearching] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
-  const cb = useRef({ onStatus, onExit, onSplit, splitDirs, clipboard: settings.clipboard, highlight: settings.highlight });
-  cb.current = { onStatus, onExit, onSplit, splitDirs, clipboard: settings.clipboard, highlight: settings.highlight };
+  const cb = useRef({ onStatus, onExit, onSplit, onMoveFocus, clipboard: settings.clipboard, highlight: settings.highlight });
+  cb.current = { onStatus, onExit, onSplit, onMoveFocus, clipboard: settings.clipboard, highlight: settings.highlight };
 
   const copySelection = async () => {
     const term = termRef.current;
@@ -91,34 +97,30 @@ export function TerminalView({ host, active, initialCommand, attach, onStatus, o
     fitRef.current = fit;
     searchRef.current = search;
 
-    // Ctrl+Shift+C and Ctrl+Shift+V copy and paste either way. As in a system terminal, Ctrl+C
-    // also copies a selection (and interrupts without one) and Ctrl+V pastes; as in Termius,
-    // those two go to the server.
+    // The copy and paste shortcuts (Ctrl+Shift+C and V) work either way. As in a system
+    // terminal, Ctrl+C also copies a selection (and interrupts without one) and Ctrl+V pastes;
+    // as in Termius, those two go to the server.
     term.attachCustomKeyEventHandler((e) => {
-      if (e.type !== "keydown" || !(e.ctrlKey || e.metaKey) || e.altKey) return true;
-      const key = shortcutKey(e);
+      if (e.type !== "keydown") return true;
+      const take = (run: () => void) => {
+        // Stops the browser's own paste too, or the text would arrive twice.
+        e.preventDefault();
+        run();
+        return false;
+      };
       const ssh = cb.current.clipboard === "ssh";
-      if (key === "c" && (e.shiftKey || (ssh && term.hasSelection()))) {
-        e.preventDefault();
-        void copySelection();
-        return false;
-      }
-      if (key === "v" && (e.shiftKey || ssh)) {
-        // Stop the browser's own paste, or the text would arrive twice.
-        e.preventDefault();
-        void paste();
-        return false;
-      }
-      if (e.shiftKey && key === "f") {
-        e.preventDefault();
-        setSearching(true);
-        return false;
-      }
-      const splitDir: SplitDir = key === "d" ? "row" : "col";
-      if (e.shiftKey && (key === "d" || key === "e") && cb.current.onSplit && cb.current.splitDirs.includes(splitDir)) {
-        e.preventDefault();
-        cb.current.onSplit(splitDir);
-        return false;
+      const plain = (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey;
+      if (hit(e, "copy") || (ssh && plain && shortcutKey(e) === "c" && term.hasSelection())) return take(() => void copySelection());
+      if (hit(e, "paste") || (ssh && plain && shortcutKey(e) === "v")) return take(() => void paste());
+      if (hit(e, "find")) return take(() => setSearching(true));
+      const split = cb.current.onSplit;
+      if (split && hit(e, "splitRight")) return take(() => split("row", false));
+      if (split && hit(e, "splitDown")) return take(() => split("col", false));
+      const focus = cb.current.onMoveFocus;
+      if (focus) {
+        for (const [id, side] of [["focusLeft", "left"], ["focusRight", "right"], ["focusUp", "top"], ["focusDown", "bottom"]] as const) {
+          if (hit(e, id)) return take(() => focus(side));
+        }
       }
       return true;
     });
@@ -153,7 +155,7 @@ export function TerminalView({ host, active, initialCommand, attach, onStatus, o
       });
     };
 
-    let stop: () => void;
+    let stop: (keep?: boolean) => void;
     // Shown as `user@address` while connecting: the user it logs in as.
     const shown = { ...host, user: loginUser(ws, host) };
     if (api.usesCore(host.vaultId)) {
@@ -169,6 +171,7 @@ export function TerminalView({ host, active, initialCommand, attach, onStatus, o
         onExit: () => cb.current.onExit(),
         onSecret: offerSave,
         highlight: () => cb.current.highlight,
+        onSession: (id) => paneId && paneSession.set(paneId, id),
         askHostKey: (q) => new Promise<HostKeyAnswer>((resolve) => setQuestion({ ...q, answer: (a) => { setQuestion(null); term.focus(); resolve(a); } })),
       });
     } else {
@@ -199,7 +202,9 @@ export function TerminalView({ host, active, initialCommand, attach, onStatus, o
 
     return () => {
       clearTimeout(settle);
-      stop();
+      // A pane on its way elsewhere leaves the session open for its new place.
+      stop(!!paneId && movingPanes.delete(paneId));
+      if (paneId) paneSession.delete(paneId);
       ro.disconnect();
       term.dispose();
     };
@@ -232,7 +237,8 @@ export function TerminalView({ host, active, initialCommand, attach, onStatus, o
 
   const onContextMenu = async (e: React.MouseEvent) => {
     e.preventDefault();
-    if (cb.current.clipboard === "ssh") {
+    // With Ctrl the menu opens either way, as in PuTTY.
+    if (cb.current.clipboard === "ssh" && !(e.ctrlKey || e.metaKey)) {
       // As in Windows Terminal and PuTTY: copy a selection, otherwise paste.
       if (!(await copySelection())) await paste();
       return;
@@ -257,8 +263,8 @@ export function TerminalView({ host, active, initialCommand, attach, onStatus, o
         <TerminalMenu
           at={menu}
           canCopy={!!termRef.current?.hasSelection()}
-          splitDirs={onSplit ? splitDirs : []}
-          shortcuts={settings.clipboard === "ssh" ? ["Ctrl C", "Ctrl V"] : ["Ctrl Shift C", "Ctrl Shift V"]}
+          canSplit={!!onSplit}
+          shortcuts={settings.clipboard === "ssh" ? [comboLabel("Mod+C"), comboLabel("Mod+V")] : [keysOf("copy"), keysOf("paste")]}
           onClose={() => {
             setMenu(null);
             termRef.current?.focus();
@@ -266,7 +272,8 @@ export function TerminalView({ host, active, initialCommand, attach, onStatus, o
           onCopy={() => void copySelection()}
           onPaste={() => void paste()}
           onSearch={() => setSearching(true)}
-          onSplit={(dir) => onSplit?.(dir)}
+          onSplit={(dir, other) => onSplit?.(dir, other)}
+          onDetach={onDetach}
         />
       )}
       {question && <HostKeyCard host={ws.hosts.find((h) => h.id === question.via) ?? host} question={question} />}
@@ -327,24 +334,26 @@ function SearchBar({ search, onClose }: { search: SearchAddon; onClose: () => vo
 function TerminalMenu({
   at,
   canCopy,
-  splitDirs,
+  canSplit,
   shortcuts,
   onClose,
   onCopy,
   onPaste,
   onSearch,
   onSplit,
+  onDetach,
 }: {
   at: { x: number; y: number };
   canCopy: boolean;
-  splitDirs: SplitDir[];
+  canSplit: boolean;
   /** How copying and pasting are typed, to show beside them. */
   shortcuts: [string, string];
   onClose: () => void;
   onCopy: () => void;
   onPaste: () => void;
   onSearch: () => void;
-  onSplit: (dir: SplitDir) => void;
+  onSplit: (dir: SplitDir, other: boolean) => void;
+  onDetach?: () => void;
 }) {
   const t = useT();
   const ref = useRef<HTMLDivElement>(null);
@@ -381,9 +390,22 @@ function TerminalMenu({
     <div ref={ref} className="menu term-menu" role="menu" style={{ top: pos.y, left: pos.x }} onMouseDown={(e) => e.stopPropagation()}>
       {item(t.common.copy, Copy, shortcuts[0], onCopy, !canCopy)}
       {item(t.common.paste, ClipboardPaste, shortcuts[1], onPaste)}
-      {item(t.terminal.menu.find, Search, "Ctrl Shift F", onSearch)}
-      {splitDirs.includes("row") && item(t.terminal.menu.splitRight, Columns2, "Ctrl Shift D", () => onSplit("row"))}
-      {splitDirs.includes("col") && item(t.terminal.menu.splitDown, Rows2, "Ctrl Shift E", () => onSplit("col"))}
+      {item(t.terminal.menu.find, Search, keysOf("find"), onSearch)}
+      {canSplit && (
+        <>
+          <div className="menu-sep" />
+          {item(t.terminal.menu.splitRight, Columns2, keysOf("splitRight"), () => onSplit("row", false))}
+          {item(t.terminal.menu.splitDown, Rows2, keysOf("splitDown"), () => onSplit("col", false))}
+          {item(t.terminal.menu.splitRightWith, Columns2, "", () => onSplit("row", true))}
+          {item(t.terminal.menu.splitDownWith, Rows2, "", () => onSplit("col", true))}
+        </>
+      )}
+      {onDetach && (
+        <>
+          <div className="menu-sep" />
+          {item(t.terminal.menu.toTab, AppWindow, "", onDetach)}
+        </>
+      )}
     </div>
   );
 }

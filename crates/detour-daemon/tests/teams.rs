@@ -137,3 +137,42 @@ async fn team_flow_over_the_socket() {
     let err = alice.call("team_inspect", json!({ "path": std::env::temp_dir().join("detour-core-missing").display().to_string() })).await.unwrap_err();
     assert!(err["kind"] == "notATeamVault" || err["kind"] == "io", "{err}");
 }
+
+#[tokio::test]
+async fn history_and_going_back_over_the_socket() {
+    let me = client(&start("history").await).await;
+    ok(&me, "vault_create", json!({ "masterPassword": "master" })).await;
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let shared = std::env::temp_dir().join(format!("detour-core-history-{}-{nanos}", std::process::id()));
+    let recovery = ok(&me, "recovery_key_new", json!({})).await;
+    let team = ok(&me, "team_create", json!({ "path": shared.display().to_string(), "name": "Acme", "myName": "Me", "recoveryKey": recovery })).await;
+    let id = team["id"].as_str().unwrap().to_string();
+    let h = |label: &str, address: &str| json!({ "id": "h1", "group": "", "label": label, "address": address, "port": 22, "user": "root", "auth": { "type": "agent" }, "tags": [], "hasPassword": false });
+    let with = |hosts: Vec<Value>| json!({ "hosts": hosts, "keys": [], "snippets": [], "tunnels": [] });
+
+    ok(&me, "team_put", json!({ "id": id, "update": with(vec![h("web", "10.0.0.1")]) })).await;
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    ok(&me, "team_put", json!({ "id": id, "update": with(vec![h("web", "10.0.0.2")]) })).await;
+
+    let log = ok(&me, "team_log", json!({ "id": id })).await;
+    let last = log.as_array().unwrap().last().unwrap().clone();
+    assert_eq!(last["changes"][0]["kind"], "changed");
+    assert_eq!(last["changes"][0]["fields"]["address"], "10.0.0.2");
+    assert_eq!(ok(&me, "team_history", json!({ "id": id, "record": "h1" })).await.as_array().unwrap().len(), 2);
+
+    // The same JSON as the app: plan, go back, then undo going back.
+    let to = json!({ "kind": "undo", "entry": last["entry"] });
+    let plan = ok(&me, "team_rollback_plan", json!({ "id": id, "to": to })).await;
+    assert_eq!(plan["items"][0]["action"], "change");
+    assert_eq!(plan["items"][0]["fields"][0]["to"], "10.0.0.1");
+    let r = ok(&me, "team_rollback", json!({ "id": id, "to": to })).await;
+    assert_eq!(r["view"]["data"]["hosts"][0]["address"], "10.0.0.1");
+    assert_eq!(r["done"]["applied"], 1);
+
+    ok(&me, "team_put", json!({ "id": id, "update": with(vec![]) })).await;
+    let deleted = ok(&me, "team_deleted", json!({ "id": id })).await;
+    assert_eq!(deleted[0]["name"], "web");
+    assert_eq!(deleted[0]["isYou"], true);
+    let r = ok(&me, "team_rollback", json!({ "id": id, "to": { "kind": "restore", "record": "h1" } })).await;
+    assert_eq!(r["view"]["data"]["hosts"][0]["label"], "web");
+}

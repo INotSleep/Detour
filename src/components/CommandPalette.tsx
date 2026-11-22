@@ -21,7 +21,8 @@ const goItems: { icon: LucideIcon; section: Exclude<Section, "hosts"> }[] = [
   { icon: Settings, section: "settings" },
 ];
 
-export function CommandPalette({ onClose }: { onClose: () => void }) {
+/** Ctrl+K: hosts to connect to and places to go. With `onPickHost`, only hosts, and the one chosen goes there. */
+export function CommandPalette({ onClose, onPickHost }: { onClose: () => void; onPickHost?: (hostId: string) => void }) {
   const { ws, vault, connect, navigate, lock } = useStore();
   const t = useT().app;
   const [q, setQ] = useState("");
@@ -40,8 +41,8 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
       .filter((g) => match(g.label))
       .map<Item>((g) => ({ kind: "go", id: g.section, ...g }));
     const actions: Item[] = api.real && match(t.palette.lock) ? [{ kind: "lock", id: "lock", label: t.palette.lock, icon: Lock }] : [];
-    return [...hosts, ...go, ...actions];
-  }, [q, ws, vault.id, vault.kind, t]);
+    return onPickHost ? hosts : [...hosts, ...go, ...actions];
+  }, [q, ws, vault.id, vault.kind, t, onPickHost]);
 
   useEffect(() => setIndex(0), [q]);
 
@@ -52,7 +53,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
   const run = (it: Item | undefined) => {
     if (!it) return;
     onClose();
-    if (it.kind === "host") connect(it.host.id);
+    if (it.kind === "host") (onPickHost ?? connect)(it.host.id);
     else if (it.kind === "go") navigate(it.section);
     else void lock();
   };
@@ -67,7 +68,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           <input
             autoFocus
             value={q}
-            placeholder={t.palette.placeholder}
+            placeholder={onPickHost ? t.palette.pickHost : t.palette.placeholder}
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "ArrowDown") {

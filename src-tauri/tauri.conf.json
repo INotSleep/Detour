@@ -14,6 +14,7 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "Detour",
         "width": 1280,
         "height": 800,

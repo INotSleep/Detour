@@ -63,7 +63,7 @@ impl Coll {
         self.secret_fields().contains(&field)
     }
 
-    fn name_field(self) -> &'static str {
+    pub fn name_field(self) -> &'static str {
         match self {
             Coll::Host => "label",
             Coll::KnownHost => "endpoint",
@@ -494,6 +494,19 @@ pub fn replay(v: &Verified, root: &str, me: &Identity, drops: &mut DropCache) ->
         let st = replay_once(v, root, me, drops, &excluded);
         if st.exclude.is_subset(&excluded) {
             return (st, Replayed { order: v.entries.iter().map(|e| e.hash.clone()).collect(), excluded, verify_problems: v.problems.len() });
+        }
+        excluded.extend(st.exclude);
+    }
+}
+
+/// Rebuilds state as if the entries in `skip` had never been written, for looking back.
+/// Keys they hand over still count, so later entries stay readable.
+pub fn replay_without(v: &Verified, root: &str, me: &Identity, drops: &mut DropCache, skip: &HashSet<String>) -> State {
+    let mut excluded = skip.clone();
+    loop {
+        let st = replay_once(v, root, me, drops, &excluded);
+        if st.exclude.is_subset(&excluded) {
+            return st;
         }
         excluded.extend(st.exclude);
     }

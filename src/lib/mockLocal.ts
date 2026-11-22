@@ -69,6 +69,11 @@ export const mockLocal = {
     parent.children.set(path.slice(i + 1), dir({}, 0));
   },
 
+  remove(path: string) {
+    const i = path.lastIndexOf("\\");
+    find(path.slice(0, i + 1 === 3 ? 3 : i))?.children?.delete(path.slice(i + 1));
+  },
+
   /** Something downloaded into `dirPath`, under a name not taken there. Returns its path. */
   add(dirPath: string, name: string, size: number): string {
     const parent = find(dirPath);

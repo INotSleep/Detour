@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { Code, Download, Ellipsis, Lock, Pencil, Play, Plus, RefreshCw, Trash2 } from "lucide-react";
-import { locale, useT } from "../i18n";
+import { languages, locale, useT } from "../i18n";
 import { api, errorText, isCoreError } from "../lib/api";
 import { uid, useStore } from "../lib/store";
 import { atLeast, writable } from "../lib/teams";
+import { ShortcutsSetting } from "./Shortcuts";
 import type { Snippet } from "../lib/types";
 import { Button, Empty, Field, IconButton, Menu, Modal, PageHeader, PasswordInput, Segmented, Switch } from "./ui";
 import { AgentsSettings, McpClients } from "./Agents";
@@ -140,7 +141,10 @@ export function SettingsView() {
         <ThemeSetting kind="app" />
         <div className="setting">
           <span>{t.language}</span>
-          <Segmented value={settings.language} onChange={(language) => setSettings({ language })} options={[{ value: "system", label: t.languages.system }, { value: "en", label: t.languages.en }, { value: "ru", label: t.languages.ru }]} />
+          <select className="input input-sm" value={settings.language} onChange={(e) => setSettings({ language: e.target.value })}>
+            <option value="system">{t.languageSystem}</option>
+            {languages().map((l) => <option key={l.code} value={l.code}>{l.name}</option>)}
+          </select>
         </div>
       </section>
 
@@ -176,6 +180,8 @@ export function SettingsView() {
           <EditorSetting />
         </div>
       </section>
+
+      <ShortcutsSetting />
 
       <SyncSettings />
 

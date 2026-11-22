@@ -772,6 +772,31 @@ impl Store {
         self.after_team(id)
     }
 
+    /// Every entry of a team that changed something this person can read, oldest first.
+    pub fn team_log(&self, id: &str) -> Result<Vec<crate::team::history::LogEntryView>> {
+        self.team(id)?.log()
+    }
+
+    /// The versions of one record of a team.
+    pub fn team_history(&self, id: &str, record: &str) -> Result<Vec<crate::team::history::LogEntryView>> {
+        self.team(id)?.history(record)
+    }
+
+    pub fn team_deleted(&self, id: &str) -> Result<Vec<crate::team::history::DeletedView>> {
+        Ok(self.team(id)?.deleted())
+    }
+
+    /// What going back would change in a team.
+    pub fn team_rollback_plan(&self, id: &str, to: &crate::team::history::Rollback) -> Result<crate::team::history::RollbackPlan> {
+        self.team(id)?.rollback_plan(to)
+    }
+
+    /// Goes back in a team: one new entry puts the records this person may edit as they were.
+    pub fn team_rollback(&mut self, id: &str, to: &crate::team::history::Rollback) -> Result<(TeamView, crate::team::history::RollbackDone)> {
+        let done = self.team_mut(id)?.rollback(to)?;
+        Ok((self.after_team(id)?, done))
+    }
+
     /// Sets (or with `None` removes) this person's own login for a team host.
     /// This person's own grouping of a team's hosts; `None` drops it.
     pub fn layout_set(&mut self, id: &str, layout: Option<Layout>) -> Result<TeamView> {
@@ -1888,6 +1913,173 @@ impl Store {
     pub fn ssh_import(&mut self, aliases: &[String], known_hosts: bool) -> Result<ImportResult> {
         let ssh = crate::import::ssh_dir().ok_or_else(|| not_found("home folder"))?;
         self.ssh_import_from(&ssh, aliases, known_hosts)
+    }
+}
+
+/* ---------- other SSH clients ---------- */
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForeignView {
+    #[serde(flatten)]
+    pub host: crate::foreign::ForeignHost,
+    /// The same host (address, port and user, or name) is in the vault already.
+    pub exists: bool,
+    /// Its key file can't be read, or needs a passphrase: it would log in with ssh-agent.
+    pub key_missing: bool,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForeignPreview {
+    pub source: String,
+    pub hosts: Vec<ForeignView>,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForeignResult {
+    pub hosts: usize,
+    pub keys: usize,
+    pub tunnels: usize,
+}
+
+/// A key file another client points at, as a key of this vault: OpenSSH or PuTTY, without a
+/// passphrase or (OpenSSH) kept locked with it. None when it can't be read.
+fn key_from_file(file: &str) -> Option<crate::model::KeyEntry> {
+    let text = std::fs::read(file).ok().map(|b| crate::foreign::decode_text(&b))?;
+    let name = Path::new(file).file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "imported-key".into());
+    keys::import_locked(&name, &text).ok()
+}
+
+impl Store {
+    /// What another client keeps (at `path`, or where it keeps it), against this vault.
+    pub fn foreign_preview(&self, client: crate::foreign::Client, path: Option<&Path>) -> Result<ForeignPreview> {
+        let v = &self.unlocked()?.vault;
+        let found = crate::foreign::read(client, path)?;
+        let hosts = found
+            .hosts
+            .into_iter()
+            .map(|h| ForeignView {
+                exists: Self::same_host(v, &h.label, &h.address, h.port, &h.user).is_some(),
+                key_missing: h.key_file.as_deref().is_some_and(|f| key_from_file(f).is_none()),
+                host: h,
+            })
+            .collect();
+        Ok(ForeignPreview { source: found.source, hosts })
+    }
+
+    /// Brings in the chosen hosts of another client, with their keys, the hosts they go
+    /// through and their port forwards. Hosts already here are skipped.
+    pub fn foreign_import(&mut self, client: crate::foreign::Client, path: Option<&Path>, chosen: &[String]) -> Result<ForeignResult> {
+        use crate::foreign::ForeignProxy;
+        let found = crate::foreign::read(client, path)?.hosts;
+        let mut result = ForeignResult { hosts: 0, keys: 0, tunnels: 0 };
+        let mut ids: HashMap<String, String> = HashMap::new();
+        let mut created: Vec<String> = Vec::new();
+        let mut queue: Vec<String> = chosen.to_vec();
+        let mut done: Vec<String> = Vec::new();
+        while let Some(key) = queue.pop() {
+            if done.contains(&key) {
+                continue;
+            }
+            done.push(key.clone());
+            let Some(h) = found.iter().find(|h| h.key == key).cloned() else { continue };
+            if let Some(id) = Self::same_host(&self.unlocked()?.vault, &h.label, &h.address, h.port, &h.user) {
+                ids.insert(key, id);
+                continue;
+            }
+            // A host of the list it goes through comes along.
+            if let Some(hop) = h.jump.as_ref().and_then(|j| j.key.clone())
+                && !done.contains(&hop)
+            {
+                queue.push(hop);
+            }
+            let auth = match h.key_file.as_deref().and_then(key_from_file) {
+                Some(entry) => {
+                    let v = self.vault_mut()?;
+                    let id = match v.keys.iter().find(|k| k.fingerprint == entry.fingerprint) {
+                        Some(k) => k.id.clone(),
+                        None => {
+                            let id = entry.id.clone();
+                            v.keys.push(entry);
+                            result.keys += 1;
+                            id
+                        }
+                    };
+                    Auth::Key { key_id: id }
+                }
+                None if h.password.is_some() => Auth::Password,
+                None => Auth::Agent,
+            };
+            let proxy = h.proxy.as_ref().map(|p| match p.clone() {
+                ForeignProxy::Socks5 { address, port, user } => Proxy::Socks5 { address, port, user },
+                ForeignProxy::Http { address, port, user } => Proxy::Http { address, port, user },
+            });
+            let id = crate::new_id();
+            ids.insert(key, id.clone());
+            created.push(id.clone());
+            let group = if h.group.is_empty() { client.name().to_string() } else { h.group.clone() };
+            self.vault_mut()?.hosts.push(Host {
+                id,
+                group,
+                label: h.label.clone(),
+                address: h.address.clone(),
+                port: h.port,
+                user: h.user.clone(),
+                auth,
+                tags: vec![],
+                last_connected: None,
+                password: h.password.clone(),
+                proxy,
+                proxy_password: None,
+                proxy_id: None,
+                forward_agent: false,
+                order: None,
+            });
+            result.hosts += 1;
+        }
+        // Routes and port forwards, once every host has an id.
+        for h in found.iter().filter(|h| done.contains(&h.key)) {
+            let Some(target) = ids.get(&h.key).cloned() else { continue };
+            if !created.contains(&target) {
+                continue;
+            }
+            if let Some(j) = &h.jump {
+                let hop = match j.key.as_ref().and_then(|k| ids.get(k)) {
+                    Some(id) => id.clone(),
+                    None => {
+                        let v = self.vault_mut()?;
+                        match Self::same_host(v, &j.address, &j.address, j.port, &j.user) {
+                            Some(id) => id,
+                            None => {
+                                let id = crate::new_id();
+                                let group = if h.group.is_empty() { client.name().to_string() } else { h.group.clone() };
+                                v.hosts.push(Host { id: id.clone(), group, label: j.address.clone(), address: j.address.clone(), port: j.port, user: j.user.clone(), auth: Auth::Agent, tags: vec![], last_connected: None, password: None, proxy: None, proxy_password: None, proxy_id: None, forward_agent: false, order: None });
+                                result.hosts += 1;
+                                id
+                            }
+                        }
+                    }
+                };
+                if let Some(x) = self.vault_mut()?.hosts.iter_mut().find(|x| x.id == target) {
+                    x.proxy = Some(Proxy::Jump { host_id: hop });
+                }
+            }
+            for t in &h.tunnels {
+                self.vault_mut()?.tunnels.push(crate::model::Tunnel {
+                    id: crate::new_id(),
+                    name: format!("{} {}", h.label, t.bind_port),
+                    kind: t.kind,
+                    bind_port: t.bind_port,
+                    via_host_id: target.clone(),
+                    target: t.target.clone(),
+                });
+                result.tunnels += 1;
+            }
+        }
+        self.save()?;
+        Ok(result)
     }
 }
 

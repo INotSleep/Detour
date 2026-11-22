@@ -5,6 +5,7 @@ import { formatAgo, useStore, type Section } from "../lib/store";
 import type { Vault } from "../lib/types";
 import { VaultAvatar } from "./common";
 import { Kbd } from "./ui";
+import { keysOf } from "../lib/shortcuts";
 import { CreateTeamDialog, JoinTeamDialog } from "./TeamDialogs";
 import { syncErrorText } from "./SyncSettings";
 
@@ -48,10 +49,10 @@ export function Sidebar({ homeActive }: { homeActive: boolean }) {
         </button>
       )}
 
-      <button className="quick" onClick={openPalette} {...tip(`${t.quickConnect} · Ctrl K`)}>
+      <button className="quick" onClick={openPalette} {...tip(keysOf("palette") ? `${t.quickConnect} · ${keysOf("palette")}` : t.quickConnect)}>
         <Search size={14} />
         <span>{t.quickConnect}</span>
-        <Kbd>Ctrl K</Kbd>
+        {keysOf("palette") && <Kbd>{keysOf("palette")}</Kbd>}
       </button>
 
       <nav className="nav">

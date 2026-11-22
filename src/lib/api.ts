@@ -42,7 +42,7 @@ export type CoreError =
   | { kind: "invalidId"; reason: string }
   | { kind: "forbidden" | "notATeamVault" | "folderNotEmpty" | "rootChanged" | "alreadyMember" }
   | { kind: "notASyncVault" | "invalidCode" | "codeExpired" | "syncHasTeams" | "syncExists" }
-  | { kind: "wrongFilePassword" | "notADetourFile" | "newerFile" | "keyInUse" | "repoKeyMissing" }
+  | { kind: "wrongFilePassword" | "notADetourFile" | "noAddressColumn" | "newerFile" | "keyInUse" | "repoKeyMissing" }
   | { kind: "git"; message: string }
   | { kind: "drive"; provider: string; message: string }
   | { kind: "driveSignIn"; provider: string; account?: string }
@@ -92,6 +92,7 @@ export function errorText(e: unknown): string {
     case "codeExpired": return t.codeExpired;
     case "wrongFilePassword": return t.wrongFilePassword;
     case "notADetourFile": return t.notADetourFile;
+    case "noAddressColumn": return t.noAddressColumn;
     case "newerFile": return t.newerFile;
     case "keyInUse": return t.keyInUse;
     case "repoKeyMissing": return t.repoKeyMissing;
@@ -227,6 +228,59 @@ export interface TeamView {
   remote: { url: string; kind?: "git" | DriveProvider; pending: boolean; error: CoreError | null; syncedAt: number | null } | null;
   /** The same for every member who read the same entries. */
   stateFingerprint: string;
+}
+
+/** detour_core::team::history::ChangeView: one thing a log entry changed. */
+export interface TeamChange {
+  kind: "created" | "changed" | "deleted" | "restored" | "access" | "teamCreated" | "teamRenamed" | "memberAdded" | "memberChanged" | "memberRemoved";
+  coll: Coll | null;
+  record: string | null;
+  name: string;
+  /** Metadata fields set, with their new values. */
+  fields: Record<string, unknown>;
+  /** Secret fields set: named, never shown. */
+  secrets: string[];
+  member: string | null;
+  level: Level | null;
+}
+
+/** detour_core::team::history::LogEntryView */
+export interface TeamLogEntry {
+  entry: string;
+  at: number;
+  author: string;
+  authorName: string;
+  isYou: boolean;
+  device: string;
+  thisDevice: boolean;
+  changes: TeamChange[];
+}
+
+/** What a team goes back to (detour_core::team::history::Rollback). */
+export type Rollback =
+  | { kind: "at"; at: number }
+  | { kind: "undo"; entry: string }
+  | { kind: "without"; device: string | null; author: string | null; after: number }
+  | { kind: "record"; record: string; entry: string }
+  | { kind: "restore"; record: string };
+
+export interface RollbackItem {
+  coll: Coll;
+  record: string;
+  name: string;
+  action: "restore" | "remove" | "change";
+  /** `from` and `to` are never filled for a secret. */
+  fields: { field: string; secret: boolean; from: unknown; to: unknown }[];
+  allowed: boolean;
+}
+
+export interface DeletedRecord {
+  coll: Coll;
+  record: string;
+  name: string;
+  at: number;
+  authorName: string;
+  isYou: boolean;
 }
 
 /** How to reach a team's Git repository: over SSH a personal key or ssh-agent, over HTTPS a token. */
@@ -383,6 +437,25 @@ export interface FileHost {
   exists: boolean;
 }
 
+/** Another SSH client Detour reads hosts from (detour_core::foreign::Client). */
+export type ForeignClient = "putty" | "kitty" | "mobaxterm" | "securecrt" | "csv" | "sshConfig";
+
+/** A host as another client keeps it, against the personal vault. */
+export interface ForeignHost {
+  key: string;
+  label: string;
+  address: string;
+  port: number;
+  user: string;
+  group: string;
+  keyFile: string | null;
+  hasPassword: boolean;
+  jump: { key: string | null; address: string; port: number; user: string } | null;
+  tunnels: { kind: "local" | "remote" | "dynamic"; bindPort: number; target: string | null }[];
+  exists: boolean;
+  keyMissing: boolean;
+}
+
 export interface ImportPreview {
   configPath: string;
   configFound: boolean;
@@ -468,7 +541,7 @@ function demoKey(vaultId: string, name: string, algorithm: SshKey["algorithm"], 
 /* ---------- the core ---------- */
 
 /** What the window does itself; everything else is a method of the core. */
-const WINDOW_COMMANDS = new Set(["core_info", "core_me", "write_text_file", "local_home", "local_list", "local_mkdir", "open_local", "editors", "open_with", "edit_copy_path", "local_modified", "mcp_clients", "mcp_client_set", "mcp_client_token", "tray_set", "window_show", "cli_status", "cli_install"]);
+const WINDOW_COMMANDS = new Set(["core_info", "core_me", "write_text_file", "local_home", "local_list", "local_mkdir", "local_trash", "open_local", "editors", "open_with", "edit_copy_path", "local_modified", "mcp_clients", "mcp_client_set", "mcp_client_token", "tray_set", "window_show", "cli_status", "cli_install"]);
 
 /**
  * Calls the core with the arguments its method takes. A `Channel` among them becomes
@@ -967,6 +1040,11 @@ export const api = {
   teamMemberRemove: (id: string, member: string): Promise<TeamView> => invoke("team_member_remove", { id, member }),
   teamResolveField: (id: string, coll: string, record: string, field: string, pick: number): Promise<TeamView> => invoke("team_resolve_field", { id, coll, record, field, pick }),
   teamResolveDeleted: (id: string, coll: string, record: string, keep: boolean): Promise<TeamView> => invoke("team_resolve_deleted", { id, coll, record, keep }),
+  teamLog: (id: string): Promise<TeamLogEntry[]> => invoke("team_log", { id }),
+  teamHistory: (id: string, record: string): Promise<TeamLogEntry[]> => invoke("team_history", { id, record }),
+  teamDeleted: (id: string): Promise<DeletedRecord[]> => invoke("team_deleted", { id }),
+  teamRollbackPlan: (id: string, to: Rollback): Promise<{ items: RollbackItem[] }> => invoke("team_rollback_plan", { id, to }),
+  teamRollback: (id: string, to: Rollback): Promise<{ view: TeamView; done: { applied: number; skipped: number; entry: string | null } }> => invoke("team_rollback", { id, to }),
 
   /** Native folder picker; null if cancelled or not in the app window. */
   /** Opens a page in the system browser (only github.com is allowed). */
@@ -1046,6 +1124,15 @@ export const api = {
 
   sshImportPreview: (): Promise<ImportPreview> => invoke("ssh_import_preview"),
   sshImport: (aliases: string[], knownHosts: boolean): Promise<{ hosts: number; keys: number; known: number }> => invoke("ssh_import", { aliases, knownHosts }),
+  /** Hosts another client keeps: at `path` (a file or folder), or where the client keeps them. */
+  foreignPreview: (client: ForeignClient, path: string | null): Promise<{ source: string; hosts: ForeignHost[] }> => invoke("foreign_preview", { client, path }),
+  foreignImport: (client: ForeignClient, path: string | null, keys: string[]): Promise<{ hosts: number; keys: number; tunnels: number }> => invoke("foreign_import", { client, path, keys }),
+  /** A file or folder to import from; null when the person backed out. */
+  async pickImportSource(folder: boolean, extensions?: string[]): Promise<string | null> {
+    if (!real) return folder ? "Sessions" : "hosts.csv";
+    const r = await open({ multiple: false, directory: folder, filters: extensions && !folder ? [{ name: extensions.join(", "), extensions }] : undefined });
+    return typeof r === "string" ? r : null;
+  },
 
   /* personal vault sync */
 
@@ -1218,6 +1305,11 @@ export const api = {
   async localMkdir(path: string): Promise<void> {
     if (real) return invoke("local_mkdir", { path });
     mockLocal.mkdir(path);
+  },
+  /** Moves files and folders on this computer to the system's trash. */
+  async localTrash(paths: string[]): Promise<void> {
+    if (real) return invoke("local_trash", { paths });
+    paths.forEach((p) => mockLocal.remove(p));
   },
   /** Opens a file on this computer with the app the system uses for it. */
   async openLocal(path: string): Promise<void> {

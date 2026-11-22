@@ -20,7 +20,7 @@ pub fn command() -> Command {
 /// A text by its key: "hosts add" for a command, "hosts add --address" or
 /// "hosts add <name>" for its options and arguments.
 fn text(key: &str) -> Option<&'static str> {
-    t().help.iter().find(|(k, _)| *k == key).map(|(_, v)| *v)
+    crate::i18n::help_text(key)
 }
 
 fn localize(mut cmd: Command, path: &str) -> Command {

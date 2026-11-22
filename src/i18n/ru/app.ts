@@ -1,0 +1,78 @@
+// The frame of the app: navigation, tabs, quick connect, lock screen.
+import { ru as plural } from "../plural";
+import type en from "../en/app";
+
+const ru: typeof en = {
+  personal: "Личное",
+  section: { hosts: "Хосты", keys: "Ключи", snippets: "Сниппеты", tunnels: "Туннели", proxies: "Прокси", team: "Команда", teams: "Команды", settings: "Настройки" },
+  quickConnect: "Подключиться",
+  newConnection: "Новое подключение · Ctrl K",
+  newSftp: "Новая вкладка SFTP",
+  crash: {
+    title: "В Detour произошла ошибка",
+    reload: "Перезагрузить окно",
+    copy: "Скопировать ошибку",
+    copied: "Скопировано",
+    openLog: "Открыть журнал",
+  },
+  tabs: {
+    close: "Закрыть",
+    closeOthers: "Закрыть остальные",
+    closeLeft: "Закрыть вкладки слева",
+    closeRight: "Закрыть вкладки справа",
+    closeAll: "Закрыть все",
+  },
+  collapse: "Свернуть меню",
+  expand: "Развернуть меню",
+  sftp: "SFTP",
+  conflictWith: (name: string) => `Конфликт: ${name}`,
+  conflicts: (n: number) => `${n} ${plural(n, { one: "конфликт", few: "конфликта", many: "конфликтов" })}`,
+  resolve: "Решить",
+  conflict: "Конфликт",
+  removedFromTeam: "Вы удалены",
+  waitingToBeAdded: "Ждёт добавления",
+  repoUnreachable: "Нет связи с репозиторием",
+  notSent: "Не отправлено",
+  createTeam: "Создать команду",
+  joinTeam: "Подключить команду",
+  updateAvailable: (version: string) => `Доступна версия ${version}`,
+  update: "Обновить",
+  tray: {
+    open: "Открыть Detour",
+    lock: "Заблокировать",
+    quit: "Выйти из Detour",
+    unlocked: "Разблокирован",
+    locked: "Заблокирован",
+    sessions: (n: number) => `${n} ${plural(n, { one: "сессия", few: "сессии", many: "сессий" })}`,
+    tunnels: (n: number) => `${n} ${plural(n, { one: "туннель", few: "туннеля", many: "туннелей" })}`,
+  },
+  trustTerminal: {
+    title: "Терминал просит доступ к Detour",
+    shell: (shell: string, host: string | null, pid: number) => (host ? `${shell} в ${host} (PID ${pid})` : `${shell} (PID ${pid})`),
+    allow: "Разрешить",
+    deny: "Отклонить",
+  },
+  palette: {
+    title: "Быстрое подключение",
+    placeholder: "Хост, адрес или раздел",
+    pickHost: "Какой хост открыть рядом",
+    nothingFound: "Ничего не найдено",
+    hosts: "Хосты",
+    goTo: "Перейти",
+    lock: "Заблокировать",
+  },
+  lock: {
+    setupTitle: "Мастер-пароль",
+    lockedTitle: "Detour заблокирован",
+    newPassword: "Новый мастер-пароль",
+    password: "Мастер-пароль",
+    repeat: "Ещё раз",
+    minLength: (n: number) => `Минимум ${n} символов`,
+    mismatch: "Пароли не совпадают",
+    noRecovery: "Забытый мастер-пароль восстановить нельзя.",
+    create: "Создать vault",
+    unlock: "Разблокировать",
+  },
+};
+
+export default ru;

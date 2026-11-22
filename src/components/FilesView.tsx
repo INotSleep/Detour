@@ -2,8 +2,10 @@ import { Fragment, isValidElement, memo, startTransition, useCallback, useEffect
 import {
   AppWindow, ArrowDown, ArrowUp, Check, ChevronDown, ChevronUp, Copy, Download, Ellipsis, File, FilePen, FolderOpen, FolderPlus, Folder, House, KeyRound, Link2, Loader2, Pencil, RotateCw, Server, ShieldAlert, ShieldQuestion, SquareTerminal, Trash2, Upload, X,
 } from "lucide-react";
+import { PanelLeftOpen, type LucideIcon } from "lucide-react";
 import { api, errorText, isCoreError, trustMore, type Editor, type FileEntry, type LocalFile, type SecretKind } from "../lib/api";
-import { copyText, shortcutKey, uid, useStore } from "../lib/store";
+import { hit, keysOf } from "../lib/shortcuts";
+import { copyText, uid, useStore } from "../lib/store";
 import { locale, tr, useT } from "../i18n";
 import type { Host } from "../lib/types";
 import { loginUser } from "../lib/groups";
@@ -144,6 +146,8 @@ interface RemoteProps {
   onFolder: (path: string | null) => void;
   handle: React.MutableRefObject<RemoteHandle | null>;
   onDragRows: StartDrag;
+  /** Set while this computer's side is hidden: brings it back. */
+  onShowLocal?: () => void;
 }
 
 /** Where opening the browser stands. */
@@ -265,6 +269,30 @@ export const WindowedRows = memo(function WindowedRows<T extends object>({ list,
     </div>
   );
 }) as <T extends object>(props: { list: React.RefObject<HTMLDivElement | null>; items: T[]; row: (item: T) => ReactNode }) => ReactNode;
+
+/** A row's icon; on hover, and on every row while several are selected, a box that adds it to the selection. */
+export function RowLead({ icon: Icon, kind, checked, onToggle }: { icon: LucideIcon; kind: string; checked: boolean; onToggle: () => void }) {
+  const t = useT().files;
+  return (
+    <span className="files-lead">
+      <Icon size={15} className={`files-icon ${kind}`} />
+      <span
+        role="checkbox"
+        aria-checked={checked}
+        aria-label={t.select}
+        className={`files-check ${checked ? "on" : ""}`}
+        onMouseDown={(ev) => ev.stopPropagation()}
+        onDoubleClick={(ev) => ev.stopPropagation()}
+        onClick={(ev) => {
+          ev.stopPropagation();
+          onToggle();
+        }}
+      >
+        {checked && <Check size={11} strokeWidth={3} />}
+      </span>
+    </span>
+  );
+}
 
 /**
  * A row's buttons, made the first time the pointer comes over the row (or once it is
@@ -414,6 +442,8 @@ function useSplit() {
   return { box, left, width: `${split * 100}%`, start, reset };
 }
 
+const LOCAL_HIDDEN = "detour.files.localHidden";
+
 /** An SFTP tab: this computer on the left, the server on the right (or which host to open). */
 export function FilesView({ host, active, onStatus, onClose, onPickHost }: Props) {
   const [localDir, setLocalDir] = useState<string | null>(null);
@@ -424,14 +454,32 @@ export function FilesView({ host, active, onStatus, onClose, onPickHost }: Props
   const t = useT().files;
   const drag = usePaneDrag((to) => (to === "remote" ? (target ? t.local.uploadTo(target) : null) : localDir ? t.downloadTo(localDir) : null));
   const split = useSplit();
+  // This computer's side can be hidden when only the server matters; remembered on this device.
+  const [localHidden, setLocalHidden] = useState(() => {
+    try {
+      return localStorage.getItem(LOCAL_HIDDEN) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const hideLocal = (on: boolean) => {
+    setLocalHidden(on);
+    try {
+      localStorage.setItem(LOCAL_HIDDEN, on ? "1" : "0");
+    } catch {
+      /* private mode: for this run */
+    }
+  };
+  // Without a server there is nothing to show instead.
+  const hidden = localHidden && !!host;
   return (
     <div className="files">
       {drag.view}
       <div className="files-panes" ref={split.box}>
-        <div className="files-left" ref={split.left} style={{ width: split.width }}>
-          <LocalPane dir={localDir} onDir={setLocalDir} refreshKey={localRefresh} target={target} onUpload={(items) => remote.current?.upload(items)} onDragRows={drag.start("local")} />
+        <div className={`files-left ${hidden ? "hidden" : ""}`} ref={split.left} style={{ width: split.width }}>
+          <LocalPane dir={localDir} onDir={setLocalDir} refreshKey={localRefresh} target={target} onUpload={(items) => remote.current?.upload(items)} onDragRows={drag.start("local")} onHide={host ? () => hideLocal(true) : undefined} />
         </div>
-        <div className="files-divider" onMouseDown={split.start} onDoubleClick={split.reset} />
+        <div className={`files-divider ${hidden ? "hidden" : ""}`} onMouseDown={split.start} onDoubleClick={split.reset} />
         {host ? (
           <RemotePane
             key={host.id}
@@ -444,6 +492,7 @@ export function FilesView({ host, active, onStatus, onClose, onPickHost }: Props
             onFolder={setRemoteDir}
             handle={remote}
             onDragRows={drag.start("remote")}
+            onShowLocal={hidden ? () => hideLocal(false) : undefined}
           />
         ) : (
           <div className="files-pane remote">
@@ -455,7 +504,7 @@ export function FilesView({ host, active, onStatus, onClose, onPickHost }: Props
   );
 }
 
-function RemotePane({ host, active, onStatus, onClose, localDir, onDownloaded, onFolder, handle, onDragRows }: RemoteProps) {
+function RemotePane({ host, active, onStatus, onClose, localDir, onDownloaded, onFolder, handle, onDragRows, onShowLocal }: RemoteProps) {
   const t = useT();
   const { update, toast, applyTeamView, connect: openTerminal, settings } = useStore();
   const [phase, setPhase] = useState<Phase>({ kind: "connecting" });
@@ -555,6 +604,12 @@ function RemotePane({ host, active, onStatus, onClose, localDir, onDownloaded, o
     const b = names.indexOf(name);
     setSel(names.slice(Math.min(a, b), Math.max(a, b) + 1));
     setCursor(name);
+  };
+
+  const toggleRow = (name: string) => {
+    setSel((s) => (s.includes(name) ? s.filter((n) => n !== name) : [...s, name]));
+    setCursor(name);
+    anchor.current = name;
   };
 
   const clickRow = (ev: React.MouseEvent, name: string) => {
@@ -842,23 +897,22 @@ function RemotePane({ host, active, onStatus, onClose, localDir, onDownloaded, o
       else selectOnly(e.name);
       revealRow(listRef.current, sorted.indexOf(e));
     };
-    const ctrl = ev.ctrlKey || ev.metaKey;
     if (ev.key === "ArrowDown") move(i + 1);
     else if (ev.key === "ArrowUp") move(i - 1);
     else if (ev.key === "Home") move(0);
     else if (ev.key === "End") move(sorted.length - 1);
     else if (ev.key === "Enter" && cur) void (picked.length > 1 ? download(picked) : enter(cur));
-    else if (ev.key === "Backspace") void up();
-    else if (ev.key === "Delete" && picked.length) setRemoving(picked);
-    else if (ev.key === "F2" && cur) setRenaming(cur.name);
+    else if (hit(ev, "parentDir")) void up();
+    else if (hit(ev, "removeFile") && picked.length) setRemoving(picked);
+    else if (hit(ev, "rename") && cur) setRenaming(cur.name);
     else if (ev.key === "Escape" && sel.length > 1) selectOnly(cursor);
-    else if (ev.key === "F5") {
+    else if (hit(ev, "refresh")) {
       ev.preventDefault();
       void refresh();
-    } else if (ctrl && shortcutKey(ev) === "a") {
+    } else if (hit(ev, "selectAll")) {
       ev.preventDefault();
       setSel(sorted.map((e) => e.name));
-    } else if (ctrl && shortcutKey(ev) === "l") {
+    } else if (hit(ev, "editPath")) {
       ev.preventDefault();
       setEditingPath(path);
     }
@@ -870,7 +924,7 @@ function RemotePane({ host, active, onStatus, onClose, localDir, onDownloaded, o
     if (many) {
       return [
         { label: t.files.download, icon: Download, onSelect: () => void download(picked) },
-        { label: t.common.delete, icon: Trash2, danger: true, hint: "Del", onSelect: () => setRemoving(picked) },
+        { label: t.common.delete, icon: Trash2, danger: true, hint: keysOf("removeFile"), onSelect: () => setRemoving(picked) },
       ];
     }
     const isFile = e.kind !== "dir";
@@ -882,16 +936,16 @@ function RemotePane({ host, active, onStatus, onClose, localDir, onDownloaded, o
       { label: t.files.menu.copyPath, icon: Copy, onSelect: () => void copyPath(e) },
       ...(e.kind === "dir" ? [{ label: t.files.bar.terminalHere, icon: SquareTerminal, onSelect: () => openTerminal(host.id, cdTo(join(path, e.name))) }] : []),
       { label: t.files.menu.permissions, icon: KeyRound, onSelect: () => setChmodding(e) },
-      { label: t.common.rename, icon: Pencil, hint: "F2", onSelect: () => setRenaming(e.name) },
-      { label: t.common.delete, icon: Trash2, danger: true, hint: "Del", onSelect: () => setRemoving([e]) },
+      { label: t.common.rename, icon: Pencil, hint: keysOf("rename"), onSelect: () => setRenaming(e.name) },
+      { label: t.common.delete, icon: Trash2, danger: true, hint: keysOf("removeFile"), onSelect: () => setRemoving([e]) },
     ];
   };
 
   // The rows are made again only when what they show changes, not on every render of
   // the pane (folding the sidebar, a transfer's progress): a folder can hold thousands.
   // Their handlers reach the pane's latest state through `live` when they run.
-  const live = useRef({ clickRow, enter, onDragRows, download, selectOnly, setMenuAt, rename, rowMenu, picked });
-  live.current = { clickRow, enter, onDragRows, download, selectOnly, setMenuAt, rename, rowMenu, picked };
+  const live = useRef({ clickRow, toggleRow, enter, onDragRows, download, selectOnly, setMenuAt, rename, rowMenu, picked });
+  live.current = { clickRow, toggleRow, enter, onDragRows, download, selectOnly, setMenuAt, rename, rowMenu, picked };
   const renderRow = useCallback(
     (e: FileEntry) => {
       const Icon = e.kind === "dir" ? Folder : e.kind === "link" ? Link2 : File;
@@ -917,7 +971,7 @@ function RemotePane({ host, active, onStatus, onClose, localDir, onDownloaded, o
             live.current.setMenuAt({ x: ev.clientX, y: ev.clientY, entry: e });
           }}
         >
-          <Icon size={15} className={`files-icon ${e.kind}`} />
+          <RowLead icon={Icon} kind={e.kind} checked={isSel} onToggle={() => live.current.toggleRow(e.name)} />
           {renaming === e.name ? (
             <NameInput initial={e.name} onDone={(v) => void live.current.rename(e.name, v ?? e.name)} />
           ) : (
@@ -967,6 +1021,7 @@ function RemotePane({ host, active, onStatus, onClose, localDir, onDownloaded, o
       }}
     >
       <div className="files-bar">
+        {onShowLocal && <IconButton icon={PanelLeftOpen} label={t.files.local.show} onClick={onShowLocal} />}
         <span className="files-side" title={host.label}><Server size={15} /></span>
         <IconButton icon={ArrowUp} label={t.files.bar.up} disabled={path === "/"} onClick={() => void up()} />
         <IconButton icon={House} label={t.files.bar.home} disabled={path === conn.home} onClick={() => void go(conn.home)} />
@@ -1013,7 +1068,7 @@ function RemotePane({ host, active, onStatus, onClose, localDir, onDownloaded, o
         </div>
       )}
 
-      <div className="files-list" ref={listRef} tabIndex={0} onKeyDown={onListKey} role="grid" aria-label={path} aria-multiselectable>
+      <div className={`files-list ${picked.length > 1 ? "multi" : ""}`} ref={listRef} tabIndex={0} onKeyDown={onListKey} role="grid" aria-label={path} aria-multiselectable>
         <div className="files-row files-head" role="row">
           <span />
           <button className="files-sort" onClick={() => toggleSort("name")}>{t.files.columns.name} <SortMark by="name" /></button>

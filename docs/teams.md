@@ -121,6 +121,18 @@ Planned: list what the person could see (hosts, keys, passwords) and offer to ch
 - The same field edited concurrently: the later change (by HLC) wins provisionally, and Detour shows the conflict until someone picks a side; the choice is a new entry.
 - Delete vs. edit: delete wins if the edit happened before it, otherwise it is a conflict.
 
+## History and going back
+
+The logs keep every value a record ever had, so nothing is lost by an edit or a delete. `team/history.rs`
+reads them back: what each entry changed (`detour teams log`, the team's History tab), the versions of one
+record (`detour teams history`, a host's History), the deleted records (`detour teams deleted`).
+
+Going back never rewrites a log. The state to go back to is rebuilt by replaying the logs, either up to a
+time or without some entries (one entry, or a device's or member's entries after a point), and compared with
+the state now; the difference is written as one new entry of the person going back, checked by everyone like
+any other edit. So a rollback is itself in the history and can be undone. Only records this member may edit
+go back, others are listed and left as they are; members, roles and access never go back.
+
 ## Recovery key (mandatory)
 
 Creating a team generates a recovery key. The team is created only after the owner confirms they saved it. The recovery key is an owner with Edit on every record created by an honest client, and can make a new owner if all owners lose their devices.

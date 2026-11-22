@@ -735,7 +735,7 @@ impl Detour {
 
     /* ---------- hosts and access ---------- */
 
-    #[tool(description = "The person's hosts in Detour, with the access you have to each. Never shows passwords or keys.")]
+    #[tool(annotations(read_only_hint = true, destructive_hint = false, open_world_hint = false), description = "The person's hosts in Detour, with the access you have to each. Never shows passwords or keys.")]
     async fn list_hosts(&self) -> Out {
         let hosts = self.core("agent_hosts", json!({})).await.map_err(|e| explain(&e))?;
         let grants = self.grants().await;
@@ -766,7 +766,7 @@ impl Detour {
         Ok(serde_json::to_string_pretty(&list).unwrap_or_default())
     }
 
-    #[tool(description = "Ask the person for access to hosts. They see your name, the hosts, the scopes and your reason, and may \
+    #[tool(annotations(read_only_hint = false, destructive_hint = false), description = "Ask the person for access to hosts. They see your name, the hosts, the scopes and your reason, and may \
         allow less than you asked. Waits up to 100 seconds for the answer; if it is still pending, ask the person to approve it: \
         their answer takes effect by itself, and wait_for_access waits for it.")]
     async fn request_access(&self, Parameters(a): Parameters<RequestAccess>, peer: Peer<RoleServer>) -> Out {
@@ -785,7 +785,7 @@ impl Detour {
         self.access_response(r).await
     }
 
-    #[tool(description = "Wait for the person's answer to a request_access that is still pending (up to 100 seconds).")]
+    #[tool(annotations(read_only_hint = true, destructive_hint = false, open_world_hint = false), description = "Wait for the person's answer to a request_access that is still pending (up to 100 seconds).")]
     async fn wait_for_access(&self, Parameters(a): Parameters<RequestId>) -> Out {
         let pending = self.pending.lock().unwrap().get(&a.request_id).filter(|p| p.live()).cloned();
         if let Some(p) = pending {
@@ -857,14 +857,14 @@ impl Detour {
 
     /* ---------- sessions and commands ---------- */
 
-    #[tool(description = "Open a terminal session on a host. The person sees it as a tab in Detour.")]
+    #[tool(annotations(read_only_hint = false, destructive_hint = false), description = "Open a terminal session on a host. The person sees it as a tab in Detour.")]
     async fn open_session(&self, Parameters(a): Parameters<HostArg>) -> Out {
         let h = self.host(&a.host).await?;
         let (_, id) = self.open(&h).await?;
         Ok(format!("session_id: {id} (on {}). Run commands with run_command.", h.2))
     }
 
-    #[tool(description = "Your open sessions.")]
+    #[tool(annotations(read_only_hint = true, destructive_hint = false, open_world_hint = false), description = "Your open sessions.")]
     async fn list_sessions(&self) -> Out {
         let mut out = Vec::new();
         for g in self.grants().await {
@@ -878,14 +878,14 @@ impl Detour {
         Ok(serde_json::to_string_pretty(&out).unwrap_or_default())
     }
 
-    #[tool(description = "Close a session of yours.")]
+    #[tool(annotations(read_only_hint = false, destructive_hint = false), description = "Close a session of yours.")]
     async fn close_session(&self, Parameters(a): Parameters<SessionArg>) -> Out {
         let token = self.session_token(&a.session_id).await?;
         self.core("agent_session_close", json!({ "token": token, "sessionId": a.session_id })).await.map_err(|e| explain(&e))?;
         Ok("Closed.".into())
     }
 
-    #[tool(description = "Run a shell command on the session's host and get its exit status, stdout and stderr. It runs \
+    #[tool(annotations(read_only_hint = false, destructive_hint = true), description = "Run a shell command on the session's host and get its exit status, stdout and stderr. It runs \
         non-interactively, beside the terminal (not typed into it); the person sees it in the session's tab. Don't run \
         commands that wait for input; use send_input for interactive programs.")]
     async fn run_command(&self, Parameters(a): Parameters<RunCommand>) -> Out {
@@ -893,7 +893,7 @@ impl Detour {
         self.run(&token, &session, &a.command, a.timeout_secs).await
     }
 
-    #[tool(description = "Type into the session's terminal, as the person would: for interactive programs. Read the result with read_screen.")]
+    #[tool(annotations(read_only_hint = false, destructive_hint = true), description = "Type into the session's terminal, as the person would: for interactive programs. Read the result with read_screen.")]
     async fn send_input(&self, Parameters(a): Parameters<SendInput>) -> Out {
         let token = self.session_token(&a.session_id).await?;
         let mut text = a.text;
@@ -904,7 +904,7 @@ impl Detour {
         Ok("Sent.".into())
     }
 
-    #[tool(description = "What the session's terminal shows now, as text.")]
+    #[tool(annotations(read_only_hint = true, destructive_hint = false, open_world_hint = false), description = "What the session's terminal shows now, as text.")]
     async fn read_screen(&self, Parameters(a): Parameters<SessionArg>) -> Out {
         let token = self.session_token(&a.session_id).await?;
         let r = self.core("agent_screen", json!({ "token": token, "sessionId": a.session_id, "bytes": 256 * 1024 })).await.map_err(|e| explain(&e))?;
@@ -918,7 +918,7 @@ impl Detour {
 
     /* ---------- files ---------- */
 
-    #[tool(description = "List a folder on a host.")]
+    #[tool(annotations(read_only_hint = true, destructive_hint = false, open_world_hint = false), description = "List a folder on a host.")]
     async fn list_dir(&self, Parameters(a): Parameters<HostPath>) -> Out {
         let path = a.path.clone();
         let r = self.file_call(&a.host, "files_list", |_, home| json!({ "path": remote(home, &path) })).await?;
@@ -934,7 +934,7 @@ impl Detour {
         Ok(if lines.is_empty() { "(empty)".into() } else { lines.join("\n") })
     }
 
-    #[tool(description = "Read a text file on a host (up to 1 MB).")]
+    #[tool(annotations(read_only_hint = true, destructive_hint = false, open_world_hint = false), description = "Read a text file on a host (up to 1 MB).")]
     async fn read_file(&self, Parameters(a): Parameters<HostPath>) -> Out {
         let local = temp_path();
         let path = a.path.clone();
@@ -958,7 +958,7 @@ impl Detour {
         Ok(String::from_utf8_lossy(&bytes).to_string())
     }
 
-    #[tool(description = "Write a text file on a host, replacing it if it exists.")]
+    #[tool(annotations(read_only_hint = false, destructive_hint = true), description = "Write a text file on a host, replacing it if it exists.")]
     async fn write_file(&self, Parameters(a): Parameters<WriteFile>) -> Out {
         let local = temp_path();
         std::fs::write(&local, a.content.as_bytes()).map_err(|e| e.to_string())?;
@@ -969,42 +969,42 @@ impl Detour {
         Ok("Written.".into())
     }
 
-    #[tool(description = "Download a file or folder from a host to this computer.")]
+    #[tool(annotations(read_only_hint = false, destructive_hint = false), description = "Download a file or folder from a host to this computer.")]
     async fn download(&self, Parameters(a): Parameters<Transfer>) -> Out {
         let (path, local) = (a.remote_path.clone(), absolute(&a.local_path));
         self.file_call(&a.host, "files_download", |_, home| json!({ "remote": remote(home, &path), "local": local, "transfer": detour_core::new_id() })).await?;
         Ok(format!("Downloaded to {}.", absolute(&a.local_path)))
     }
 
-    #[tool(description = "Upload a file or folder from this computer to a host. An existing file there is replaced.")]
+    #[tool(annotations(read_only_hint = false, destructive_hint = true), description = "Upload a file or folder from this computer to a host. An existing file there is replaced.")]
     async fn upload(&self, Parameters(a): Parameters<Transfer>) -> Out {
         let (path, local) = (a.remote_path.clone(), absolute(&a.local_path));
         self.file_call(&a.host, "files_upload", |_, home| json!({ "local": local, "remote": remote(home, &path), "replace": true, "transfer": detour_core::new_id() })).await?;
         Ok("Uploaded.".into())
     }
 
-    #[tool(description = "Create a folder on a host.")]
+    #[tool(annotations(read_only_hint = false, destructive_hint = false), description = "Create a folder on a host.")]
     async fn make_dir(&self, Parameters(a): Parameters<HostPath>) -> Out {
         let path = a.path.clone();
         self.file_call(&a.host, "files_mkdir", |_, home| json!({ "path": remote(home, &path) })).await?;
         Ok("Created.".into())
     }
 
-    #[tool(description = "Rename or move a file or folder on a host.")]
+    #[tool(annotations(read_only_hint = false, destructive_hint = true), description = "Rename or move a file or folder on a host.")]
     async fn rename(&self, Parameters(a): Parameters<Rename>) -> Out {
         let (from, to) = (a.from.clone(), a.to.clone());
         self.file_call(&a.host, "files_rename", |_, home| json!({ "from": remote(home, &from), "to": remote(home, &to) })).await?;
         Ok("Renamed.".into())
     }
 
-    #[tool(description = "Remove a file, or a folder with everything in it, on a host.")]
+    #[tool(annotations(read_only_hint = false, destructive_hint = true), description = "Remove a file, or a folder with everything in it, on a host.")]
     async fn remove(&self, Parameters(a): Parameters<HostPath>) -> Out {
         let path = a.path.clone();
         self.file_call(&a.host, "files_remove", |_, home| json!({ "path": remote(home, &path), "transfer": detour_core::new_id() })).await?;
         Ok("Removed.".into())
     }
 
-    #[tool(description = "Change a file's permissions on a host.")]
+    #[tool(annotations(read_only_hint = false, destructive_hint = true), description = "Change a file's permissions on a host.")]
     async fn chmod(&self, Parameters(a): Parameters<Chmod>) -> Out {
         let mode = u32::from_str_radix(a.mode.trim_start_matches('0'), 8).map_err(|_| format!("{} is not an octal mode like 755.", a.mode))?;
         let path = a.path.clone();
@@ -1054,7 +1054,7 @@ impl Detour {
         Ok(())
     }
 
-    #[tool(description = "The person's saved tunnels and their teams', and whether they run.")]
+    #[tool(annotations(read_only_hint = true, destructive_hint = false, open_world_hint = false), description = "The person's saved tunnels and their teams', and whether they run.")]
     async fn list_tunnels(&self) -> Out {
         let all = self.all_tunnels().await?;
         let status = self.tunnel_states().await;
@@ -1074,19 +1074,19 @@ impl Detour {
         Ok(serde_json::to_string_pretty(&list).unwrap_or_default())
     }
 
-    #[tool(description = "Start a saved tunnel (needs the tunnels scope on its host).")]
+    #[tool(annotations(read_only_hint = false, destructive_hint = false), description = "Start a saved tunnel (needs the tunnels scope on its host).")]
     async fn start_tunnel(&self, Parameters(a): Parameters<NameArg>) -> Out {
         self.tunnel(&a.name, "tunnel_start").await?;
         Ok("Started.".into())
     }
 
-    #[tool(description = "Stop a tunnel you started.")]
+    #[tool(annotations(read_only_hint = false, destructive_hint = false), description = "Stop a tunnel you started.")]
     async fn stop_tunnel(&self, Parameters(a): Parameters<NameArg>) -> Out {
         self.tunnel(&a.name, "tunnel_stop").await?;
         Ok("Stopped.".into())
     }
 
-    #[tool(description = "Save a tunnel through a host (needs vault:edit; for a team's host, one your access reaches): \
+    #[tool(annotations(read_only_hint = false, destructive_hint = false), description = "Save a tunnel through a host (needs vault:edit; for a team's host, one your access reaches): \
         local (ssh -L), remote (ssh -R) or dynamic (SOCKS5, ssh -D).")]
     async fn add_tunnel(&self, Parameters(a): Parameters<AddTunnel>) -> Out {
         let hosts = self.core("agent_hosts", json!({})).await.map_err(|e| explain(&e))?;
@@ -1119,7 +1119,7 @@ impl Detour {
         }
     }
 
-    #[tool(description = "Change a saved tunnel (needs vault:edit; for a team's, through a host your access reaches).")]
+    #[tool(annotations(read_only_hint = false, destructive_hint = true), description = "Change a saved tunnel (needs vault:edit; for a team's, through a host your access reaches).")]
     async fn update_tunnel(&self, Parameters(a): Parameters<UpdateTunnel>) -> Out {
         let all = self.all_tunnels().await?;
         let found = find_tunnel(&all, &a.tunnel)?;
@@ -1159,7 +1159,7 @@ impl Detour {
         Ok("Saved.".into())
     }
 
-    #[tool(description = "Remove a saved tunnel (needs vault:edit; for a team's, through a host your access reaches). A tunnel you started is stopped first.")]
+    #[tool(annotations(read_only_hint = false, destructive_hint = true), description = "Remove a saved tunnel (needs vault:edit; for a team's, through a host your access reaches). A tunnel you started is stopped first.")]
     async fn remove_tunnel(&self, Parameters(a): Parameters<NameArg>) -> Out {
         let all = self.all_tunnels().await?;
         let found = find_tunnel(&all, &a.name)?;
@@ -1173,14 +1173,14 @@ impl Detour {
         Ok("Removed.".into())
     }
 
-    #[tool(description = "The person's saved snippets: named commands.")]
+    #[tool(annotations(read_only_hint = true, destructive_hint = false, open_world_hint = false), description = "The person's saved snippets: named commands.")]
     async fn list_snippets(&self) -> Out {
         let d = self.vault().await?;
         let list: Vec<Value> = d["snippets"].as_array().into_iter().flatten().map(|x| json!({ "name": x["name"], "command": x["command"] })).collect();
         Ok(serde_json::to_string_pretty(&list).unwrap_or_default())
     }
 
-    #[tool(description = "Run a saved snippet in a session, like run_command.")]
+    #[tool(annotations(read_only_hint = false, destructive_hint = true), description = "Run a saved snippet in a session, like run_command.")]
     async fn run_snippet(&self, Parameters(a): Parameters<RunSnippet>) -> Out {
         let d = self.vault().await?;
         let command = d["snippets"].as_array().into_iter().flatten().find(|x| s(&x["name"]).eq_ignore_ascii_case(&a.name)).map(|x| s(&x["command"])).ok_or_else(|| format!("No snippet called {}.", a.name))?;
@@ -1190,7 +1190,7 @@ impl Detour {
 
     /* ---------- the vault (vault:edit) ---------- */
 
-    #[tool(description = "Add a host to the person's vault, or to a team (needs vault:edit; in a team, over all its hosts). To use it, request access to it.")]
+    #[tool(annotations(read_only_hint = false, destructive_hint = false), description = "Add a host to the person's vault, or to a team (needs vault:edit; in a team, over all its hosts). To use it, request access to it.")]
     async fn add_host(&self, Parameters(a): Parameters<AddHost>) -> Out {
         let personal = self.vault().await?;
         let vault = match &a.team {
@@ -1224,7 +1224,7 @@ impl Detour {
         Ok(format!("Added {}.", a.name))
     }
 
-    #[tool(description = "Change a host of the person's vault or of a team (needs vault:edit; in a team, a host your access reaches).")]
+    #[tool(annotations(read_only_hint = false, destructive_hint = true), description = "Change a host of the person's vault or of a team (needs vault:edit; in a team, a host your access reaches).")]
     async fn update_host(&self, Parameters(a): Parameters<UpdateHost>) -> Out {
         let (vault, base) = self.hosts_of(&a.host).await?;
         let mut next = base.clone();
@@ -1254,7 +1254,7 @@ impl Detour {
         Ok("Saved.".into())
     }
 
-    #[tool(description = "Remove a host from the person's vault or from a team (needs vault:edit; in a team, a host your access reaches).")]
+    #[tool(annotations(read_only_hint = false, destructive_hint = true), description = "Remove a host from the person's vault or from a team (needs vault:edit; in a team, a host your access reaches).")]
     async fn remove_host(&self, Parameters(a): Parameters<HostArg>) -> Out {
         let (vault, base) = self.hosts_of(&a.host).await?;
         let mut next = base.clone();
@@ -1269,7 +1269,7 @@ impl Detour {
         Ok("Removed.".into())
     }
 
-    #[tool(description = "Save a snippet: a named command (needs vault:edit).")]
+    #[tool(annotations(read_only_hint = false, destructive_hint = false), description = "Save a snippet: a named command (needs vault:edit).")]
     async fn add_snippet(&self, Parameters(a): Parameters<AddSnippet>) -> Out {
         let base = self.vault().await?;
         let mut next = base.clone();
@@ -1278,7 +1278,7 @@ impl Detour {
         Ok("Saved.".into())
     }
 
-    #[tool(description = "Remove a snippet (needs vault:edit).")]
+    #[tool(annotations(read_only_hint = false, destructive_hint = true), description = "Remove a snippet (needs vault:edit).")]
     async fn remove_snippet(&self, Parameters(a): Parameters<NameArg>) -> Out {
         let base = self.vault().await?;
         let mut next = base.clone();
@@ -1292,7 +1292,7 @@ impl Detour {
         Ok("Removed.".into())
     }
 
-    #[tool(description = "Create a key in the person's vault (needs vault:edit). Returns its public key, e.g. for authorized_keys; the private key never leaves Detour.")]
+    #[tool(annotations(read_only_hint = false, destructive_hint = false), description = "Create a key in the person's vault (needs vault:edit). Returns its public key, e.g. for authorized_keys; the private key never leaves Detour.")]
     async fn generate_key(&self, Parameters(a): Parameters<GenerateKey>) -> Out {
         let algorithm = a.algorithm.unwrap_or_else(|| "ed25519".into()).to_lowercase();
         let params = json!({ "vaultId": "personal", "name": a.name, "algorithm": algorithm, "passphrase": null, "remember": true });
@@ -1300,7 +1300,7 @@ impl Detour {
         Ok(s(&k["publicKey"]))
     }
 
-    #[tool(description = "Sync the person's vault with their other devices now (needs vault:edit).")]
+    #[tool(annotations(read_only_hint = false, destructive_hint = false), description = "Sync the person's vault with their other devices now (needs vault:edit).")]
     async fn sync_now(&self) -> Out {
         self.with_tokens(|_| true, "agent_call", |token| json!({ "token": token, "method": "sync_now", "params": {} })).await?;
         Ok("Synced.".into())

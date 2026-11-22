@@ -10,6 +10,7 @@ name = "detour"
 path = "src/main.rs"
 
 [dependencies]
+unicode-width = "0.2.3"
 detour-core.workspace = true
 detour-daemon = { path = "../detour-daemon" }
 detour-ipc = { path = "../detour-ipc" }

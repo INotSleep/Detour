@@ -170,17 +170,29 @@ export function loginUser(ws: Workspace, host: Host): string {
 
 /* ---------- this person's own grouping of a team's hosts ---------- */
 
-/** Groups of mine in their order, then the hosts in none of them under their shared groups. */
+/** The section of hosts in none of this person's groups; in a layout, the group with no name keeps its order. */
+export const MINE_NONE = mineKey("none");
+
+/**
+ * Groups of mine in their order, then my own "No group": its hosts in my order, then hosts placed
+ * nowhere yet (new ones) in the shared order. Shared groups are not mixed in.
+ */
 export function listMine(hosts: Host[], layout: Layout, groups: Group[], withEmpty = true): ListedGroup[] {
   const byId = new Map(hosts.map((h) => [h.id, h]));
   const placed = new Set<string>();
+  const take = (ids: string[]) => ids.map((id) => byId.get(id)).filter((h): h is Host => !!h && !placed.has(h.id) && !!placed.add(h.id));
   const out: ListedGroup[] = [];
   for (const g of layout.groups) {
-    const list = g.hosts.map((id) => byId.get(id)).filter((h): h is Host => !!h);
-    list.forEach((h) => placed.add(h.id));
+    if (!g.name) continue;
+    const list = take(g.hosts);
     if (withEmpty || list.length) out.push({ key: mineKey(g.id), name: g.name, mine: g, hosts: list });
   }
-  return [...out, ...listGroups(hosts.filter((h) => !placed.has(h.id)), groups, false)];
+  const none = layout.groups.find((g) => !g.name);
+  const ordered = take(none?.hosts ?? []);
+  const rest = listGroups(hosts.filter((h) => !placed.has(h.id)), groups, false).flatMap((g) => g.hosts);
+  const list = [...ordered, ...rest];
+  if (list.length) out.push({ key: MINE_NONE, name: "", mine: none, hosts: list });
+  return out;
 }
 
 /** A grouping of mine that starts as the shared one. */
@@ -188,40 +200,32 @@ export function layoutFrom(hosts: Host[], groups: Group[]): Layout {
   return { groups: listGroups(hosts, groups, true).filter((g) => g.name).map((g) => ({ id: uid("m"), name: g.name, hosts: g.hosts.map((h) => h.id) })) };
 }
 
-/** Shared groups shown below mine become mine, so they can be ordered among them. */
-function materialized(layout: Layout, listed: ListedGroup[]): Layout {
-  const extra = listed.filter((g) => !g.mine && g.name).map((g) => ({ id: uid("m"), name: g.name, hosts: g.hosts.map((h) => h.id) }));
-  return extra.length ? { groups: [...layout.groups, ...extra] } : layout;
-}
-
-/** Moves a host into a group of mine (or a shared one shown below, which becomes mine), before `before`. */
+/** Moves a host into a group of mine, or into my "No group", before `before` (or last). */
 export function mineMoveHost(layout: Layout, listed: ListedGroup[], hostId: string, key: string, before: string | null): Layout {
-  let groups: MyGroup[] = layout.groups.map((g) => ({ ...g, hosts: g.hosts.filter((id) => id !== hostId) }));
-  let target = groups.find((g) => mineKey(g.id) === key);
-  if (!target) {
-    const shared = listed.find((g) => g.key === key);
-    // Into the hosts without a group of mine: out of mine.
-    if (!shared || !shared.name) return { groups };
-    target = { id: uid("m"), name: shared.name, hosts: shared.hosts.map((h) => h.id).filter((id) => id !== hostId) };
-    groups = [...groups, target];
+  const groups: MyGroup[] = layout.groups.map((g) => ({ ...g, hosts: g.hosts.filter((id) => id !== hostId) }));
+  let target = groups.find((g) => g.name && mineKey(g.id) === key);
+  if (key === MINE_NONE) {
+    // Keep the whole section in the order shown, so the host lands where it was dropped.
+    const shown = (listed.find((g) => g.key === MINE_NONE)?.hosts ?? []).map((h) => h.id).filter((id) => id !== hostId);
+    target = groups.find((g) => !g.name);
+    if (target) target.hosts = shown;
+    else groups.push((target = { id: uid("m"), name: "", hosts: shown }));
   }
+  if (!target) return layout;
   const at = before ? target.hosts.indexOf(before) : -1;
   target.hosts.splice(at < 0 ? target.hosts.length : at, 0, hostId);
   return { groups };
 }
 
-/** Moves a group of mine (or a shared one shown below) before another, or last of mine. */
-export function mineMoveGroup(layout: Layout, listed: ListedGroup[], key: string, before: string | null): Layout {
-  const all = materialized(layout, listed).groups;
-  // Shared groups just made mine are found by name.
-  const find = (k: string) => all.find((g) => mineKey(g.id) === k) ?? all.find((g) => sharedKey(g.name) === k && !layout.groups.includes(g));
-  const moving = find(key);
+/** Moves a group of mine before another, or last of mine; my "No group" stays at the end. */
+export function mineMoveGroup(layout: Layout, key: string, before: string | null): Layout {
+  const named = layout.groups.filter((g) => g.name);
+  const moving = named.find((g) => mineKey(g.id) === key);
   if (!moving) return layout;
-  const rest = all.filter((g) => g !== moving);
-  const target = before ? find(before) : undefined;
-  const at = target ? rest.indexOf(target) : rest.length;
-  rest.splice(at < 0 ? rest.length : at, 0, moving);
-  return { groups: rest };
+  const rest = named.filter((g) => g !== moving);
+  const target = before ? rest.find((g) => mineKey(g.id) === before) : undefined;
+  rest.splice(target ? rest.indexOf(target) : rest.length, 0, moving);
+  return { groups: [...rest, ...layout.groups.filter((g) => !g.name)] };
 }
 
 export const mineAdd = (layout: Layout, name: string): Layout => ({ groups: [...layout.groups, { id: uid("m"), name, hosts: [] }] });

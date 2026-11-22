@@ -1,0 +1,77 @@
+// The SFTP file browser. Host key questions come from `terminal.hostKey`.
+import { ru as plural } from "../plural";
+import type en from "../en/files";
+
+const ru: typeof en = {
+  units: ["Б", "КБ", "МБ", "ГБ", "ТБ"],
+  perSecond: "/с",
+  bar: {
+    up: "Вверх · Backspace",
+    home: "Домашняя папка",
+    refresh: "Обновить · F5",
+    terminalHere: "Терминал в этой папке",
+    newFolder: "Папка",
+    uploadFolder: "Загрузить папку",
+    upload: "Загрузить",
+  },
+  selected: (n: number) => `Выбрано: ${n}`,
+  select: "Выбрать",
+  download: "Скачать",
+  downloadTo: (dir: string) => `Скачать в ${dir}`,
+  local: {
+    title: "Этот компьютер",
+    drives: "Этот компьютер",
+    upload: "Загрузить",
+    uploadTo: (dir: string) => `Загрузить в ${dir}`,
+    trash: "В корзину",
+    trashed: (what: string) => `В корзине: ${what}`,
+    hide: "Скрыть этот компьютер",
+    show: "Показать этот компьютер",
+  },
+  pick: { title: "Подключиться к хосту", search: "Хост или адрес", nothingFound: "Ничего не найдено", noHosts: "Хостов пока нет" },
+  clearSelection: "Снять выделение · Esc",
+  columns: { name: "Имя", size: "Размер", modified: "Изменён", permissions: "Права" },
+  newFolderName: "Новая папка",
+  more: "Ещё",
+  menu: { open: "Открыть", copyPath: "Копировать путь", permissions: "Права доступа", edit: "Изменить", editIn: "Изменить в…" },
+  items: (n: number) => `${n} ${plural(n, { one: "элемент", few: "элемента", many: "элементов" })}`,
+  editor: { title: "Изменить в", other: "Другая программа…", remember: "Запомнить", open: "Открыть" },
+  empty: "Папка пуста",
+  uploadFiles: "Загрузить файлы",
+  dropTo: (where: string) => `Загрузить в ${where}`,
+  modeSet: (name: string, mode: string) => `Права «${name}»: ${mode}`,
+  pathCopied: (path: string) => `Скопировано: ${path}`,
+  confirm: {
+    removeOne: (name: string) => `Удалить «${name}»?`,
+    removeMany: (n: number) => `Удалить ${n} ${plural(n, { one: "элемент", few: "элемента", many: "элементов" })}?`,
+    withContents: "Папки вместе со всем содержимым",
+    replaceOne: (name: string) => `Заменить «${name}»?`,
+    replaceMany: (n: number) => `Заменить ${n} ${plural(n, { one: "элемент", few: "элемента", many: "элементов" })}?`,
+    replace: "Заменить",
+  },
+  perms: {
+    title: (name: string) => `Права «${name}»`,
+    owner: "Владелец",
+    group: "Группа",
+    others: "Остальные",
+    read: "Чтение",
+    write: "Запись",
+    execute: "Выполнение",
+    octal: "Числом",
+  },
+  transfer: {
+    amount: (done: string, total: string) => `${done} из ${total}`,
+    uploaded: "Загружен",
+    downloaded: "Скачан",
+    removed: "Удалён",
+    cancel: "Отменить",
+    dismiss: "Убрать",
+  },
+  gate: {
+    passphrase: "Пароль ключа",
+    password: (login: string) => `Пароль ${login}`,
+    remember: "Сохранить в vault",
+  },
+};
+
+export default ru;

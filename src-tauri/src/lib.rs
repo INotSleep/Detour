@@ -295,6 +295,14 @@ fn local_mkdir(path: String) -> Result<()> {
     Ok(std::fs::create_dir(path)?)
 }
 
+/// Moves files and folders on this computer to the system's trash (Recycle Bin), where they can be restored.
+#[tauri::command]
+async fn local_trash(paths: Vec<String>) -> Result<()> {
+    tauri::async_runtime::spawn_blocking(move || trash::delete_all(&paths).map_err(|e| Error::Internal { message: e.to_string() }))
+        .await
+        .map_err(|e| Error::Internal { message: e.to_string() })?
+}
+
 /* ---------- Detour in AI clients ---------- */
 
 /// The command line next to the app, as installers put it: what AI clients start (`detour mcp`).
@@ -509,6 +517,7 @@ pub fn builder<R: tauri::Runtime>(builder: tauri::Builder<R>, data_dir: PathBuf)
             local_home,
             local_list,
             local_mkdir,
+            local_trash,
             open_local,
             editors,
             open_with,
@@ -538,6 +547,15 @@ pub fn run() {
     builder(app.plugin(tauri_plugin_updater::Builder::new().build()), data_dir())
         .manage(TrayOnly(AtomicBool::new(tray_only)))
         .setup(move |app| {
+            // The window is made here, not from the config: a vault folder of its own (a test vault,
+            // a portable copy) runs beside the installed Detour, and two webviews sharing one data
+            // folder but started differently fail to start (WebView2 0x8007139F).
+            let config = app.config().app.windows.iter().find(|w| w.label == "main").cloned().expect("main window in tauri.conf.json");
+            let mut window = tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?;
+            if std::env::var_os("DETOUR_DATA_DIR").is_some() {
+                window = window.data_directory(data_dir().join("webview"));
+            }
+            window.build()?;
             // No tray on this system (some Linux desktops): the window just closes, as before.
             let _ = tray(app.handle());
             // The window starts hidden; in the tray it stays so until it is wanted.

@@ -1,6 +1,7 @@
 //! Team vaults: shared, end-to-end encrypted, no server. See `docs/teams.md`.
 
 pub mod git;
+pub mod history;
 pub mod log;
 pub mod state;
 

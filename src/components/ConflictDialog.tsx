@@ -11,7 +11,8 @@ function recordName(ws: Workspace, coll: Coll, id: string) {
   return r?.label ?? r?.name ?? id;
 }
 
-function show(v: unknown): string {
+/** A field's value in words. */
+export function show(v: unknown): string {
   const empty = tr().teams.conflicts.empty;
   if (Array.isArray(v)) return v.join(", ") || empty;
   if (v && typeof v === "object") return "type" in v ? String((v as { type: string }).type) : JSON.stringify(v);

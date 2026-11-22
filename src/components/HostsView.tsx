@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronRight, CopyPlus, Download, Ellipsis, FolderOpen, FolderPlus, KeyRound, Pencil, Plus, Search, Server, Settings2, Shield, SquareTerminal, Terminal, Trash2, TriangleAlert, Upload, X } from "lucide-react";
+import { hit, keysOf } from "../lib/shortcuts";
+import { ChevronRight, CopyPlus, Download, Ellipsis, FolderOpen, FolderPlus, History, KeyRound, Pencil, Plus, Search, Server, Settings2, Shield, SquareTerminal, Terminal, Trash2, TriangleAlert, Upload, X } from "lucide-react";
 import { api, errorText } from "../lib/api";
 import { copyText, formatAgo, uid, useStore } from "../lib/store";
 import { sshCommand } from "../lib/sshConfig";
@@ -14,6 +15,7 @@ import { Button, Checkbox, Empty, Field, IconButton, Menu, Modal, PageHeader, Se
 import { HostFields, applyDraft, draftFromHost, draftInvalid, emptyDraft, useHostDraft } from "./HostForm";
 import { ImportDialog } from "./ImportDialog";
 import { ExportDialog } from "./ExportDialog";
+import { RecordHistoryDialog } from "./TeamHistory";
 import { useT } from "../i18n";
 
 export function HostsView() {
@@ -28,6 +30,7 @@ export function HostsView() {
   const [importing, setImporting] = useState(false);
   /** Hosts to start the export with; null when not exporting. */
   const [exporting, setExporting] = useState<string[] | null>(null);
+  const [historyOf, setHistoryOf] = useState<Host | null>(null);
 
   const hosts = ws.hosts.filter((h) => h.vaultId === vault.id);
   const vaultGroups = ws.groups.filter((g) => g.vaultId === vault.id);
@@ -88,7 +91,7 @@ export function HostsView() {
   const drag = useDrag(groups, (d, drop) => {
     if (mine && layout) {
       if (d.kind === "host" && drop.kind === "host") saveLayout(mineMoveHost(layout, groups, d.id, drop.group, drop.before));
-      if (d.kind === "group" && drop.kind === "group") saveLayout(mineMoveGroup(layout, groups, d.key, drop.before));
+      if (d.kind === "group" && drop.kind === "group") saveLayout(mineMoveGroup(layout, d.key, drop.before));
       return;
     }
     if (d.kind === "host" && drop.kind === "host") update((w) => moveHost(w, vault.id, d.id, nameOfKey(drop.group)!, drop.before));
@@ -164,6 +167,7 @@ export function HostsView() {
                 ]}
               />
             )}
+            {mine && <Button icon={FolderPlus} onClick={() => setNaming({ from: null })}>{t.hosts.groups.add}</Button>}
             {hosts.length > 0 && (
               <label className="search">
                 <Search size={14} />
@@ -177,7 +181,7 @@ export function HostsView() {
                 items={[
                   ...(vault.kind === "personal" ? [{ label: t.hosts.importSsh, icon: Download, onSelect: () => setImporting(true) }] : []),
                   ...(hosts.length > 0 ? [{ label: t.hosts.exportSsh, icon: Upload, onSelect: () => setExporting(hosts.map((h) => h.id)) }] : []),
-                  ...((canCreate && canEditGroups) || mine ? [{ label: t.hosts.groups.add, icon: FolderPlus, onSelect: () => setNaming({ from: null }) }] : []),
+                  ...(canCreate && canEditGroups && !mine ? [{ label: t.hosts.groups.add, icon: FolderPlus, onSelect: () => setNaming({ from: null }) }] : []),
                 ]}
               />
             )}
@@ -276,7 +280,7 @@ export function HostsView() {
                         onDoubleClick={() => connect(h.id)}
                         onKeyDown={(e) => {
                           if (e.key === "Enter") connect(h.id);
-                          if (e.key === "Delete" && atLeast(h.access, "edit")) remove(h);
+                          if (hit(e, "removeHost") && atLeast(h.access, "edit")) remove(h);
                         }}
                       >
                         <HostIcon host={h} />
@@ -321,8 +325,9 @@ export function HostsView() {
                               { label: t.hosts.files, icon: FolderOpen, onSelect: () => openFiles(h.id) },
                               { label: t.hosts.copySshCommand, icon: Terminal, onSelect: () => copyCmd(h) },
                               { label: t.hosts.exportSsh, icon: Upload, onSelect: () => setExporting([h.id]) },
+                              ...(vault.kind === "team" && api.real ? [{ label: t.teams.history.history, icon: History, onSelect: () => setHistoryOf(h) }] : []),
                               ...(canCreate ? [{ label: t.hosts.duplicate, icon: CopyPlus, onSelect: () => duplicate(h) }] : []),
-                              ...(atLeast(h.access, "edit") ? [{ label: t.common.delete, icon: Trash2, danger: true, hint: "Del", onSelect: () => remove(h) }] : []),
+                              ...(atLeast(h.access, "edit") ? [{ label: t.common.delete, icon: Trash2, danger: true, hint: keysOf("removeHost"), onSelect: () => remove(h) }] : []),
                             ]}
                           />
                         </div>
@@ -359,6 +364,7 @@ export function HostsView() {
       {drag.ghost}
       {importing && <ImportDialog onClose={() => setImporting(false)} />}
       {exporting && <ExportDialog hosts={hosts} initial={exporting} onClose={() => setExporting(null)} />}
+      {historyOf && <RecordHistoryDialog vault={vault} record={historyOf.id} name={historyOf.label} onClose={() => setHistoryOf(null)} />}
     </div>
   );
 }
@@ -377,6 +383,8 @@ function useDrag(groups: ListedGroup[], onDrop: (d: Dragged, drop: Drop) => void
   const [state, setState] = useState<{ what: Dragged; x: number; y: number; drop: Drop | null } | null>(null);
   const press = useRef<{ what: Dragged; x: number; y: number } | null>(null);
   const dragged = useRef(0);
+  // The drag as last set, for the drop: updaters must stay pure, and dropping changes the app.
+  const current = useRef(state);
   const latest = useRef({ groups, onDrop });
   latest.current = { groups, onDrop };
 
@@ -413,22 +421,24 @@ function useDrag(groups: ListedGroup[], onDrop: (d: Dragged, drop: Drop) => void
       if (!p) return;
       if (!state && Math.hypot(e.clientX - p.x, e.clientY - p.y) < 6) return;
       e.preventDefault();
-      setState({ what: p.what, x: e.clientX, y: e.clientY, drop: dropAt(p.what, e.clientX, e.clientY) });
+      current.current = { what: p.what, x: e.clientX, y: e.clientY, drop: dropAt(p.what, e.clientX, e.clientY) };
+      setState(current.current);
     };
     const up = () => {
       const p = press.current;
+      const s = current.current;
       press.current = null;
-      setState((s) => {
-        if (s && p) {
-          dragged.current = Date.now();
-          if (s.drop) latest.current.onDrop(s.what, s.drop);
-        }
-        return null;
-      });
+      current.current = null;
+      setState(null);
+      if (s && p) {
+        dragged.current = Date.now();
+        if (s.drop) latest.current.onDrop(s.what, s.drop);
+      }
     };
     const cancel = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || !press.current) return;
       press.current = null;
+      current.current = null;
       setState(null);
     };
     window.addEventListener("pointermove", move);

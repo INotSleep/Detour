@@ -1,66 +1,43 @@
-// UI text in every language. Each namespace module exports `en` and `ru` of the same
-// shape; texts that take values are functions. Components read text with `useT()`,
-// plain functions called while rendering with `tr()`. Never keep a translated
-// string at module scope: the language can change while the app runs.
+// UI text in every language. Each language is a folder (`en`, `ru`, ...) with one file per
+// area of the app and an index that puts them together; English is the reference, and tsc
+// checks that every language has every key. A new folder is a new language: it is found
+// here and offered in settings by itself.
+//
+// Components read text with `useT()`, plain functions called while rendering with `tr()`.
+// Never keep a translated string at module scope: the language can change while the app runs.
 import { createContext, useContext } from "react";
-import * as agents from "./agents";
-import * as app from "./app";
-import * as common from "./common";
-import * as demo from "./demo";
-import * as files from "./files";
-import * as hosts from "./hosts";
-import * as keys from "./keys";
-import * as proxies from "./proxies";
-import * as settings from "./settings";
-import * as sync from "./sync";
-import * as teams from "./teams";
-import * as terminal from "./terminal";
-import * as tunnels from "./tunnels";
+import type { Dict } from "./en";
 
-export type Lang = "en" | "ru";
+export type { Dict };
+/** A language code: the name of its folder. */
+export type Lang = string;
 /** What the user picked: a language, or the system's. */
 export type LangSetting = Lang | "system";
 
-const en = {
-  common: common.en,
-  app: app.en,
-  agents: agents.en,
-  settings: settings.en,
-  sync: sync.en,
-  teams: teams.en,
-  files: files.en,
-  terminal: terminal.en,
-  hosts: hosts.en,
-  keys: keys.en,
-  tunnels: tunnels.en,
-  proxies: proxies.en,
-  demo: demo.en,
-};
-export type Dict = typeof en;
-const ru: Dict = {
-  common: common.ru,
-  app: app.ru,
-  agents: agents.ru,
-  settings: settings.ru,
-  sync: sync.ru,
-  teams: teams.ru,
-  files: files.ru,
-  terminal: terminal.ru,
-  hosts: hosts.ru,
-  keys: keys.ru,
-  tunnels: tunnels.ru,
-  proxies: proxies.ru,
-  demo: demo.ru,
-};
-const dicts: Record<Lang, Dict> = { en, ru };
+type Module = { default: Dict; meta: { name: string; locale: string } };
+const found = import.meta.glob<Module>("./*/index.ts", { eager: true });
+const dicts: Record<string, Module> = Object.fromEntries(Object.entries(found).map(([path, m]) => [path.split("/")[1]!, m]));
 
+/** Every language there is, English first, the others by their own names. */
+export const languages = (): { code: Lang; name: string }[] =>
+  Object.entries(dicts)
+    .map(([code, m]) => ({ code, name: m.meta.name }))
+    .sort((a, b) => (a.code === "en" ? -1 : b.code === "en" ? 1 : a.name.localeCompare(b.name, "en")));
+
+/** The first of the system's languages Detour has (by its whole code, then by its language). */
 export function systemLang(): Lang {
   const langs = typeof navigator === "undefined" ? [] : navigator.languages?.length ? navigator.languages : [navigator.language];
-  return langs.some((l) => l?.toLowerCase().startsWith("ru")) ? "ru" : "en";
+  for (const l of langs) {
+    const code = l?.toLowerCase() ?? "";
+    if (dicts[code]) return code;
+    const base = code.split("-")[0]!;
+    if (dicts[base]) return base;
+  }
+  return "en";
 }
 
 export function resolveLang(setting: LangSetting | undefined): Lang {
-  return setting === "en" || setting === "ru" ? setting : systemLang();
+  return setting && setting !== "system" && dicts[setting] ? setting : systemLang();
 }
 
 /** The language saved in settings, read before anything renders. */
@@ -76,18 +53,16 @@ let current: Lang = savedLang();
 if (typeof document !== "undefined") document.documentElement.lang = current;
 
 export function setLang(lang: Lang) {
-  current = lang;
-  document.documentElement.lang = lang;
+  current = dicts[lang] ? lang : "en";
+  document.documentElement.lang = current;
 }
 
 export const lang = () => current;
 /** Locale for `toLocaleString` and `Intl`. */
-export const locale = () => (current === "ru" ? "ru-RU" : "en-US");
+export const locale = () => dicts[current]!.meta.locale;
 /** Text in the current language, for code outside components. */
-export const tr = (): Dict => dicts[current];
+export const tr = (): Dict => dicts[current]!.default;
 
 export const LangContext = createContext<Lang>(current);
 /** Text in the current language; the component renders again when it changes. */
-export const useT = (): Dict => dicts[useContext(LangContext)];
-
-export { enForm, ruForm } from "./plural";
+export const useT = (): Dict => (dicts[useContext(LangContext)] ?? dicts.en!).default;

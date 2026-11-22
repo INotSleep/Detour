@@ -1,0 +1,78 @@
+// The frame of the app: navigation, tabs, quick connect, lock screen.
+import { pt as plural } from "../plural";
+import type en from "../en/app";
+
+const pt: typeof en = {
+  personal: "Pessoal",
+  section: { hosts: "Hosts", keys: "Chaves", snippets: "Snippets", tunnels: "Túneis", proxies: "Proxies", team: "Equipe", teams: "Equipes", settings: "Configurações" },
+  quickConnect: "Conectar",
+  newConnection: "Nova conexão · Ctrl K",
+  newSftp: "Nova aba SFTP",
+  crash: {
+    title: "O Detour encontrou um erro",
+    reload: "Recarregar a janela",
+    copy: "Copiar o erro",
+    copied: "Copiado",
+    openLog: "Abrir o log",
+  },
+  tabs: {
+    close: "Fechar",
+    closeOthers: "Fechar as outras",
+    closeLeft: "Fechar abas à esquerda",
+    closeRight: "Fechar abas à direita",
+    closeAll: "Fechar todas",
+  },
+  collapse: "Recolher menu",
+  expand: "Expandir menu",
+  sftp: "SFTP",
+  conflictWith: (name: string) => `Conflito: ${name}`,
+  conflicts: (n: number) => `${n} ${plural(n, { one: "conflito", other: "conflitos" })}`,
+  resolve: "Resolver",
+  conflict: "Conflito",
+  removedFromTeam: "Você foi removido",
+  waitingToBeAdded: "Aguardando ser adicionado",
+  repoUnreachable: "Não foi possível acessar o repositório",
+  notSent: "Não enviado",
+  createTeam: "Criar equipe",
+  joinTeam: "Entrar na equipe",
+  updateAvailable: (version: string) => `A versão ${version} está disponível`,
+  update: "Atualizar",
+  tray: {
+    open: "Abrir o Detour",
+    lock: "Bloquear",
+    quit: "Sair do Detour",
+    unlocked: "Desbloqueado",
+    locked: "Bloqueado",
+    sessions: (n: number) => `${n} ${plural(n, { one: "sessão", other: "sessões" })}`,
+    tunnels: (n: number) => `${n} ${plural(n, { one: "túnel", other: "túneis" })}`,
+  },
+  trustTerminal: {
+    title: "Um terminal pede para usar o Detour",
+    shell: (shell: string, host: string | null, pid: number) => (host ? `${shell} em ${host} (PID ${pid})` : `${shell} (PID ${pid})`),
+    allow: "Permitir",
+    deny: "Negar",
+  },
+  palette: {
+    title: "Conexão rápida",
+    placeholder: "Host, endereço ou seção",
+    pickHost: "Host para abrir ao lado",
+    nothingFound: "Nada encontrado",
+    hosts: "Hosts",
+    goTo: "Ir para",
+    lock: "Bloquear",
+  },
+  lock: {
+    setupTitle: "Senha mestra",
+    lockedTitle: "O Detour está bloqueado",
+    newPassword: "Nova senha mestra",
+    password: "Senha mestra",
+    repeat: "Repetir",
+    minLength: (n: number) => `Pelo menos ${n} caracteres`,
+    mismatch: "As senhas não coincidem",
+    noRecovery: "Uma senha mestra esquecida não pode ser recuperada.",
+    create: "Criar cofre",
+    unlock: "Desbloquear",
+  },
+};
+
+export default pt;
