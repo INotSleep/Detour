@@ -21,6 +21,11 @@ final class TerminalSession: ObservableObject, Identifiable {
     /// Ctrl and Alt from the key bar, for the next key typed.
     @Published var ctrl = false
     @Published var alt = false
+    /// The keys keyboard is up in place of the system one.
+    @Published private(set) var keysKeyboard = false
+    /// The keys keyboard asked for its settings.
+    @Published var customizing = false
+    private var keysView: KeysInputView?
 
     private(set) var sessionId: String?
     private var stream: UInt64?
@@ -29,7 +34,10 @@ final class TerminalSession: ObservableObject, Identifiable {
     /// A check found the connection gone: connect again as soon as the core ends the session.
     private var reconnectWhenEnded = false
     weak var view: TerminalView? {
-        didSet { flush() }
+        didSet {
+            view?.inputView = keysKeyboard ? keysInput() : nil
+            flush()
+        }
     }
     var cols = 80
     var rows = 24
@@ -121,6 +129,22 @@ final class TerminalSession: ObservableObject, Identifiable {
         }
     }
 
+    private func keysInput() -> KeysInputView {
+        if let keysView { return keysView }
+        let v = KeysInputView(session: self)
+        keysView = v
+        return v
+    }
+
+    /// Swaps the system keyboard and the keys keyboard, and shows the one chosen.
+    func showKeysKeyboard(_ on: Bool) {
+        keysKeyboard = on
+        guard let view else { return }
+        view.inputView = on ? keysInput() : nil
+        view.reloadInputViews()
+        if !view.isFirstResponder { _ = view.becomeFirstResponder() }
+    }
+
     func toggleKeyboard(shown: Bool) {
         guard let view else { return }
         if shown { _ = view.resignFirstResponder() } else { _ = view.becomeFirstResponder() }
@@ -167,6 +191,8 @@ final class TerminalSession: ObservableObject, Identifiable {
 
     func close() {
         userClosed = true
+        view?.inputView = nil
+        keysView = nil
         if let s = stream { Core.shared.unwatch(stream: s) }
         guard let id = sessionId else { return }
         Task { _ = try? await Core.shared.call("session_close", ["sessionId": id]) }

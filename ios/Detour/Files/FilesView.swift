@@ -2,16 +2,12 @@ import QuickLook
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// A host's files over SFTP: folders as a navigation stack, a file opened in Quick Look (which
-/// shares it or saves it to Files), uploads from the phone, new folders, rename and delete.
+/// A host's files over SFTP, a session like a terminal: folders as a navigation stack, a file
+/// opened in Quick Look (which shares it or saves it to Files), uploads from the phone, new
+/// folders, rename and delete. The session opens and closes with its tab.
 struct FilesView: View {
-    @StateObject private var files: FilesSession
-    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var files: FilesSession
     @State private var password = ""
-
-    init(host: Host) {
-        _files = StateObject(wrappedValue: FilesSession(host: host))
-    }
 
     var body: some View {
         NavigationStack {
@@ -21,15 +17,10 @@ struct FilesView: View {
                     FolderView(files: files, path: files.home)
                 default:
                     gate
-                        .toolbar {
-                            ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
-                        }
                 }
             }
             .navigationDestination(for: String.self) { path in FolderView(files: files, path: path) }
         }
-        .task { await files.open() }
-        .onDisappear { files.close() }
     }
 
     @ViewBuilder private var gate: some View {
@@ -72,7 +63,6 @@ struct FilesView: View {
 private struct FolderView: View {
     @ObservedObject var files: FilesSession
     let path: String
-    @Environment(\.dismiss) private var dismiss
     @State private var entries: [RemoteFile]?
     @State private var error: String?
     @State private var preview: URL?
@@ -110,9 +100,6 @@ private struct FolderView: View {
         .navigationTitle(path == "/" ? "/" : (path as NSString).lastPathComponent)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                if path == files.home { Button("Close") { dismiss() } }
-            }
             ToolbarItem(placement: .primaryAction) {
                 Menu {
                     Button { uploading = true } label: { Label("Upload", systemImage: "square.and.arrow.up") }

@@ -1,0 +1,3 @@
+"NSFaceIDUsageDescription" = "Detour відкриває сховище через Face ID.";
+"NSCameraUsageDescription" = "Detour сканує код, який показує інший ваш пристрій.";
+"NSLocalNetworkUsageDescription" = "Detour підключається до ваших серверів у локальній мережі.";

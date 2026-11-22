@@ -75,81 +75,178 @@ struct TerminalHost: UIViewRepresentable {
     }
 }
 
-/// The open terminals: a strip of tabs, the current one's screen, and what it waits for.
+/// The open sessions: a bar (back to the hosts, the sessions' tabs, the keyboard switch, a new
+/// session), and the current one: a terminal or a host's files.
 struct TerminalsView: View {
     @EnvironmentObject var app: AppModel
-    @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var scheme
     @ObservedObject private var settings = TerminalSettings.shared
-    @State private var files: Host?
+    @State private var newSession: NewSessionKind?
     @State private var snippets = false
 
-    private var currentSession: TerminalSession? { app.terminals.first { $0.id == app.current } }
+    private var current: OpenSession? { app.sessions.first { $0.id == app.current } }
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                tabs
-                if let t = app.terminals.first(where: { $0.id == app.current }) {
-                    SessionScreen(session: t)
-                        .id(t.id)
-                }
+        VStack(spacing: 0) {
+            bar
+            Divider()
+            switch current {
+            case .terminal(let t):
+                SessionScreen(session: t).id(t.id)
+            case .files(let f):
+                FilesView(files: f).id(f.uid)
+            case nil:
+                Spacer()
             }
-            .background(Color(uiColor: settings.theme(dark: scheme == .dark).background))
-            .ignoresSafeArea(.keyboard)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button { dismiss() } label: { Image(systemName: "chevron.down") }
-                        .accessibilityLabel("Hosts")
-                }
-                ToolbarItemGroup(placement: .primaryAction) {
-                    if let t = currentSession {
-                        Button { files = t.host } label: { Image(systemName: "folder") }
-                            .accessibilityLabel("Files")
-                        Button { snippets = true } label: { Image(systemName: "chevron.left.forwardslash.chevron.right") }
-                            .accessibilityLabel("Snippets")
-                    }
-                }
-            }
-            .toolbarBackground(.visible, for: .navigationBar)
-            .sheet(item: $files) { h in FilesView(host: h) }
-            .sheet(isPresented: $snippets) { SnippetsView(session: currentSession) }
-            .navigationBarTitleDisplayMode(.inline)
+        }
+        .background(Color(uiColor: settings.theme(dark: scheme == .dark).background))
+        .ignoresSafeArea(.keyboard)
+        .sheet(item: $newSession) { kind in NewSessionSheet(kind: kind) }
+        .sheet(isPresented: $snippets) {
+            SnippetsView(session: current?.terminal)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
         }
     }
 
-    private var tabs: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(app.terminals) { t in
-                    TabChip(session: t, selected: t.id == app.current, select: { app.current = t.id }, close: { app.close(t) })
-                }
+    private var bar: some View {
+        HStack(spacing: 4) {
+            Button { app.showTerminals = false } label: {
+                Image(systemName: "chevron.left").font(.body.weight(.semibold)).frame(width: 36, height: 36)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
+            .accessibilityLabel("Hosts")
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(app.sessions) { s in
+                            SessionChip(session: s, selected: s.id == app.current, select: { app.current = s.id }, close: { app.close(s) })
+                                .id(s.id)
+                        }
+                    }
+                    .padding(.vertical, 6)
+                }
+                .onChange(of: app.current) { _, id in withAnimation { proxy.scrollTo(id) } }
+            }
+            if let t = current?.terminal {
+                KeyboardSwitch(session: t)
+            }
+            Menu {
+                Button { newSession = .terminal } label: { Label("Host", systemImage: "terminal") }
+                Button { newSession = .files } label: { Label("SFTP", systemImage: "folder") }
+                if current?.terminal != nil {
+                    Divider()
+                    Button { snippets = true } label: { Label("Snippets", systemImage: "chevron.left.forwardslash.chevron.right") }
+                }
+            } label: {
+                Image(systemName: "plus").font(.body.weight(.semibold)).frame(width: 36, height: 36)
+            }
+            .accessibilityLabel("New session")
         }
-        .background(Color(.systemBackground))
+        .padding(.horizontal, 6)
+        .background(.bar)
     }
 }
 
-private struct TabChip: View {
+/// Switches a terminal between the system keyboard (ABC) and the keys keyboard.
+private struct KeyboardSwitch: View {
+    @ObservedObject var session: TerminalSession
+
+    var body: some View {
+        Button { session.showKeysKeyboard(!session.keysKeyboard) } label: {
+            Group {
+                if session.keysKeyboard {
+                    Text(verbatim: "ABC").font(.footnote.weight(.bold))
+                } else {
+                    Image(systemName: "square.grid.3x3.fill").font(.body)
+                }
+            }
+            .frame(width: 36, height: 36)
+        }
+        .accessibilityLabel(session.keysKeyboard ? "Letters keyboard" : "Keys keyboard")
+    }
+}
+
+/// What a new session opens: a terminal or a host's files.
+enum NewSessionKind: String, Identifiable {
+    case terminal, files
+    var id: String { rawValue }
+}
+
+/// A new session: the kind, then the host.
+struct NewSessionSheet: View {
+    @EnvironmentObject var app: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @State var kind: NewSessionKind
+    @State private var query = ""
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Picker("Session", selection: $kind) {
+                        Text("Terminal").tag(NewSessionKind.terminal)
+                        Text(verbatim: "SFTP").tag(NewSessionKind.files)
+                    }
+                    .pickerStyle(.segmented)
+                }
+                ForEach(filtered) { section in
+                    Section(section.title) {
+                        ForEach(section.hosts) { host in
+                            Button {
+                                if kind == .terminal { app.open(host) } else { app.openFiles(host) }
+                                dismiss()
+                            } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(host.label).font(.body.weight(.medium))
+                                    Text("\(host.login)@\(host.address)").font(.caption.monospaced()).foregroundStyle(.secondary)
+                                }
+                            }
+                            .tint(.primary)
+                        }
+                    }
+                }
+            }
+            .searchable(text: $query)
+            .navigationTitle("New session")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private var filtered: [HostSection] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return app.sections }
+        return app.sections.compactMap { s in
+            let hosts = s.hosts.filter { "\($0.label) \($0.address) \($0.login)".lowercased().contains(q) }
+            return hosts.isEmpty ? nil : HostSection(id: s.id, title: s.title, hosts: hosts)
+        }
+    }
+}
+
+/// A session's tab. The shell may set a long title (user@host: ~/a/long/path): it is cut short.
+struct SessionChip: View {
+    let session: OpenSession
+    let selected: Bool
+    let select: () -> Void
+    let close: () -> Void
+
+    var body: some View {
+        switch session {
+        case .terminal(let t): TerminalChip(session: t, selected: selected, select: select, close: close)
+        case .files(let f): FilesChip(files: f, selected: selected, select: select, close: close)
+        }
+    }
+}
+
+private struct TerminalChip: View {
     @ObservedObject var session: TerminalSession
     let selected: Bool
     let select: () -> Void
     let close: () -> Void
 
     var body: some View {
-        HStack(spacing: 6) {
-            Circle().fill(dot).frame(width: 7, height: 7)
-            Text(session.title).font(.subheadline).lineLimit(1)
-            Button(action: close) { Image(systemName: "xmark").font(.caption2.weight(.bold)) }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Close")
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(selected ? Color.accentColor.opacity(0.2) : Color(.secondarySystemBackground), in: Capsule())
-        .onTapGesture(perform: select)
+        ChipFrame(icon: nil, dot: dot, title: session.title, selected: selected, select: select, close: close)
     }
 
     private var dot: Color {
@@ -158,6 +255,51 @@ private struct TabChip: View {
         case .connecting: return .yellow
         default: return .red
         }
+    }
+}
+
+private struct FilesChip: View {
+    @ObservedObject var files: FilesSession
+    let selected: Bool
+    let select: () -> Void
+    let close: () -> Void
+
+    var body: some View {
+        ChipFrame(icon: "folder", dot: dot, title: files.host.label, selected: selected, select: select, close: close)
+    }
+
+    private var dot: Color {
+        switch files.state {
+        case .ready: return .green
+        case .connecting: return .yellow
+        default: return .red
+        }
+    }
+}
+
+private struct ChipFrame: View {
+    /// Longest a tab's title goes before it is cut.
+    static let maxTitle: CGFloat = 130
+    let icon: String?
+    let dot: Color
+    let title: String
+    let selected: Bool
+    let select: () -> Void
+    let close: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle().fill(dot).frame(width: 7, height: 7)
+            if let icon { Image(systemName: icon).font(.caption) }
+            Text(title).font(.subheadline).lineLimit(1).truncationMode(.middle).frame(maxWidth: Self.maxTitle, alignment: .leading).fixedSize(horizontal: false, vertical: true)
+            Button(action: close) { Image(systemName: "xmark").font(.caption2.weight(.bold)) }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(selected ? Color.accentColor.opacity(0.2) : Color(.secondarySystemBackground), in: Capsule())
+        .onTapGesture(perform: select)
     }
 }
 
@@ -190,6 +332,12 @@ private struct SessionScreen: View {
             }
         }
         .ignoresSafeArea(.keyboard)
+        .sheet(isPresented: $session.customizing) {
+            NavigationStack {
+                KeyboardEditor()
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { session.customizing = false } } }
+            }
+        }
     }
 
     @ViewBuilder private var overlay: some View {

@@ -36,7 +36,7 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleDevelopmentRegion: en
-        CFBundleLocalizations: [en, ru]
+        CFBundleLocalizations: [en, de, es, pt-BR, ru, uk, zh-Hans]
         NSFaceIDUsageDescription: Detour opens your vault with Face ID.
         NSCameraUsageDescription: Detour scans the code that your other device shows.
         NSLocalNetworkUsageDescription: Detour connects to the servers you add on your local network.

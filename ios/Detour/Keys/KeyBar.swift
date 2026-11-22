@@ -1,14 +1,18 @@
 import Foundation
 import SwiftUI
 
-/// A button of the key bar.
+/// A button of the key bar or of the keys keyboard.
 struct BarKey: Codable, Identifiable, Hashable {
     enum Kind: String, Codable, CaseIterable {
         case esc, tab, ctrl, alt, up, down, left, right, home, end, pageUp, pageDown, enter, backspace
-        /// Types `value` (a snippet; `\n` in it is Enter).
+        /// Types `value` (`\n` in it is Enter).
         case text
-        /// A combination like `ctrl+c` or `alt+b`.
+        /// A combination: `ctrl+c`, `alt+b`, `shift+tab`, `ctrl+alt+left`.
         case combo
+        /// A named key (`f5`, `insert`, `space`, see `KeyCodes.named`) or one character (`|`).
+        case key
+        /// A snippet: `label` is its name, `value` its command, typed and run with Enter.
+        case snippet
     }
 
     var id = UUID()
@@ -16,7 +20,18 @@ struct BarKey: Codable, Identifiable, Hashable {
     var label: String = ""
     var value: String = ""
 
-    /// What the button shows.
+    /// Modifiers and the key of a combination.
+    var comboParts: (ctrl: Bool, alt: Bool, shift: Bool, key: String)? {
+        guard kind == .combo else { return nil }
+        let parts = value.split(separator: "+", omittingEmptySubsequences: false).map { $0.trimmingCharacters(in: .whitespaces) }
+        // "ctrl++" is Ctrl and the plus key.
+        let key = value.hasSuffix("++") ? "+" : parts.last ?? ""
+        let mods = Set(parts.dropLast().map { $0.lowercased() })
+        guard !key.isEmpty else { return nil }
+        return (mods.contains("ctrl"), mods.contains("alt") || mods.contains("meta"), mods.contains("shift"), key)
+    }
+
+    /// What the button shows, short enough for a small square key.
     var title: String {
         if !label.isEmpty { return label }
         switch kind {
@@ -34,45 +49,35 @@ struct BarKey: Codable, Identifiable, Hashable {
         case .pageDown: return "PgDn"
         case .enter: return "⏎"
         case .backspace: return "⌫"
-        case .text: return value
-        case .combo: return value.split(separator: "+").map { $0.count == 1 ? $0.uppercased() : $0.capitalized }.joined(separator: "+")
+        case .text, .snippet: return value
+        case .key: return KeyCodes.title(value)
+        case .combo:
+            guard let c = comboParts else { return value }
+            return (c.ctrl ? "^" : "") + (c.alt ? "⌥" : "") + (c.shift ? "⇧" : "") + KeyCodes.title(c.key)
         }
     }
 
     /// The bytes it sends; nil for Ctrl and Alt, which apply to the next key.
-    var bytes: [UInt8]? {
-        let esc: [UInt8] = [0x1b]
+    func bytes(appCursor: Bool = false) -> [UInt8]? {
+        let named: [Kind: String] = [.esc: "esc", .tab: "tab", .up: "up", .down: "down", .left: "left", .right: "right", .home: "home", .end: "end", .pageUp: "pageup", .pageDown: "pagedown", .enter: "enter", .backspace: "backspace"]
+        if let n = named[kind] { return KeyCodes.bytes(n, appCursor: appCursor) }
         switch kind {
-        case .esc: return esc
-        case .tab: return [0x09]
         case .ctrl, .alt: return nil
-        case .up: return esc + Array("[A".utf8)
-        case .down: return esc + Array("[B".utf8)
-        case .right: return esc + Array("[C".utf8)
-        case .left: return esc + Array("[D".utf8)
-        case .home: return esc + Array("[H".utf8)
-        case .end: return esc + Array("[F".utf8)
-        case .pageUp: return esc + Array("[5~".utf8)
-        case .pageDown: return esc + Array("[6~".utf8)
-        case .enter: return [0x0d]
-        case .backspace: return [0x7f]
         case .text: return Array(value.replacingOccurrences(of: "\\n", with: "\r").replacingOccurrences(of: "\n", with: "\r").utf8)
-        case .combo: return Self.combo(value)
+        case .snippet:
+            let text = value.trimmingCharacters(in: .newlines).replacingOccurrences(of: "\r\n", with: "\r").replacingOccurrences(of: "\n", with: "\r") + "\r"
+            return Array(text.utf8)
+        case .key: return KeyCodes.bytes(value, appCursor: appCursor)
+        case .combo:
+            guard let c = comboParts else { return nil }
+            return KeyCodes.bytes(c.key, ctrl: c.ctrl, alt: c.alt, shift: c.shift, appCursor: appCursor)
+        default: return nil
         }
     }
 
-    /// `ctrl+c` → 3, `alt+b` → Esc b, `ctrl+alt+x` → Esc 24.
+    /// Whether a combination's text is one Detour can send.
     static func combo(_ text: String) -> [UInt8]? {
-        let parts = text.lowercased().split(separator: "+").map { $0.trimmingCharacters(in: .whitespaces) }
-        guard let key = parts.last, !key.isEmpty else { return nil }
-        let named: [String: [UInt8]] = ["esc": [0x1b], "tab": [0x09], "enter": [0x0d], "space": [0x20], "backspace": [0x7f]]
-        var out = named[key] ?? Array(key.utf8)
-        if parts.contains("ctrl") {
-            guard out.count == 1, let c = TerminalSession.control(out[0]) else { return nil }
-            out = [c]
-        }
-        if parts.contains("alt") || parts.contains("meta") { out = [0x1b] + out }
-        return out
+        BarKey(kind: .combo, value: text).bytes()
     }
 }
 
@@ -176,7 +181,7 @@ struct KeyBarView: View {
         switch key.kind {
         case .ctrl: session.ctrl.toggle()
         case .alt: session.alt.toggle()
-        default: if let b = key.bytes { session.send(b) }
+        default: if let b = key.bytes() { session.send(b) }
         }
     }
 }
@@ -187,15 +192,42 @@ private struct KeyButton: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            Text(key.title)
-                .font(.system(size: 15, weight: .medium, design: .monospaced))
-                .lineLimit(1)
-                .padding(.horizontal, 8)
-                .frame(minWidth: 34, minHeight: 34)
-                .background(on ? Color.accentColor : Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 7))
-                .foregroundStyle(on ? Color.white : Color.primary)
+        Button(action: action) { KeyCap(key: key, on: on, width: KeyCap.barWidth, height: 34) }
+            .buttonStyle(.plain)
+    }
+}
+
+/// How a key looks, the same in the bar, the keys keyboard and their editor: every key the same
+/// size, its text shrunk to fit.
+struct KeyCap: View {
+    static let barWidth: CGFloat = 40
+    let key: BarKey?
+    var on = false
+    var width: CGFloat? = nil
+    var height: CGFloat = 40
+
+    var body: some View {
+        Group {
+            if let key {
+                VStack(spacing: 1) {
+                    Text(key.title)
+                        .font(.system(size: 15, weight: .medium, design: key.kind == .snippet ? .default : .monospaced))
+                        .lineLimit(key.kind == .snippet ? 2 : 1)
+                        .minimumScaleFactor(0.45)
+                        .multilineTextAlignment(.center)
+                    if key.kind == .snippet {
+                        Image(systemName: "play.fill").font(.system(size: 6)).foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.horizontal, 3)
+            } else {
+                Color.clear
+            }
         }
-        .buttonStyle(.plain)
+        .frame(width: width, height: height)
+        .frame(maxWidth: width == nil ? .infinity : nil)
+        .background(key == nil ? Color.secondary.opacity(0.18) : on ? Color.accentColor : Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 7))
+        .foregroundStyle(on ? Color.white : Color.primary)
+        .contentShape(Rectangle())
     }
 }

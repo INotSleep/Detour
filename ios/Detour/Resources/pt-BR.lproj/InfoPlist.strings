@@ -1,0 +1,3 @@
+"NSFaceIDUsageDescription" = "O Detour abre o cofre com o Face ID.";
+"NSCameraUsageDescription" = "O Detour lê o código que seu outro dispositivo mostra.";
+"NSLocalNetworkUsageDescription" = "O Detour se conecta aos seus servidores na rede local.";

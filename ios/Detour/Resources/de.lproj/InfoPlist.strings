@@ -1,0 +1,3 @@
+"NSFaceIDUsageDescription" = "Detour öffnet den Tresor mit Face ID.";
+"NSCameraUsageDescription" = "Detour scannt den Code, den dein anderes Gerät zeigt.";
+"NSLocalNetworkUsageDescription" = "Detour verbindet sich mit deinen Servern im lokalen Netzwerk.";

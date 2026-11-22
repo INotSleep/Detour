@@ -10,6 +10,24 @@ private struct SnippetsData: Decodable {
     let snippets: [Snippet]
 }
 
+/// Snippets of one vault: the personal one (no name) or a team's.
+struct SnippetGroup: Identifiable {
+    let id: String
+    let name: String?
+    let snippets: [Snippet]
+
+    static func load() async -> [SnippetGroup] {
+        let mine = (try? await Core.shared.call("vault_get", as: SnippetsData.self).snippets) ?? []
+        let teams = (try? await Core.shared.call("teams_list", as: [TeamSnippets].self)) ?? []
+        var out = mine.isEmpty ? [] : [SnippetGroup(id: "personal", name: nil, snippets: mine)]
+        for t in teams {
+            guard let v = t.view, !v.data.snippets.isEmpty else { continue }
+            out.append(SnippetGroup(id: v.id, name: v.name, snippets: v.data.snippets))
+        }
+        return out
+    }
+}
+
 private struct TeamSnippets: Decodable {
     let view: Team?
 

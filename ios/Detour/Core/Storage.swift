@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// Where a vault or a team is kept, as the phone reaches it: a repository over HTTPS (signed
-/// in with GitHub, or a token) or a cloud drive's folder.
+/// in with GitHub, or a token) or over SSH (with a key of the personal vault), or a cloud
+/// drive's folder.
 @MainActor
 final class StorageModel: ObservableObject {
     enum Kind: String { case git, drive }
@@ -19,6 +20,8 @@ final class StorageModel: ObservableObject {
     @Published var provider: DriveProvider = .onedrive
     @Published var folder: DriveFolderRef?
     @Published var driveAccount: String?
+    /// The personal key a repository over SSH is reached with.
+    @Published var keyId: String?
 
     struct GithubCode: Equatable {
         let code: String
@@ -27,17 +30,24 @@ final class StorageModel: ObservableObject {
 
     var trimmedURL: String { url.trimmingCharacters(in: .whitespaces) }
 
+    /// A repository reached over SSH (`git@host:path`, `ssh://...`): anything not HTTPS.
+    var overSSH: Bool {
+        let u = trimmedURL.lowercased()
+        return !u.isEmpty && !u.hasPrefix("https://") && !u.hasPrefix("http://")
+    }
+
     /// Everything needed is filled in.
     var ready: Bool {
         switch kind {
         case .drive: folder != nil && driveAccount != nil
-        case .git: !trimmedURL.isEmpty && (login == .github ? github != nil : !token.isEmpty)
+        case .git: !trimmedURL.isEmpty && (overSSH ? keyId != nil : login == .github ? github != nil : !token.isEmpty)
         }
     }
 
     /// The repository as the core takes it (`url`, `auth`, `token`, `github`).
     var git: [String: Any?] {
-        ["url": trimmedURL, "auth": ["type": "password"], "token": login == .token ? token : nil, "github": login == .github]
+        if overSSH { return ["url": trimmedURL, "auth": ["type": "key", "keyId": keyId ?? ""]] }
+        return ["url": trimmedURL, "auth": ["type": "password"], "token": login == .token ? token : nil, "github": login == .github]
     }
 
     /// The drive folder as the core takes it, reached with the chosen account.
@@ -104,7 +114,88 @@ struct StorageSections: View {
             } header: {
                 Text("Repository")
             }
-            RepoLoginSection(model: model)
+            if model.overSSH {
+                RepoKeySection(model: model)
+            } else {
+                RepoLoginSection(model: model)
+            }
+        }
+    }
+}
+
+/// Getting into a repository over SSH: a key of the personal vault (or a new one), whose public
+/// half the repository has to know.
+struct RepoKeySection: View {
+    @ObservedObject var model: StorageModel
+    @State private var keys: [SshKey] = []
+    @State private var making = false
+    @State private var copies = 0
+    @State private var error: String?
+
+    private var chosen: SshKey? { keys.first { $0.id == model.keyId } }
+
+    var body: some View {
+        Section {
+            if !keys.isEmpty {
+                Picker("Key", selection: $model.keyId) {
+                    ForEach(keys) { Text($0.name).tag(Optional($0.id)) }
+                }
+            }
+            // The button is always there: the keys load with it.
+            Button {
+                Task { await make() }
+            } label: {
+                HStack {
+                    Label("New key", systemImage: "plus")
+                    if making {
+                        Spacer()
+                        ProgressView()
+                    }
+                }
+            }
+            .disabled(making)
+            .task { await load() }
+            if let chosen {
+                Button {
+                    UIPasteboard.general.string = chosen.publicKey
+                    copies += 1
+                } label: {
+                    LabeledContent("Public key") {
+                        Image(systemName: copies > 0 ? "checkmark" : "doc.on.doc")
+                            .foregroundStyle(copies > 0 ? Color.green : Color.accentColor)
+                    }
+                }
+                .foregroundStyle(.primary)
+                .sensoryFeedback(.success, trigger: copies)
+                ShareLink(item: chosen.publicKey + "\n") { Label("Share", systemImage: "square.and.arrow.up") }
+            }
+            if let error {
+                Text(error).foregroundStyle(.red).font(.footnote)
+            }
+        } footer: {
+            if chosen != nil { Text("Add it to the repository as a deploy key with write access") }
+        }
+    }
+
+    private func load(pick: String? = nil) async {
+        keys = (try? await Core.shared.call("vault_get", as: VaultKeys.self).keys) ?? []
+        let want = pick ?? model.keyId
+        model.keyId = keys.first { $0.id == want }?.id ?? keys.first?.id
+    }
+
+    /// A key for this repository, named after it.
+    private func make() async {
+        making = true
+        error = nil
+        defer { making = false }
+        let repo = model.trimmedURL.split(whereSeparator: { "/:".contains($0) }).last.map { String($0).replacingOccurrences(of: ".git", with: "") }
+        let name = (repo?.isEmpty == false ? repo! : "git") + "-iphone"
+        do {
+            _ = try await Core.shared.call("key_generate", ["vaultId": "personal", "name": name, "algorithm": "ed25519", "remember": true])
+            let fresh = (try? await Core.shared.call("vault_get", as: VaultKeys.self).keys) ?? []
+            await load(pick: fresh.last { $0.name == name }?.id)
+        } catch {
+            self.error = coreErrorText(error)
         }
     }
 }

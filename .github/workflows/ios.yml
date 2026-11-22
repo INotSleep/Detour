@@ -14,6 +14,14 @@ on:
         description: App Store screenshots from the simulator
         type: boolean
         default: false
+      screens:
+        description: "Screens to shoot (default: the App Store ones), e.g. hosts keyskb editor sessions settings"
+        type: string
+        default: ""
+      language:
+        description: "Language of the shots (en, ru, uk, de, es, pt-BR, zh-Hans)"
+        type: string
+        default: en
 
 concurrency:
   group: ios-${{ github.ref }}
@@ -65,6 +73,9 @@ jobs:
 
       - name: App Store screenshots
         if: inputs.screenshots
+        env:
+          DETOUR_SHOT_SCREENS: ${{ inputs.screens }}
+          DETOUR_SHOT_LANG: ${{ inputs.language }}
         run: ios/scripts/screenshots.sh
 
       - uses: actions/upload-artifact@v7

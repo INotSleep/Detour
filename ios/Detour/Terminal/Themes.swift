@@ -58,10 +58,30 @@ final class TerminalSettings: ObservableObject {
         highlight = d.object(forKey: "terminalHighlight") as? Bool ?? true
     }
 
+    /// The terminal's own theme, else the app's, else Detour Dark or Light as the phone is.
     func theme(dark: Bool) -> TerminalTheme {
         if let t = TerminalTheme.named(themeId) { return t }
+        if let t = AppAppearance.shared.theme { return t }
         return TerminalTheme.all[dark ? 0 : 1]
     }
+}
+
+/// The app's look, as on the desktop: the phone's dark or light, or a theme. A theme sets dark
+/// or light, the accent colour, and the terminal's colours while the terminal follows the app.
+@MainActor
+final class AppAppearance: ObservableObject {
+    static let shared = AppAppearance()
+
+    @Published var themeId: String { didSet { UserDefaults.standard.set(themeId, forKey: "appTheme") } }
+
+    private init() {
+        themeId = UserDefaults.standard.string(forKey: "appTheme") ?? TerminalSettings.system
+    }
+
+    var theme: TerminalTheme? { TerminalTheme.named(themeId) }
+    var scheme: ColorScheme? { theme.map { $0.isLight ? .light : .dark } }
+    /// The theme's blue.
+    var accent: SwiftUI.Color? { theme.map { SwiftUI.Color(uiColor: UIColor(hex: $0.c[8])) } }
 }
 
 extension UIColor {

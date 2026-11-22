@@ -36,6 +36,8 @@ final class FilesSession: ObservableObject {
         var fraction: Double? { total > 0 ? min(1, done / total) : nil }
     }
 
+    /// Its place among the open sessions.
+    let uid = UUID()
     let host: Host
     @Published var state = State.connecting
     @Published var transfers: [Transfer] = []

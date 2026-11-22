@@ -81,14 +81,17 @@ echo "app: $app"
 
 export SIMCTL_CHILD_DETOUR_SHOTS_KEY="$(cat "$key")"
 export SIMCTL_CHILD_DETOUR_SHOTS_USER="$user"
+# The App Store's screens in English, unless the run asks for others (to look at the UI).
+screens=${DETOUR_SHOT_SCREENS:-hosts terminal files snippets keys}
+lang=${DETOUR_SHOT_LANG:-en}
 shoot() {
   local dev=$1 kind=$2 n=1
   xcrun simctl install "$dev" "$app"
-  for screen in hosts terminal files snippets keys; do
+  for screen in $screens; do
     xcrun simctl terminate "$dev" dev.detour.ios 2>/dev/null || true
-    xcrun simctl launch "$dev" dev.detour.ios -shot "$screen" -AppleLanguages "(en)" -AppleLocale en_US
+    xcrun simctl launch "$dev" dev.detour.ios -shot "$screen" -AppleLanguages "($lang)" -AppleLocale "${lang/-/_}"
     # The first launch makes the vault (and its key) first.
-    sleep $([ "$screen" = hosts ] && echo 15 || echo 9)
+    sleep $([ $n = 1 ] && echo 15 || echo 9)
     xcrun simctl io "$dev" screenshot "$out/$kind-$n-$screen.png"
     n=$((n + 1))
   done

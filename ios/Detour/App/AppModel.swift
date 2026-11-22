@@ -2,7 +2,38 @@ import Foundation
 import Network
 import SwiftUI
 
-/// What the app shows and holds: the vault's state, its hosts, the open terminals.
+/// An open session: a terminal or a host's files over SFTP.
+enum OpenSession: Identifiable {
+    case terminal(TerminalSession)
+    case files(FilesSession)
+
+    var id: UUID {
+        switch self {
+        case .terminal(let t): t.id
+        case .files(let f): f.uid
+        }
+    }
+
+    var host: Host {
+        switch self {
+        case .terminal(let t): t.host
+        case .files(let f): f.host
+        }
+    }
+
+    var terminal: TerminalSession? {
+        if case .terminal(let t) = self { return t }
+        return nil
+    }
+}
+
+/// The app's tabs, in the order of the tab bar.
+enum MainTab: String, CaseIterable, Identifiable {
+    case hosts, sessions, keys, snippets, proxies, teams, settings
+    var id: String { rawValue }
+}
+
+/// What the app shows and holds: the vault's state, its hosts, the open sessions.
 @MainActor
 final class AppModel: ObservableObject {
     enum Phase { case loading, setup, locked, ready }
@@ -14,9 +45,13 @@ final class AppModel: ObservableObject {
     @Published var driveSignIns: [DriveSignInNeed] = []
     /// Teams on this person's other devices kept in a folder: opened here through a drive.
     @Published var folderTeams: [PendingTeam] = []
-    @Published var terminals: [TerminalSession] = []
-    @Published var current: TerminalSession.ID?
+    @Published var sessions: [OpenSession] = []
+    @Published var current: OpenSession.ID?
     @Published var showTerminals = false
+    @Published var tab: MainTab = .hosts
+
+    /// The open terminals (not the files sessions).
+    var terminals: [TerminalSession] { sessions.compactMap(\.terminal) }
     /// Offer Face ID once, after the first unlock with the password.
     @Published var offerBiometry = false
     /// A `detour://join` link (the other device's QR, scanned with the camera) waiting for the
@@ -155,17 +190,35 @@ final class AppModel: ObservableObject {
 
     func open(_ host: Host) {
         let t = TerminalSession(host: host)
-        terminals.append(t)
+        sessions.append(.terminal(t))
         current = t.id
         showTerminals = true
         t.connect()
     }
 
-    func close(_ t: TerminalSession) {
-        t.close()
-        terminals.removeAll { $0.id == t.id }
-        if current == t.id { current = terminals.last?.id }
-        if terminals.isEmpty { showTerminals = false }
+    /// A host's files, as a session of its own beside the terminals.
+    func openFiles(_ host: Host) {
+        let f = FilesSession(host: host)
+        sessions.append(.files(f))
+        current = f.uid
+        showTerminals = true
+        Task { await f.open() }
+    }
+
+    /// Brings an open session forward.
+    func show(_ s: OpenSession) {
+        current = s.id
+        showTerminals = true
+    }
+
+    func close(_ s: OpenSession) {
+        switch s {
+        case .terminal(let t): t.close()
+        case .files(let f): f.close()
+        }
+        sessions.removeAll { $0.id == s.id }
+        if current == s.id { current = sessions.last?.id }
+        if sessions.isEmpty { showTerminals = false }
     }
 
     /// Back in front: sessions whose connection went while the app slept connect again.

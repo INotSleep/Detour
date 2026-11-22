@@ -86,58 +86,64 @@ struct DriveAccountRow: View {
 
     private var current: DriveAccount? { accounts.first { $0.account == chosen } }
 
+    // One row always stands here, and loading hangs on it: in a Form the modifiers of a Group go
+    // to each of its rows, so with no row yet (accounts not read) nothing would ever load them.
     var body: some View {
-        Group {
-            if flow.paste {
-                DriveCodeField(flow: flow) { Task { await added(flow.finishCode(provider)) } }
-            } else if let current {
-                Menu {
-                    ForEach(accounts, id: \.account) { a in
-                        Button { chosen = a.account } label: {
-                            if a.account == current.account { Label(a.account, systemImage: "checkmark") } else { Text(a.account) }
-                        }
-                    }
-                    Button { Task { await added(flow.signIn(provider, with: webAuth)) } } label: { Label("Add account", systemImage: "plus") }
-                    Divider()
-                    Button(role: .destructive) { Task { await signOut(current.account) } } label: { Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right") }
-                } label: {
-                    LabeledContent("Account") {
-                        HStack(spacing: 6) {
-                            if flow.busy { ProgressView() }
-                            Text(current.account).lineLimit(1).truncationMode(.middle)
-                            Image(systemName: "chevron.up.chevron.down").font(.caption)
-                        }
-                    }
-                }
-                .foregroundStyle(.primary)
-                if !current.signedIn {
-                    Button("Sign in to \(provider.name) again") { Task { await added(flow.signIn(provider, with: webAuth)) } }
-                        .disabled(flow.busy)
-                }
-            } else if loaded {
-                Button { Task { await added(flow.signIn(provider, with: webAuth)) } } label: {
-                    HStack {
-                        Text("Sign in to \(provider.name)")
-                        if flow.busy {
-                            Spacer()
-                            ProgressView()
-                        }
-                    }
-                }
+        accountRow
+            .task(id: provider) {
+                flow.paste = false
+                flow.error = nil
+                await load(pick: account)
+                loaded = true
+            }
+            .onChange(of: chosen) { publish() }
+            .onChange(of: accounts.map(\.signedIn)) { publish() }
+        if !flow.paste, let current, !current.signedIn {
+            Button("Sign in to \(provider.name) again") { Task { await added(flow.signIn(provider, with: webAuth)) } }
                 .disabled(flow.busy)
-            }
-            if let error = flow.error {
-                Text(error).foregroundStyle(.red).font(.footnote)
-            }
         }
-        .task(id: provider) {
-            flow.paste = false
-            flow.error = nil
-            await load(pick: account)
-            loaded = true
+        if let error = flow.error {
+            Text(error).foregroundStyle(.red).font(.footnote)
         }
-        .onChange(of: chosen) { publish() }
-        .onChange(of: accounts.map(\.signedIn)) { publish() }
+    }
+
+    @ViewBuilder private var accountRow: some View {
+        if flow.paste {
+            DriveCodeField(flow: flow) { Task { await added(flow.finishCode(provider)) } }
+        } else if let current {
+            Menu {
+                ForEach(accounts, id: \.account) { a in
+                    Button { chosen = a.account } label: {
+                        if a.account == current.account { Label(a.account, systemImage: "checkmark") } else { Text(a.account) }
+                    }
+                }
+                Button { Task { await added(flow.signIn(provider, with: webAuth)) } } label: { Label("Add account", systemImage: "plus") }
+                Divider()
+                Button(role: .destructive) { Task { await signOut(current.account) } } label: { Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right") }
+            } label: {
+                LabeledContent("Account") {
+                    HStack(spacing: 6) {
+                        if flow.busy { ProgressView() }
+                        Text(current.account).lineLimit(1).truncationMode(.middle)
+                        Image(systemName: "chevron.up.chevron.down").font(.caption)
+                    }
+                }
+            }
+            .foregroundStyle(.primary)
+        } else if loaded {
+            Button { Task { await added(flow.signIn(provider, with: webAuth)) } } label: {
+                HStack {
+                    Text("Sign in to \(provider.name)")
+                    if flow.busy {
+                        Spacer()
+                        ProgressView()
+                    }
+                }
+            }
+            .disabled(flow.busy)
+        } else {
+            LabeledContent("Account") { ProgressView() }
+        }
     }
 
     private func publish() {

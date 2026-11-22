@@ -24,6 +24,7 @@ struct DetourApp: App {
 
 struct RootView: View {
     @EnvironmentObject var app: AppModel
+    @ObservedObject private var appearance = AppAppearance.shared
 
     var body: some View {
         Group {
@@ -32,12 +33,17 @@ struct RootView: View {
             case .setup: LockView(setup: true)
             case .locked: LockView(setup: false)
             case .ready:
-                HostsView()
+                MainView()
                     .fullScreenCover(isPresented: $app.showTerminals) {
-                        TerminalsView().environmentObject(app)
+                        TerminalsView()
+                            .environmentObject(app)
+                            .preferredColorScheme(appearance.scheme)
+                            .tint(appearance.accent ?? Color.accentColor)
                     }
             }
         }
+        .preferredColorScheme(appearance.scheme)
+        .tint(appearance.accent ?? Color.accentColor)
         .alert("Unlock with \(Keychain.biometryName) next time?", isPresented: $app.offerBiometry) {
             Button("Use \(Keychain.biometryName)") { app.rememberWithBiometry(true) }
             Button("Not now", role: .cancel) { app.rememberWithBiometry(false) }

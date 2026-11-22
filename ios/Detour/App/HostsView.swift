@@ -12,11 +12,8 @@ struct HostsView: View {
     @State private var deletedAt = Date.distantPast
 
     private struct EditTarget: Identifiable { let id: String }
-    @State private var filesHost: Host?
     @State private var ownLogin: Host?
-    @State private var snippets = false
     @State private var folderTeam: PendingTeam?
-    @State private var shotKeys = false
 
     var body: some View {
         NavigationStack {
@@ -52,7 +49,7 @@ struct HostsView: View {
                                 }
                                 .contextMenu {
                                     Button { app.open(host) } label: { Label("Connect", systemImage: "terminal") }
-                                    Button { filesHost = host } label: { Label("Files", systemImage: "folder") }
+                                    Button { app.openFiles(host) } label: { Label("Files", systemImage: "folder") }
                                     Button { UIPasteboard.general.string = sshCommand(host) } label: { Label("Copy ssh command", systemImage: "doc.on.doc") }
                                     if host.vaultId != "personal" {
                                         Button { ownLogin = host } label: { Label("My login", systemImage: "person.badge.key") }
@@ -73,38 +70,14 @@ struct HostsView: View {
             .navigationTitle("Hosts")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    if !app.terminals.isEmpty {
-                        Button { app.showTerminals = true } label: {
-                            Label("\(app.terminals.count)", systemImage: "terminal")
-                                .labelStyle(.titleAndIcon)
-                        }
-                    }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
                     Button { editing = EditTarget(id: "") } label: { Image(systemName: "plus") }
                         .accessibilityLabel("New host")
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        NavigationLink { SyncView() } label: { Label("Sync", systemImage: "arrow.triangle.2.circlepath") }
-                        NavigationLink { TeamsView() } label: { Label("Teams", systemImage: "person.3") }
-                        NavigationLink { KeysView() } label: { Label("SSH keys", systemImage: "key") }
-                        Button { snippets = true } label: { Label("Snippets", systemImage: "chevron.left.forwardslash.chevron.right") }
-                        NavigationLink { KeyBarEditor() } label: { Label("Key bar", systemImage: "keyboard") }
-                        NavigationLink { SettingsView() } label: { Label("Settings", systemImage: "gearshape") }
-                        Button { Task { await app.lock() } } label: { Label("Lock", systemImage: "lock") }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                    }
                 }
             }
             .sheet(isPresented: $joining) { SyncJoinView() }
             .sheet(item: $editing) { t in HostEditor(hostId: t.id.isEmpty ? nil : t.id, saved: { await app.reload() }) }
-            .sheet(item: $filesHost) { h in FilesView(host: h) }
             .sheet(item: $ownLogin) { h in OwnLoginEditor(host: h, saved: { await app.reload() }) }
-            .sheet(isPresented: $snippets) { SnippetsView(session: nil) }
             .sheet(item: $folderTeam) { t in TeamFromDriveView(team: t) }
-            .navigationDestination(isPresented: $shotKeys) { KeysView() }
             .task { await shot() }
             .onAppear { joinIfLinked() }
             .onChange(of: app.pendingJoin) { joinIfLinked() }
@@ -134,9 +107,30 @@ struct HostsView: View {
             // The terminal whole, without the keyboard.
             try? await Task.sleep(for: .seconds(2))
             app.terminals.first?.toggleKeyboard(shown: true)
-        case "files": filesHost = local
-        case "snippets": snippets = true
-        case "keys": shotKeys = true
+        case "files": app.openFiles(local)
+        case "snippets": app.tab = .snippets
+        case "keys": app.tab = .keys
+        case "proxies": app.tab = .proxies
+        case "settings": app.tab = .settings
+        case "keyskb", "editor":
+            app.open(local)
+            for _ in 0..<60 {
+                if app.terminals.first?.state == .connected { break }
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+            try? await Task.sleep(for: .seconds(1))
+            app.terminals.first?.run("ls -la")
+            app.terminals.first?.showKeysKeyboard(true)
+            if screen == "editor" {
+                try? await Task.sleep(for: .seconds(1))
+                app.terminals.first?.customizing = true
+            }
+        case "sessions":
+            app.open(local)
+            app.openFiles(local)
+            try? await Task.sleep(for: .seconds(3))
+            app.showTerminals = false
+            app.tab = .sessions
         default: break
         }
         #endif
@@ -219,110 +213,5 @@ private struct HostRow: View {
                 .foregroundStyle(.secondary)
         }
         .padding(.vertical, 2)
-    }
-}
-
-/// Face ID, the key bar, the version.
-struct SettingsView: View {
-    @ObservedObject private var terminal = TerminalSettings.shared
-    @State private var biometry = Keychain.isSaved
-    @State private var askPassword = false
-    @State private var password = ""
-    @State private var error: String?
-
-    var body: some View {
-        Form {
-            if Keychain.biometryAvailable {
-                Section {
-                    Toggle("Unlock with \(Keychain.biometryName)", isOn: Binding(get: { biometry }, set: { on in
-                        if on { askPassword = true } else { Keychain.delete(); biometry = false }
-                    }))
-                    if let error { Text(error).foregroundStyle(.red).font(.footnote) }
-                }
-            }
-            Section("Terminal") {
-                NavigationLink {
-                    ThemePicker()
-                } label: {
-                    LabeledContent("Theme", value: terminal.themeId == TerminalSettings.system ? String(localized: "As the system") : TerminalTheme.named(terminal.themeId)?.name ?? "")
-                }
-                Stepper(value: $terminal.fontSize, in: 9...24, step: 1) {
-                    LabeledContent("Font size", value: "\(Int(terminal.fontSize))")
-                }
-                Toggle("Highlight output", isOn: $terminal.highlight)
-                NavigationLink("Key bar") { KeyBarEditor() }
-            }
-            Section {
-                LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")
-            }
-        }
-        .navigationTitle("Settings")
-        .alert("Master password", isPresented: $askPassword) {
-            SecureField("Master password", text: $password)
-            Button("Cancel", role: .cancel) { password = "" }
-            Button("Turn on") { Task { await turnOn() } }
-        }
-    }
-
-    private func turnOn() async {
-        let pw = password
-        password = ""
-        do {
-            // Checked by the core before it is kept.
-            _ = try await Core.shared.call("vault_unlock", ["masterPassword": pw])
-            biometry = Keychain.save(pw)
-            error = biometry ? nil : String(localized: "Couldn't save it on this device")
-        } catch {
-            self.error = String(localized: "Wrong master password")
-        }
-    }
-}
-
-/// The terminal's themes, each shown in its own colours.
-private struct ThemePicker: View {
-    @ObservedObject private var settings = TerminalSettings.shared
-
-    var body: some View {
-        List {
-            row(id: TerminalSettings.system, name: String(localized: "As the system"), theme: nil)
-            ForEach(TerminalTheme.all) { t in row(id: t.id, name: t.name, theme: t) }
-        }
-        .navigationTitle("Theme")
-    }
-
-    private func row(id: String, name: String, theme: TerminalTheme?) -> some View {
-        Button {
-            settings.themeId = id
-        } label: {
-            HStack(spacing: 12) {
-                swatch(theme)
-                Text(name).foregroundStyle(.primary)
-                Spacer()
-                if settings.themeId == id { Image(systemName: "checkmark").foregroundStyle(Color.accentColor) }
-            }
-        }
-    }
-
-    /// The background with a prompt in the theme's own colours.
-    @ViewBuilder private func swatch(_ theme: TerminalTheme?) -> some View {
-        if let theme {
-            HStack(spacing: 0) {
-                Text("$ ").foregroundStyle(Color(uiColor: theme.foreground))
-                Text("~").foregroundStyle(Color(uiColor: UIColor(hex: theme.c[8])))
-                Text(" ok").foregroundStyle(Color(uiColor: UIColor(hex: theme.c[6])))
-            }
-            .font(.system(size: 13, design: .monospaced))
-            .frame(width: 64, height: 32)
-            .background(Color(uiColor: theme.background), in: RoundedRectangle(cornerRadius: 6))
-            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
-        } else {
-            HStack(spacing: 0) {
-                Color(uiColor: TerminalTheme.all[0].background)
-                Color(uiColor: TerminalTheme.all[1].background)
-            }
-            .frame(width: 64, height: 32)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
-        }
     }
 }

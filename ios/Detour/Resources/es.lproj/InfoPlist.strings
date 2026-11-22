@@ -1,0 +1,3 @@
+"NSFaceIDUsageDescription" = "Detour abre tu bóveda con Face ID.";
+"NSCameraUsageDescription" = "Detour escanea el código que muestra tu otro dispositivo.";
+"NSLocalNetworkUsageDescription" = "Detour se conecta a tus servidores en la red local.";

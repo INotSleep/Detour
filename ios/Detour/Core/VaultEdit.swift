@@ -18,7 +18,7 @@ enum PersonalVault {
     }
 
     private static func pick(_ d: JSON) -> JSON {
-        ["hosts": d["hosts"] ?? [], "keys": d["keys"] ?? [], "snippets": d["snippets"] ?? [], "tunnels": d["tunnels"] ?? []]
+        ["hosts": d["hosts"] ?? [], "keys": d["keys"] ?? [], "snippets": d["snippets"] ?? [], "tunnels": d["tunnels"] ?? [], "proxies": d["proxies"] ?? []]
     }
 
     static func newId() -> String { UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased() }
