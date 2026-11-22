@@ -13,8 +13,8 @@ packages:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "0.5.0"
-    CURRENT_PROJECT_VERSION: "10"
+    MARKETING_VERSION: "0.6.0"
+    CURRENT_PROJECT_VERSION: "11"
 targets:
   Detour:
     type: application
