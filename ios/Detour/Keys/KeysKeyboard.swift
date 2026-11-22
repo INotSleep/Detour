@@ -150,7 +150,8 @@ private struct KeysKeyboardKey: View {
 final class KeysInputView: UIInputView {
     private var host: UIHostingController<KeysKeyboardView>?
 
-    static var height: CGFloat { UIDevice.current.userInterfaceIdiom == .pad ? 330 : 290 }
+    /// As tall as the system keyboard with its suggestions: five rows show whole on a phone.
+    static var height: CGFloat { UIDevice.current.userInterfaceIdiom == .pad ? 330 : 336 }
 
     init(session: TerminalSession) {
         super.init(frame: CGRect(x: 0, y: 0, width: UIScreen.main.bounds.width, height: Self.height), inputViewStyle: .keyboard)

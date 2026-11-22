@@ -125,8 +125,8 @@ final class KeyBarStore: ObservableObject {
     }
 
     static let defaults: [KeySet] = [
-        KeySet(name: "Main", keys: [.init(kind: .esc), .init(kind: .ctrl), .init(kind: .tab), .init(kind: .left), .init(kind: .down), .init(kind: .up), .init(kind: .right), .init(kind: .text, value: "|"), .init(kind: .text, value: "~"), .init(kind: .text, value: "/"), .init(kind: .text, value: "-")]),
-        KeySet(name: "More", keys: [.init(kind: .alt), .init(kind: .home), .init(kind: .end), .init(kind: .pageUp), .init(kind: .pageDown), .init(kind: .combo, value: "ctrl+c"), .init(kind: .combo, value: "ctrl+d"), .init(kind: .combo, value: "ctrl+z"), .init(kind: .combo, value: "ctrl+r")]),
+        KeySet(name: String(localized: "Main"), keys: [.init(kind: .esc), .init(kind: .ctrl), .init(kind: .tab), .init(kind: .left), .init(kind: .down), .init(kind: .up), .init(kind: .right), .init(kind: .text, value: "|"), .init(kind: .text, value: "~"), .init(kind: .text, value: "/"), .init(kind: .text, value: "-")]),
+        KeySet(name: String(localized: "More"), keys: [.init(kind: .alt), .init(kind: .home), .init(kind: .end), .init(kind: .pageUp), .init(kind: .pageDown), .init(kind: .combo, value: "ctrl+c"), .init(kind: .combo, value: "ctrl+d"), .init(kind: .combo, value: "ctrl+z"), .init(kind: .combo, value: "ctrl+r")]),
     ]
 }
 
@@ -226,7 +226,11 @@ struct KeyCap: View {
         }
         .frame(width: width, height: height)
         .frame(maxWidth: width == nil ? .infinity : nil)
-        .background(key == nil ? Color.secondary.opacity(0.18) : on ? Color.accentColor : Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 7))
+        // A fill, not a background colour: it shows on the keyboard, the bar and a list's row alike.
+        .background(key == nil ? Color.secondary.opacity(0.12) : on ? Color.accentColor : Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 7))
+        .overlay {
+            if key == nil { RoundedRectangle(cornerRadius: 7).strokeBorder(Color.secondary.opacity(0.25), style: StrokeStyle(lineWidth: 1, dash: [3, 3])) }
+        }
         .foregroundStyle(on ? Color.white : Color.primary)
         .contentShape(Rectangle())
     }
