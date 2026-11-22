@@ -37,12 +37,15 @@ final class TerminalSession: ObservableObject, Identifiable {
     private var userClosed = false
     /// A check found the connection gone: connect again as soon as the core ends the session.
     private var reconnectWhenEnded = false
-    weak var view: TerminalView? {
+    /// The terminal: kept for as long as the session is open, so its screen can come and go.
+    var view: TerminalView? {
         didSet {
             view?.inputView = keysKeyboard ? keysInput() : nil
             flush()
         }
     }
+    /// The terminal's delegate, which the terminal holds weakly.
+    var viewDelegate: AnyObject?
     var cols = 80
     var rows = 24
     /// The size the server's terminal has: the shell wraps lines by it, so it must be the screen's.
@@ -55,7 +58,12 @@ final class TerminalSession: ObservableObject, Identifiable {
         title = host.label
     }
 
+    /// The server key the person accepted: kept for the tries after it (the password asked next),
+    /// since the core pins it only once a login succeeds.
+    private var trusted: String?
+
     func connect(secret: String? = nil, trust: String? = nil) {
+        if let trust { trusted = trust }
         state = .connecting
         let s = Core.shared.newStream()
         stream = s
@@ -64,7 +72,7 @@ final class TerminalSession: ObservableObject, Identifiable {
         sentCols = cols
         sentRows = rows
         let args: [String: Any] = ([
-            "vaultId": host.vaultId, "hostId": host.id, "secret": secret, "trustFingerprint": trust, "cols": cols, "rows": rows,
+            "vaultId": host.vaultId, "hostId": host.id, "secret": secret, "trustFingerprint": trust ?? trusted, "cols": cols, "rows": rows,
         ] as [String: Any?]).compactMapValues { $0 }
         Task {
             do {
@@ -252,6 +260,8 @@ final class TerminalSession: ObservableObject, Identifiable {
     func close() {
         userClosed = true
         view?.inputView = nil
+        view = nil
+        viewDelegate = nil
         keysView = nil
         typedSecret = nil
         if let s = stream { Core.shared.unwatch(stream: s) }

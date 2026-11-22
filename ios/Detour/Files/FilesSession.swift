@@ -48,9 +48,14 @@ final class FilesSession: ObservableObject {
         self.host = host
     }
 
+    /// The server key the person accepted: kept for the password asked next (the core pins it
+    /// only once a login succeeds).
+    private var trusted: String?
+
     func open(secret: String? = nil, trust: String? = nil) async {
+        if let trust { trusted = trust }
         state = .connecting
-        let args: [String: Any?] = ["vaultId": host.vaultId, "hostId": host.id, "secret": secret, "trustFingerprint": trust]
+        let args: [String: Any?] = ["vaultId": host.vaultId, "hostId": host.id, "secret": secret, "trustFingerprint": trust ?? trusted]
         do {
             let r = try await Core.shared.call("files_open", args) as? [String: Any] ?? [:]
             id = r["id"] as? String

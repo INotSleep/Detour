@@ -70,6 +70,14 @@ struct TerminalHost: UIViewRepresentable {
 
     func makeUIView(context: Context) -> TerminalView {
         _ = DetourTerminalView.installTrackpad
+        // The session keeps its terminal while it is open: back on its screen, what it showed is
+        // all there (the screen itself is made anew each time).
+        session.viewDelegate = context.coordinator
+        if let tv = session.view {
+            tv.terminalDelegate = context.coordinator
+            DispatchQueue.main.async { _ = tv.becomeFirstResponder() }
+            return tv
+        }
         let tv = DetourTerminalView(frame: .zero)
         tv.terminalDelegate = context.coordinator
         tv.apply(settings.theme(dark: scheme == .dark), fontSize: settings.fontSize)
@@ -87,13 +95,15 @@ struct TerminalHost: UIViewRepresentable {
         }
         if context.coordinator.session !== session {
             context.coordinator.session = session
+            session.viewDelegate = context.coordinator
             session.view = tv
         }
     }
 
     @MainActor
     final class Coordinator: NSObject, TerminalViewDelegate {
-        var session: TerminalSession
+        /// Weak: the session keeps this (its terminal's delegate is weak).
+        weak var session: TerminalSession?
         var theme = ""
 
         init(session: TerminalSession) {
@@ -103,15 +113,15 @@ struct TerminalHost: UIViewRepresentable {
 
         nonisolated func send(source: TerminalView, data: ArraySlice<UInt8>) {
             let bytes = Array(data)
-            MainActor.assumeIsolated { session.send(bytes) }
+            MainActor.assumeIsolated { session?.send(bytes) }
         }
 
         nonisolated func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
-            MainActor.assumeIsolated { session.resize(cols: newCols, rows: newRows) }
+            MainActor.assumeIsolated { session?.resize(cols: newCols, rows: newRows) }
         }
 
         nonisolated func setTerminalTitle(source: TerminalView, title: String) {
-            MainActor.assumeIsolated { if !title.isEmpty { session.title = title } }
+            MainActor.assumeIsolated { if !title.isEmpty { session?.title = title } }
         }
 
         nonisolated func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
