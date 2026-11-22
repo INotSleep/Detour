@@ -151,10 +151,17 @@ struct HostsView: View {
                 try? await Task.sleep(for: .milliseconds(800))
                 Shots.dump(t, step)
             }
-            // Back in the history, where the prompts showed twice.
-            t?.view?.scrollUp(lines: 6)
+            // Back in the history as a finger drags it, where the prompts showed twice.
+            if let view = t?.view as? DetourTerminalView {
+                view.fakeTracking = true
+                for _ in 0..<20 {
+                    view.contentOffset.y -= 7
+                    try? await Task.sleep(for: .milliseconds(40))
+                }
+                view.fakeTracking = false
+            }
             try? await Task.sleep(for: .milliseconds(800))
-            Shots.dump(t, "scrolled up 6")
+            Shots.dump(t, "dragged up 140pt")
         case "sessions":
             app.open(local)
             app.openFiles(local)
