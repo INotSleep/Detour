@@ -56,6 +56,17 @@ struct KeyboardEditor: View {
                     .swipeActions(edge: .trailing) {
                         Button(role: .destructive) { keys.blocks.removeAll { $0.id == block.id } } label: { Label("Delete", systemImage: "trash") }
                     }
+                    // Dragging a row moves it too; the menu is for when a key's button takes the drag.
+                    .contextMenu {
+                        let i = keys.blocks.firstIndex { $0.id == block.id } ?? 0
+                        if i > 0 {
+                            Button { withAnimation { keys.blocks.swapAt(i, i - 1) } } label: { Label("Move up", systemImage: "arrow.up") }
+                        }
+                        if i < keys.blocks.count - 1 {
+                            Button { withAnimation { keys.blocks.swapAt(i, i + 1) } } label: { Label("Move down", systemImage: "arrow.down") }
+                        }
+                        Button(role: .destructive) { keys.blocks.removeAll { $0.id == block.id } } label: { Label("Delete", systemImage: "trash") }
+                    }
                 }
                 .onMove { keys.blocks.move(fromOffsets: $0, toOffset: $1) }
                 Button { keys.blocks.append(KeyBlock()) } label: { Label("Add row", systemImage: "plus") }

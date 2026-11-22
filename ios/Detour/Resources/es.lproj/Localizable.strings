@@ -273,3 +273,5 @@
 "tab.keys" = "Claves";
 "Main" = "Principal";
 "More" = "Más";
+"Move up" = "Subir";
+"Move down" = "Bajar";

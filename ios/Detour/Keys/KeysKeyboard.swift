@@ -58,14 +58,12 @@ struct KeysKeyboardView: View {
         GeometryReader { geo in
             let wide = geo.size.width >= 700
             VStack(spacing: 6) {
-                HStack {
-                    Button { session.customizing = true } label: {
-                        Label("Customize", systemImage: "slider.horizontal.3").font(.subheadline)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    Spacer()
+                Button { session.customizing = true } label: {
+                    Label("Customize", systemImage: "slider.horizontal.3")
+                        .font(.subheadline.weight(.medium))
+                        .frame(maxWidth: .infinity, minHeight: 30)
                 }
+                .buttonStyle(.bordered)
                 ScrollView {
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 14), count: wide ? 2 : 1), spacing: 6) {
                         ForEach(store.blocks) { block in
