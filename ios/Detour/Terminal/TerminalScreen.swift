@@ -314,7 +314,9 @@ private struct SessionScreen: View {
         GeometryReader { geo in
             // How far the keyboard reaches into this screen.
             let lift = keyboard.shown ? max(0, geo.frame(in: .global).maxY - keyboard.top) : 0
-            let bar = keyboard.hardware || keys.hidden ? 0 : TerminalBar.height
+            // The keys keyboard has the bar's keys and more: the bar steps aside while it is up.
+            let showKeys = !keys.hidden && !session.keysKeyboard
+            let bar = keyboard.hardware || !showKeys ? 0 : TerminalBar.height
             ZStack(alignment: .bottom) {
                 // The terminal takes its new size at once rather than following the keyboard's
                 // animation: resizing it on every frame is what made it jump.
@@ -325,7 +327,7 @@ private struct SessionScreen: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .padding(.bottom, lift + bar)
                 if !keyboard.hardware {
-                    TerminalBar(session: session, showKeys: !keys.hidden, keyboardShown: keyboard.shown)
+                    TerminalBar(session: session, showKeys: showKeys, keyboardShown: keyboard.shown)
                         .padding(.bottom, lift)
                         .animation(.easeOut(duration: keyboard.duration), value: lift)
                 }

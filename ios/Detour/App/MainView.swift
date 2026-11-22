@@ -13,6 +13,7 @@ struct MainView: View {
                 if opened.contains(tab) {
                     screen(tab)
                         .opacity(app.tab == tab ? 1 : 0)
+                        .animation(.easeInOut(duration: 0.18), value: app.tab)
                         .allowsHitTesting(app.tab == tab)
                         .accessibilityHidden(app.tab != tab)
                 }
@@ -66,50 +67,69 @@ extension MainTab {
     }
 }
 
-/// Seven tabs in one row, as the system's tab bar looks.
+/// Seven tabs in one row: the chosen one an icon and its name in a pill, the others icons only;
+/// the pill slides to the tab tapped.
 private struct TabBar: View {
     @Binding var selection: MainTab
     let sessions: Int
+    @Namespace private var pill
 
     var body: some View {
-        VStack(spacing: 0) {
-            Divider()
-            HStack(spacing: 0) {
-                ForEach(MainTab.allCases) { tab in
-                    Button { selection = tab } label: {
-                        VStack(spacing: 3) {
-                            Image(systemName: tab.icon)
-                                .font(.system(size: 19))
-                                .frame(height: 24)
-                                .overlay(alignment: .topTrailing) {
-                                    if tab == .sessions && sessions > 0 {
-                                        Text(verbatim: "\(sessions)")
-                                            .font(.system(size: 10, weight: .bold))
-                                            .foregroundStyle(.white)
-                                            .padding(.horizontal, 4)
-                                            .frame(minWidth: 15, minHeight: 15)
-                                            .background(Color.red, in: Capsule())
-                                            .offset(x: 9, y: -4)
-                                    }
-                                }
+        HStack(spacing: 2) {
+            ForEach(MainTab.allCases) { tab in
+                let chosen = selection == tab
+                Button {
+                    UISelectionFeedbackGenerator().selectionChanged()
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) { selection = tab }
+                } label: {
+                    HStack(spacing: 6) {
+                        icon(tab)
+                        if chosen {
                             Text(tab.title)
-                                .font(.system(size: 10, weight: .medium))
+                                .font(.subheadline.weight(.semibold))
                                 .lineLimit(1)
-                                .minimumScaleFactor(0.7)
+                                .fixedSize()
+                                .transition(.opacity.combined(with: .scale(scale: 0.8, anchor: .leading)))
                         }
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 6)
-                        .padding(.bottom, 2)
-                        .foregroundStyle(selection == tab ? Color.accentColor : Color.secondary)
-                        .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityAddTraits(selection == tab ? .isSelected : [])
+                    .padding(.horizontal, chosen ? 14 : 0)
+                    .frame(height: 40)
+                    .frame(maxWidth: chosen ? nil : .infinity)
+                    .background {
+                        if chosen {
+                            Capsule().fill(Color.accentColor.opacity(0.16)).matchedGeometryEffect(id: "pill", in: pill)
+                        }
+                    }
+                    .foregroundStyle(chosen ? Color.accentColor : Color.secondary)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(tab.title)
+                .accessibilityAddTraits(chosen ? .isSelected : [])
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.top, 6)
+        .padding(.bottom, 2)
+        .background(.bar)
+        .overlay(alignment: .top) { Divider() }
+    }
+
+    private func icon(_ tab: MainTab) -> some View {
+        Image(systemName: tab.icon)
+            .font(.system(size: 18, weight: .medium))
+            .frame(width: 26, height: 24)
+            .overlay(alignment: .topTrailing) {
+                if tab == .sessions && sessions > 0 {
+                    Text(verbatim: "\(sessions)")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 4)
+                        .frame(minWidth: 15, minHeight: 15)
+                        .background(Color.red, in: Capsule())
+                        .offset(x: 8, y: -5)
                 }
             }
-            .padding(.horizontal, 2)
-        }
-        .background(.bar)
     }
 }
 

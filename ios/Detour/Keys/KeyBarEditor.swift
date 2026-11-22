@@ -8,14 +8,14 @@ struct KeyboardEditor: View {
     @State private var picking: Slot?
     @State private var confirmReset = false
 
-    /// A place a key goes: in a set of the bar (nil: a new key at its end) or a row of the keyboard.
+    /// A place a key goes: in the bar (nil: a new key at its end) or a row of the keyboard.
     enum Slot: Identifiable {
-        case bar(set: UUID, index: Int?)
+        case bar(Int?)
         case block(UUID, Int)
 
         var id: String {
             switch self {
-            case .bar(let s, let i): "bar/\(s)/\(i.map(String.init) ?? "new")"
+            case .bar(let i): "bar/\(i.map(String.init) ?? "new")"
             case .block(let b, let i): "block/\(b)/\(i)"
             }
         }
@@ -26,34 +26,17 @@ struct KeyboardEditor: View {
             Section {
                 Toggle("Show the key bar", isOn: Binding(get: { !bar.hidden }, set: { bar.hidden = !$0 }))
                 if !bar.hidden {
-                    ForEach($bar.sets) { $set in
-                        VStack(alignment: .leading, spacing: 8) {
-                            if bar.sets.count > 1 {
-                                TextField("Set name", text: $set.name).font(.footnote).foregroundStyle(.secondary)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 4) {
+                            ForEach(Array(bar.keys.enumerated()), id: \.element.id) { i, key in
+                                Button { picking = .bar(i) } label: { KeyCap(key: key, width: KeyCap.barWidth, height: 34) }
+                                    .buttonStyle(.plain)
                             }
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 4) {
-                                    ForEach(Array(set.keys.enumerated()), id: \.element.id) { i, key in
-                                        Button { picking = .bar(set: set.id, index: i) } label: { KeyCap(key: key, width: KeyCap.barWidth, height: 34) }
-                                            .buttonStyle(.plain)
-                                    }
-                                    Button { picking = .bar(set: set.id, index: nil) } label: { addCap(width: KeyCap.barWidth, height: 34) }
-                                        .buttonStyle(.plain)
-                                        .accessibilityLabel("Add key")
-                                }
-                                .padding(.vertical, 2)
-                            }
+                            Button { picking = .bar(nil) } label: { addCap(width: KeyCap.barWidth, height: 34) }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Add key")
                         }
-                        .swipeActions(edge: .trailing) {
-                            if bar.sets.count > 1 {
-                                Button(role: .destructive) { bar.sets.removeAll { $0.id == set.id } } label: { Label("Delete", systemImage: "trash") }
-                            }
-                        }
-                    }
-                    Button {
-                        bar.sets.append(KeySet(name: String(localized: "Set \(bar.sets.count + 1)"), keys: []))
-                    } label: {
-                        Label("Add set", systemImage: "plus.rectangle.on.rectangle")
+                        .padding(.vertical, 2)
                     }
                 }
             } header: {
@@ -107,9 +90,9 @@ struct KeyboardEditor: View {
 
     private func key(at slot: Slot) -> BarKey? {
         switch slot {
-        case .bar(let s, let i):
-            guard let i, let set = bar.sets.first(where: { $0.id == s }), set.keys.indices.contains(i) else { return nil }
-            return set.keys[i]
+        case .bar(let i):
+            guard let i, bar.keys.indices.contains(i) else { return nil }
+            return bar.keys[i]
         case .block(let b, let i):
             guard let block = keys.blocks.first(where: { $0.id == b }), block.keys.indices.contains(i) else { return nil }
             return block.keys[i]
@@ -117,15 +100,14 @@ struct KeyboardEditor: View {
     }
 
     private func movable(_ slot: Slot) -> Bool {
-        if case .bar(_, let i) = slot { return i != nil }
+        if case .bar(let i) = slot { return i != nil }
         return false
     }
 
     private func apply(_ change: KeyPicker.Change, to slot: Slot) {
         switch slot {
-        case .bar(let s, let i):
-            guard let si = bar.sets.firstIndex(where: { $0.id == s }) else { return }
-            var list = bar.sets[si].keys
+        case .bar(let i):
+            var list = bar.keys
             switch change {
             case .set(var key):
                 if let i, list.indices.contains(i) {
@@ -139,7 +121,7 @@ struct KeyboardEditor: View {
             case .move(let by):
                 if let i, list.indices.contains(i), list.indices.contains(i + by) { list.swapAt(i, i + by) }
             }
-            bar.sets[si].keys = list
+            bar.keys = list
         case .block(let b, let i):
             guard let bi = keys.blocks.firstIndex(where: { $0.id == b }) else { return }
             var block = keys.blocks[bi]

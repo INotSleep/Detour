@@ -88,16 +88,19 @@ struct KeySet: Codable, Identifiable, Hashable {
     var keys: [BarKey]
 }
 
-/// The bar's sets and whether it shows, kept on this device.
+/// The bar's keys and whether it shows, kept on this device. The bar is one row that scrolls:
+/// sets saved by earlier versions are joined into it.
 @MainActor
 final class KeyBarStore: ObservableObject {
     static let shared = KeyBarStore()
 
-    @Published var sets: [KeySet] { didSet { save() } }
+    @Published var keys: [BarKey] { didSet { save() } }
     @Published var hidden: Bool { didSet { save() } }
 
     private struct Saved: Codable {
-        var sets: [KeySet]
+        var keys: [BarKey]?
+        /// Earlier versions: rows swiped between.
+        var sets: [KeySet]?
         var hidden: Bool
     }
 
@@ -105,68 +108,46 @@ final class KeyBarStore: ObservableObject {
 
     private init() {
         if let data = UserDefaults.standard.data(forKey: Self.key), let s = try? JSONDecoder().decode(Saved.self, from: data) {
-            sets = s.sets
+            keys = s.keys ?? (s.sets ?? []).flatMap(\.keys)
             hidden = s.hidden
         } else {
-            sets = Self.defaults
+            keys = Self.defaults
             hidden = false
         }
     }
 
     private func save() {
-        if let data = try? JSONEncoder().encode(Saved(sets: sets, hidden: hidden)) {
+        if let data = try? JSONEncoder().encode(Saved(keys: keys, sets: nil, hidden: hidden)) {
             UserDefaults.standard.set(data, forKey: Self.key)
         }
     }
 
     func reset() {
-        sets = Self.defaults
+        keys = Self.defaults
         hidden = false
     }
 
-    static let defaults: [KeySet] = [
-        KeySet(name: String(localized: "Main"), keys: [.init(kind: .esc), .init(kind: .ctrl), .init(kind: .tab), .init(kind: .left), .init(kind: .down), .init(kind: .up), .init(kind: .right), .init(kind: .text, value: "|"), .init(kind: .text, value: "~"), .init(kind: .text, value: "/"), .init(kind: .text, value: "-")]),
-        KeySet(name: String(localized: "More"), keys: [.init(kind: .alt), .init(kind: .home), .init(kind: .end), .init(kind: .pageUp), .init(kind: .pageDown), .init(kind: .combo, value: "ctrl+c"), .init(kind: .combo, value: "ctrl+d"), .init(kind: .combo, value: "ctrl+z"), .init(kind: .combo, value: "ctrl+r")]),
+    static let defaults: [BarKey] = [
+        .init(kind: .esc), .init(kind: .ctrl), .init(kind: .tab), .init(kind: .left), .init(kind: .down), .init(kind: .up), .init(kind: .right),
+        .init(kind: .text, value: "|"), .init(kind: .text, value: "~"), .init(kind: .text, value: "/"), .init(kind: .text, value: "-"),
+        .init(kind: .alt), .init(kind: .home), .init(kind: .end), .init(kind: .pageUp), .init(kind: .pageDown),
+        .init(kind: .combo, value: "ctrl+c"), .init(kind: .combo, value: "ctrl+d"), .init(kind: .combo, value: "ctrl+z"), .init(kind: .combo, value: "ctrl+r"),
     ]
 }
 
-/// The bar over the keyboard: the sets, swiped between.
+/// The bar over the keyboard: one row of keys that scrolls sideways.
 struct KeyBarView: View {
     @ObservedObject var store: KeyBarStore
     @ObservedObject var session: TerminalSession
-    @State private var page = 0
 
     var body: some View {
-        TabView(selection: $page) {
-            ForEach(Array(store.sets.enumerated()), id: \.element.id) { i, set in
-                ScrollView(.horizontal, showsIndicators: false) {
-                    // Tight enough that the main set, arrows included, fits a 375-point phone
-                    // beside the keyboard button.
-                    HStack(spacing: 4) {
-                        ForEach(set.keys) { key in
-                            KeyButton(key: key, on: on(key)) { press(key) }
-                        }
-                    }
-                    .padding(.horizontal, 6)
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 4) {
+                ForEach(store.keys) { key in
+                    KeyButton(key: key, on: on(key)) { press(key) }
                 }
-                .tag(i)
             }
-        }
-        // The system's page dots take taps (one moves to the next set) and cover the keys'
-        // lower half, so they are drawn here instead, for looking only.
-        .tabViewStyle(.page(indexDisplayMode: .never))
-        .overlay(alignment: .bottom) {
-            if store.sets.count > 1 {
-                HStack(spacing: 4) {
-                    ForEach(store.sets.indices, id: \.self) { i in
-                        Circle()
-                            .fill(i == page ? Color.primary : Color.secondary.opacity(0.4))
-                            .frame(width: 4, height: 4)
-                    }
-                }
-                .padding(.bottom, 1)
-                .allowsHitTesting(false)
-            }
+            .padding(.horizontal, 6)
         }
         .frame(height: 46)
         .background(.bar)
