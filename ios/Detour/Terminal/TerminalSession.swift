@@ -27,6 +27,9 @@ final class TerminalSession: ObservableObject, Identifiable {
     /// The keys keyboard asked for its settings.
     @Published var customizing = false
     private var keysView: KeysInputView?
+    /// The password or passphrase typed for this session, kept in memory while it is open: the
+    /// shell's history is read with it.
+    private(set) var typedSecret: String?
 
     private(set) var sessionId: String?
     private var stream: UInt64?
@@ -60,6 +63,7 @@ final class TerminalSession: ObservableObject, Identifiable {
             do {
                 let r = try await Core.shared.call("session_open", ["args": args, "stream": s]) as? [String: Any]
                 sessionId = r?["sessionId"] as? String
+                if let secret { typedSecret = secret }
                 state = .connected
             } catch let f as CoreFailure {
                 Core.shared.unwatch(stream: s)
@@ -138,12 +142,12 @@ final class TerminalSession: ObservableObject, Identifiable {
     }
 
     /// Swaps the system keyboard and the keys keyboard, and shows the one chosen. The keys
-    /// keyboard takes the place of the system one and the bar over it together, so the terminal
-    /// keeps its size; the swap itself is not animated.
+    /// keyboard is as tall as the system one, so the terminal keeps its size; the swap itself is
+    /// not animated.
     func showKeysKeyboard(_ on: Bool) {
         let kb = KeyboardObserver.shared
         if on, kb.shown, !keysKeyboard {
-            KeysInputView.matched = kb.height + (KeyBarStore.shared.hidden ? 0 : KeysInputView.barHeight)
+            KeysInputView.matched = kb.height
         }
         kb.swappingUntil = Date().addingTimeInterval(0.6)
         keysKeyboard = on
@@ -164,8 +168,32 @@ final class TerminalSession: ObservableObject, Identifiable {
         connect()
     }
 
+    /// The program asked for application cursor keys (vim, less): arrows go as `Esc O A`.
+    var appCursor: Bool { view?.terminalInputStateSnapshot()?.applicationCursor ?? false }
+
+    /// The command on the screen's line where the cursor is (wrapped lines joined), the prompt
+    /// left out; nil in a full-screen program or with no prompt in sight (a password asked).
+    func commandLine() -> String? {
+        guard let view, view.terminalInputStateSnapshot()?.isAlternateBuffer == false else { return nil }
+        let snap = view.terminalStateSnapshot()
+        let rows = snap.visibleRows
+        guard let end = rows.firstIndex(where: { $0.row == snap.cursor.row }) else { return nil }
+        var start = end
+        while start > 0 && rows[start].isWrapped { start -= 1 }
+        return TypedHistory.command(afterPrompt: rows[start...end].map(\.text).joined())
+    }
+
     /// What the person typed (or a key of the bar), with Ctrl or Alt if armed.
     func send(_ bytes: [UInt8]) {
+        // Enter: what is on the line is a command the person ran. Read a moment later, out of
+        // SwiftTerm's key handling (which may hold the terminal's lock): the server's answer to
+        // Enter takes a round trip, so the line is still as it was.
+        if bytes.contains(0x0d), !ctrl, !alt {
+            let hostId = host.id
+            DispatchQueue.main.async { [weak self] in
+                if let command = self?.commandLine() { TypedHistory.shared.add(command, host: hostId) }
+            }
+        }
         var out = bytes
         if ctrl, out.count == 1, let c = Self.control(out[0]) {
             out = [c]
@@ -178,6 +206,7 @@ final class TerminalSession: ObservableObject, Identifiable {
 
     /// Types a snippet's command and presses Enter (each line of a longer one too).
     func run(_ command: String) {
+        TypedHistory.shared.add(command.trimmingCharacters(in: .whitespacesAndNewlines), host: host.id)
         let text = command.trimmingCharacters(in: .newlines).replacingOccurrences(of: "\r\n", with: "\r").replacingOccurrences(of: "\n", with: "\r") + "\r"
         input(Array(text.utf8))
     }
@@ -202,6 +231,7 @@ final class TerminalSession: ObservableObject, Identifiable {
         userClosed = true
         view?.inputView = nil
         keysView = nil
+        typedSecret = nil
         if let s = stream { Core.shared.unwatch(stream: s) }
         guard let id = sessionId else { return }
         Task { _ = try? await Core.shared.call("session_close", ["sessionId": id]) }

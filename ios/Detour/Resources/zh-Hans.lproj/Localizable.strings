@@ -281,3 +281,7 @@
 "Login, if the proxy asks for one" = "登录信息（如果代理需要）";
 "This isn't a vless:// link or a WireGuard config" = "这不是 vless:// 链接，也不是 WireGuard 配置";
 "Detour can't do this yet: %@" = "Detour 暂不支持：%@";
+"History" = "历史";
+"No history yet" = "暂无历史";
+"Run" = "运行";
+"The history needs the host's password" = "读取历史需要主机密码";

@@ -13,6 +13,16 @@ struct MainView: View {
     @State private var leaving: MainTab?
 
     var body: some View {
+        // The screens end where the tab bar starts: what a screen puts at its bottom (Undo) shows.
+        VStack(spacing: 0) {
+            screens
+            if !keyboard.shown || app.showTerminals {
+                TabBar(selection: $app.tab, sessions: app.sessions.count)
+            }
+        }
+    }
+
+    private var screens: some View {
         GeometryReader { geo in
             ZStack {
                 ForEach(MainTab.allCases) { tab in
@@ -27,11 +37,6 @@ struct MainView: View {
             }
             .clipped()
             .onChange(of: app.tab) { old, new in slide(from: old, to: new, width: geo.size.width) }
-        }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            if !keyboard.shown || app.showTerminals {
-                TabBar(selection: $app.tab, sessions: app.sessions.count)
-            }
         }
     }
 

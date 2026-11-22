@@ -48,79 +48,58 @@ final class KeysKeyboardStore: ObservableObject {
     }
 }
 
-/// The keys keyboard, shown in place of the system one: a button to change it, then its rows,
-/// eight keys each (two rows side by side where there is room).
+/// The keys keyboard, shown in place of the system one: tabs at the bottom for its keys (rows of
+/// eight; two rows side by side where there is room), the snippets, and the shell's history.
 struct KeysKeyboardView: View {
     @ObservedObject var session: TerminalSession
     @ObservedObject private var store = KeysKeyboardStore.shared
-    /// A finger on the space key: the rows stop scrolling, so dragging up and down moves the cursor.
-    @State private var onSpace = false
+    @State private var panel: KeysPanel = .keys
 
     var body: some View {
-        GeometryReader { geo in
-            let wide = geo.size.width >= 700
-            VStack(spacing: 6) {
-                HStack(spacing: 6) {
-                    Button { session.customizing = true } label: {
-                        Label("Customize", systemImage: "slider.horizontal.3")
-                            .font(.subheadline.weight(.medium))
-                            .frame(maxWidth: .infinity, minHeight: 30)
-                    }
-                    .buttonStyle(.bordered)
-                    Button { session.toggleKeyboard(shown: true) } label: {
-                        Image(systemName: "keyboard.chevron.compact.down")
-                            .font(.system(size: 16))
-                            .frame(width: 44, height: 30)
-                    }
-                    .buttonStyle(.bordered)
-                    .accessibilityLabel("Hide keyboard")
+        VStack(spacing: 6) {
+            Group {
+                switch panel {
+                case .keys: keys
+                case .snippets: SnippetsPanel(session: session)
+                case .history: HistoryPanel(session: session)
                 }
-                ScrollView {
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 14), count: wide ? 2 : 1), spacing: 6) {
-                        ForEach(store.blocks) { block in
-                            HStack(spacing: 5) {
-                                ForEach(0..<KeyBlock.size, id: \.self) { i in
-                                    KeysKeyboardKey(key: block.keys.indices.contains(i) ? block.keys[i] : nil, session: session, onSpace: $onSpace)
-                                }
+            }
+            .frame(maxHeight: .infinity)
+            Picker("Keyboard", selection: $panel) {
+                ForEach(KeysPanel.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+        }
+        .padding(.horizontal, 6)
+        .padding(.top, 6)
+        .padding(.bottom, 4)
+    }
+
+    private var keys: some View {
+        GeometryReader { geo in
+            ScrollView {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 14), count: geo.size.width >= 700 ? 2 : 1), spacing: 6) {
+                    ForEach(store.blocks) { block in
+                        HStack(spacing: 5) {
+                            ForEach(0..<KeyBlock.size, id: \.self) { i in
+                                KeysKeyboardKey(key: block.keys.indices.contains(i) ? block.keys[i] : nil, session: session)
                             }
                         }
                     }
-                    .padding(.bottom, 8)
                 }
-                .scrollDisabled(onSpace)
+                .padding(.bottom, 4)
             }
-            .padding(.horizontal, 6)
-            .padding(.top, 6)
         }
     }
 }
 
-/// A key of the keys keyboard. The space key also moves the cursor: drag along it for arrows.
+/// A key of the keys keyboard.
 private struct KeysKeyboardKey: View {
     let key: BarKey?
     @ObservedObject var session: TerminalSession
-    @Binding var onSpace: Bool
-    @State private var dragged: CGSize = .zero
-    @State private var moved = false
 
     var body: some View {
-        if let key, key.kind == .key, key.value == "space" {
-            // Ahead of the keyboard's own scrolling, or a drag up or down would scroll it.
-            KeyCap(key: key, height: 40)
-                .highPriorityGesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { g in
-                            if !onSpace { onSpace = true }
-                            drag(g.translation)
-                        }
-                        .onEnded { _ in
-                            onSpace = false
-                            if !moved { press(key) }
-                            dragged = .zero
-                            moved = false
-                        }
-                )
-        } else if let key {
+        if let key {
             Button { press(key) } label: { KeyCap(key: key, on: on(key), height: 40) }
                 .buttonStyle(.plain)
         } else {
@@ -137,28 +116,8 @@ private struct KeysKeyboardKey: View {
         switch key.kind {
         case .ctrl: session.ctrl.toggle()
         case .alt: session.alt.toggle()
-        default: if let b = key.bytes() { session.send(b) }
+        default: if let b = key.bytes(appCursor: session.appCursor) { session.send(b) }
         }
-    }
-
-    /// Every 12 points along sends an arrow, as the system keyboard's space bar moves its cursor.
-    private func drag(_ t: CGSize) {
-        let step: CGFloat = 12
-        var dx = t.width - dragged.width
-        var dy = t.height - dragged.height
-        while abs(dx) >= step {
-            session.send(KeyCodes.bytes(dx > 0 ? "right" : "left") ?? [])
-            dragged.width += dx > 0 ? step : -step
-            dx = t.width - dragged.width
-            moved = true
-        }
-        while abs(dy) >= step * 1.5 {
-            session.send(KeyCodes.bytes(dy > 0 ? "down" : "up") ?? [])
-            dragged.height += dy > 0 ? step * 1.5 : -step * 1.5
-            dy = t.height - dragged.height
-            moved = true
-        }
-        if moved { UISelectionFeedbackGenerator().selectionChanged() }
     }
 }
 
@@ -167,11 +126,9 @@ final class KeysInputView: UIInputView {
     private var host: UIHostingController<KeysKeyboardView>?
     private var heightConstraint: NSLayoutConstraint?
 
-    /// The bar over the system keyboard (`TerminalBar.height`).
-    static let barHeight: CGFloat = 46
-    /// The system keyboard and the bar together, as last seen: the keys keyboard takes their place.
+    /// The system keyboard's height, as last seen: the keys keyboard takes exactly its place.
     static var matched: CGFloat?
-    static var height: CGFloat { matched ?? (UIDevice.current.userInterfaceIdiom == .pad ? 376 : 382) }
+    static var height: CGFloat { matched ?? (UIDevice.current.userInterfaceIdiom == .pad ? 330 : 336) }
 
     /// Takes the height of the keyboard it replaces.
     func fit() {

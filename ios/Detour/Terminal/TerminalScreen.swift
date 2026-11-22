@@ -10,6 +10,39 @@ private typealias Color = SwiftUI.Color
 /// the shell's line may still have plenty: with no text of its own, SwiftTerm sends Backspace.
 final class DetourTerminalView: TerminalView {
     override var hasText: Bool { true }
+
+    /// Where the finger was when the space bar's trackpad last moved the cursor.
+    private var trackpad: CGPoint?
+
+    // Holding the space bar makes the keyboard a trackpad. SwiftTerm moves the cursor along the
+    // line only (up and down in full-screen programs alone); here it is the arrows both ways
+    // everywhere, so up and down walk the shell's history.
+    override func beginFloatingCursor(at point: CGPoint) {
+        trackpad = point
+    }
+
+    override func updateFloatingCursor(at point: CGPoint) {
+        guard let last = trackpad else { return }
+        let dx = point.x - last.x
+        let dy = point.y - last.y
+        if abs(dx) >= 9 {
+            arrow(dx > 0 ? "right" : "left")
+            trackpad = point
+        } else if abs(dy) >= 18 {
+            arrow(dy > 0 ? "down" : "up")
+            trackpad = point
+        }
+    }
+
+    override func endFloatingCursor() {
+        trackpad = nil
+    }
+
+    private func arrow(_ name: String) {
+        let appCursor = terminalInputStateSnapshot()?.applicationCursor ?? false
+        guard let bytes = KeyCodes.bytes(name, appCursor: appCursor) else { return }
+        terminalDelegate?.send(source: self, data: bytes[...])
+    }
 }
 
 /// SwiftTerm's view for a session. Its own bar over the keyboard is off: ours sits in the
@@ -95,15 +128,17 @@ struct TerminalsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            bar
-            Divider()
             switch current {
             case .terminal(let t):
-                SessionScreen(session: t).id(t.id)
+                // The sessions' bar sits on the keyboard with the terminal's own: in reach.
+                SessionScreen(session: t) { bar }.id(t.id)
             case .files(let f):
                 FilesView(files: f).id(f.uid)
+                Divider()
+                bar
             case nil:
                 Spacer()
+                bar
             }
         }
         .background(Color(uiColor: settings.theme(dark: scheme == .dark).background))
@@ -150,6 +185,7 @@ struct TerminalsView: View {
             .accessibilityLabel("New session")
         }
         .padding(.horizontal, 6)
+        .frame(height: SessionScreen<EmptyView>.sessionsHeight)
         .background(.bar)
     }
 }
@@ -311,8 +347,11 @@ private struct ChipFrame: View {
 }
 
 /// A session's screen, with what it waits for over it and the key bar under it.
-private struct SessionScreen: View {
+private struct SessionScreen<Sessions: View>: View {
+    /// The sessions' bar under the terminal.
+    static var sessionsHeight: CGFloat { 48 }
     @ObservedObject var session: TerminalSession
+    @ViewBuilder let sessions: Sessions
     @ObservedObject private var keyboard = KeyboardObserver.shared
     @ObservedObject private var keys = KeyBarStore.shared
     @State private var password = ""
@@ -321,28 +360,39 @@ private struct SessionScreen: View {
         GeometryReader { geo in
             // How far the keyboard reaches into this screen.
             let lift = keyboard.shown ? max(0, geo.frame(in: .global).maxY - keyboard.top) : 0
-            // The keys keyboard has the bar's keys and more: the bar steps aside while it is up.
-            // The keys keyboard has the bar's keys (and the hide button) while it is up; with the
-            // keyboard down the bar is back.
-            let keysUp = session.keysKeyboard && keyboard.shown
-            let showKeys = !keys.hidden && !keysUp
-            let bar = keyboard.hardware || !showKeys ? 0 : TerminalBar.height
+            // The place over the keyboard stays the same whichever keyboard is up: the key bar over
+            // the system one, Customize over the keys keyboard (as tall as the system one). So
+            // swapping them moves nothing.
+            let barShown = !keyboard.hardware && (!keys.hidden || session.keysKeyboard)
+            let bottom = lift + (barShown ? TerminalBar.height : 0) + Self.sessionsHeight
             ZStack(alignment: .bottom) {
                 // The terminal takes its new size at once rather than following the keyboard's
                 // animation: resizing it on every frame is what made it jump.
                 TerminalHost(session: session)
-                    .padding(.bottom, lift + bar)
+                    .padding(.bottom, bottom)
                     .transaction { $0.animation = nil }
                 overlay
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(.bottom, lift + bar)
-                if !keyboard.hardware && !keysUp {
-                    TerminalBar(session: session, showKeys: showKeys, keyboardShown: keyboard.shown)
-                        .padding(.bottom, lift)
-                        // Swapping keyboards, the bar goes straight to its place: following the
-                        // swap's frames made it jump above the keyboard and slide down.
-                        .animation(keyboard.swapping ? nil : .easeOut(duration: keyboard.duration), value: lift)
+                    .padding(.bottom, bottom)
+                VStack(spacing: 0) {
+                    Divider()
+                    sessions
+                    if barShown {
+                        TerminalBar(session: session, keyboardShown: keyboard.shown)
+                    }
                 }
+                // With no bar, the keyboard's button floats over the terminal's corner.
+                .overlay(alignment: .topTrailing) {
+                    if !barShown && !keyboard.hardware {
+                        TerminalBar.toggle(session: session, keyboardShown: keyboard.shown)
+                            .frame(width: 44, height: 44)
+                            .background(.regularMaterial, in: Circle())
+                            .padding(10)
+                            .offset(y: -64)
+                    }
+                }
+                .padding(.bottom, lift)
+                .animation(keyboard.swapping ? nil : .easeOut(duration: keyboard.duration), value: lift)
             }
         }
         .ignoresSafeArea(.keyboard)
@@ -405,33 +455,34 @@ private struct SessionScreen: View {
     }
 }
 
-/// Under the terminal: the key bar and the button that shows or hides the keyboard (alone, in
-/// a corner, when the key bar is turned off).
+/// Over the keyboard: the key bar and the button that shows or hides the keyboard; over the
+/// keys keyboard (which has those keys and more), Customize and the same button.
 private struct TerminalBar: View {
     static let height: CGFloat = 46
     @ObservedObject var session: TerminalSession
-    let showKeys: Bool
     let keyboardShown: Bool
 
     var body: some View {
-        if showKeys {
-            HStack(spacing: 0) {
+        HStack(spacing: 0) {
+            if session.keysKeyboard {
+                Button { session.customizing = true } label: {
+                    Label("Customize", systemImage: "slider.horizontal.3")
+                        .font(.subheadline.weight(.medium))
+                        .frame(maxWidth: .infinity, minHeight: 32)
+                }
+                .buttonStyle(.bordered)
+                .padding(.horizontal, 6)
+            } else {
                 KeyBarView(store: .shared, session: session)
-                Divider().frame(height: 26)
-                toggle.frame(width: 44, height: Self.height)
             }
-            .frame(height: Self.height)
-            .background(.bar)
-        } else {
-            toggle
-                .frame(width: 44, height: 44)
-                .background(.regularMaterial, in: Circle())
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .trailing)
+            Divider().frame(height: 26)
+            Self.toggle(session: session, keyboardShown: keyboardShown).frame(width: 44, height: Self.height)
         }
+        .frame(height: Self.height)
+        .background(.bar)
     }
 
-    private var toggle: some View {
+    static func toggle(session: TerminalSession, keyboardShown: Bool) -> some View {
         Button { session.toggleKeyboard(shown: keyboardShown) } label: {
             Image(systemName: keyboardShown ? "keyboard.chevron.compact.down" : "keyboard")
                 .font(.system(size: 17))

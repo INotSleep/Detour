@@ -281,3 +281,7 @@
 "Login, if the proxy asks for one" = "Логін, якщо проксі його запитує";
 "This isn't a vless:// link or a WireGuard config" = "Це не посилання vless:// і не конфіг WireGuard";
 "Detour can't do this yet: %@" = "Detour поки цього не вміє: %@";
+"History" = "Історія";
+"No history yet" = "Історії поки немає";
+"Run" = "Виконати";
+"The history needs the host's password" = "Для історії потрібен пароль хоста";

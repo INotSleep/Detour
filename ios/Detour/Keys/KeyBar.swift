@@ -162,7 +162,7 @@ struct KeyBarView: View {
         switch key.kind {
         case .ctrl: session.ctrl.toggle()
         case .alt: session.alt.toggle()
-        default: if let b = key.bytes() { session.send(b) }
+        default: if let b = key.bytes(appCursor: session.appCursor) { session.send(b) }
         }
     }
 }
