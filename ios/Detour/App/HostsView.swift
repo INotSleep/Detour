@@ -143,11 +143,18 @@ struct HostsView: View {
             t?.run("seq 1 120")
             try? await Task.sleep(for: .seconds(1))
             Shots.dump(t, "output, keyboard up")
-            for step in ["keyboard down", "keyboard up", "keyboard down"] {
+            // A command at each size, so there are prompts in the history to scroll back to.
+            for (i, step) in ["keyboard down", "keyboard up", "keyboard down"].enumerated() {
                 t?.toggleKeyboard(shown: step == "keyboard down")
-                try? await Task.sleep(for: .milliseconds(1500))
+                try? await Task.sleep(for: .milliseconds(1200))
+                t?.run("echo step\(i + 1)")
+                try? await Task.sleep(for: .milliseconds(800))
                 Shots.dump(t, step)
             }
+            // Back in the history, where the prompts showed twice.
+            t?.view?.scrollUp(lines: 6)
+            try? await Task.sleep(for: .milliseconds(800))
+            Shots.dump(t, "scrolled up 6")
         case "sessions":
             app.open(local)
             app.openFiles(local)
