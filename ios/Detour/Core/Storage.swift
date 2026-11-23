@@ -69,6 +69,7 @@ final class StorageModel: ObservableObject {
             guard let device = d["deviceCode"] as? String, let user = d["userCode"] as? String, let uri = d["verificationUri"] as? String else { return }
             signIn = GithubCode(code: user, uri: uri)
             UIPasteboard.general.string = user
+            Haptics.success()
             if let u = URL(string: uri) { open(u) }
             var interval = (d["interval"] as? Double) ?? 5
             while signIn != nil {
@@ -158,6 +159,7 @@ struct RepoKeySection: View {
             if let chosen {
                 Button {
                     UIPasteboard.general.string = chosen.publicKey
+                    Haptics.success()
                     copies += 1
                 } label: {
                     LabeledContent("Public key") {
@@ -219,6 +221,7 @@ struct RepoLoginSection: View {
                 } else if let signIn = model.signIn {
                     Button {
                         UIPasteboard.general.string = signIn.code
+                        Haptics.success()
                         copies += 1
                     } label: {
                         HStack {

@@ -1,0 +1,12 @@
+# Made by scripts/build-core.sh and Gradle.
+/build/
+/app/build/
+/terminal/build/
+/app/src/main/jniLibs/
+/app/src/main/java/uniffi/
+/.gradle/
+/.kotlin/
+/local.properties
+*.iml
+/.idea/
+/PORTING.md

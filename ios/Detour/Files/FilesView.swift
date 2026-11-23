@@ -104,7 +104,7 @@ private struct FolderView: View {
                 Menu {
                     Button { uploading = true } label: { Label("Upload", systemImage: "square.and.arrow.up") }
                     Button { folderName = ""; newFolder = true } label: { Label("New folder", systemImage: "folder.badge.plus") }
-                    Button { UIPasteboard.general.string = path } label: { Label("Copy path", systemImage: "doc.on.doc") }
+                    Button { UIPasteboard.general.string = path; Haptics.success() } label: { Label("Copy path", systemImage: "doc.on.doc") }
                 } label: {
                     Image(systemName: "plus")
                 }
@@ -187,7 +187,7 @@ private struct FolderView: View {
         .contextMenu {
             if !f.isDir { Button { Task { await open(f) } } label: { Label("Open", systemImage: "eye") } }
             Button { newName = f.name; renaming = f } label: { Label("Rename", systemImage: "pencil") }
-            Button { UIPasteboard.general.string = full } label: { Label("Copy path", systemImage: "doc.on.doc") }
+            Button { UIPasteboard.general.string = full; Haptics.success() } label: { Label("Copy path", systemImage: "doc.on.doc") }
             Button(role: .destructive) { deleting = f } label: { Label("Delete", systemImage: "trash") }
         }
     }

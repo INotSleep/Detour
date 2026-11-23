@@ -87,13 +87,13 @@ struct JoinScanSheet: View {
 
     private func seen(_ text: String) {
         if let link = JoinLink(text) {
-            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            Haptics.success()
             found(link)
             dismiss()
             return
         }
         // Said once while that QR stays in view, gone a little after it leaves.
-        if !foreign { UINotificationFeedbackGenerator().notificationOccurred(.warning) }
+        if !foreign { Haptics.warning() }
         foreign = true
         let at = Date()
         foreignSince = at

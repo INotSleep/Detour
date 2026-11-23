@@ -146,6 +146,7 @@ struct RecoveryKeyView: View {
             Section {
                 Button {
                     UIPasteboard.general.string = key
+                    Haptics.success()
                     copies += 1
                 } label: {
                     Label(copies > 0 ? String(localized: "Copied") : String(localized: "Copy"), systemImage: copies > 0 ? "checkmark" : "doc.on.doc")

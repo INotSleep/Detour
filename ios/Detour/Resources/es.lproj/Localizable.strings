@@ -285,3 +285,31 @@
 "No history yet" = "Aún no hay historial";
 "Run" = "Ejecutar";
 "The history needs the host's password" = "Para el historial hace falta la contraseña del host";
+
+/* Android */
+"Address from the server, host:port" = "Dirección desde el servidor, host:puerto";
+"Address on the phone, host:port" = "Dirección en el teléfono, host:puerto";
+"Back" = "Atrás";
+"Biometrics" = "biometría";
+"Connections" = "Conexiones";
+"Connections: %@" = "Conexiones: %@";
+"Copy address" = "Copiar dirección";
+"Expose my port on the server" = "Exponer mi puerto en el servidor";
+"From the server" = "Desde el servidor";
+"New tunnel" = "Túnel nuevo";
+"No results" = "Sin resultados";
+"Open a server port here" = "Abrir aquí un puerto del servidor";
+"Port on the phone" = "Puerto en el teléfono";
+"Port on the server" = "Puerto en el servidor";
+"Proxy through the server" = "Proxy a través del servidor";
+"Search" = "Buscar";
+"Server" = "Servidor";
+"Sessions: %@" = "Sesiones: %@";
+"To the server" = "Al servidor";
+"Tunnel" = "Túnel";
+"Tunnels" = "Túneles";
+"Tunnels: %@" = "Túneles: %@";
+"the host" = "el host";
+
+/* Android */
+"Haptic feedback" = "Respuesta háptica";

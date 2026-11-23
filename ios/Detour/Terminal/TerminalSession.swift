@@ -30,6 +30,8 @@ final class TerminalSession: ObservableObject, Identifiable {
     /// The password or passphrase typed for this session, kept in memory while it is open: the
     /// shell's history is read with it.
     private(set) var typedSecret: String?
+    /// The shell's history for the keys keyboard's panel, read once and kept fresh.
+    let history = ShellHistory()
 
     private(set) var sessionId: String?
     private var stream: UInt64?

@@ -285,3 +285,31 @@
 "No history yet" = "暂无历史";
 "Run" = "运行";
 "The history needs the host's password" = "读取历史需要主机密码";
+
+/* Android */
+"Address from the server, host:port" = "从服务器访问的地址，主机:端口";
+"Address on the phone, host:port" = "手机上的地址，主机:端口";
+"Back" = "返回";
+"Biometrics" = "生物识别";
+"Connections" = "连接";
+"Connections: %@" = "连接：%@";
+"Copy address" = "复制地址";
+"Expose my port on the server" = "在服务器上开放我的端口";
+"From the server" = "从服务器";
+"New tunnel" = "新建隧道";
+"No results" = "没有结果";
+"Open a server port here" = "在本机打开服务器端口";
+"Port on the phone" = "手机端口";
+"Port on the server" = "服务器端口";
+"Proxy through the server" = "通过服务器代理";
+"Search" = "搜索";
+"Server" = "服务器";
+"Sessions: %@" = "会话：%@";
+"To the server" = "到服务器";
+"Tunnel" = "隧道";
+"Tunnels" = "隧道";
+"Tunnels: %@" = "隧道：%@";
+"the host" = "主机";
+
+/* Android */
+"Haptic feedback" = "触感反馈";

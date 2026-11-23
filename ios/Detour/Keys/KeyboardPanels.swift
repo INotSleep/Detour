@@ -48,7 +48,13 @@ struct SnippetsPanel: View {
 /// or run, the arrow runs it at once.
 struct HistoryPanel: View {
     @ObservedObject var session: TerminalSession
-    @StateObject private var history = ShellHistory()
+    /// Kept with the session: what was read shows at once, and is read again behind it.
+    @ObservedObject var history: ShellHistory
+
+    init(session: TerminalSession) {
+        self.session = session
+        self.history = session.history
+    }
 
     var body: some View {
         ScrollView {
@@ -90,7 +96,7 @@ private struct PanelRow: View {
     var body: some View {
         HStack(spacing: 6) {
             Button {
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                Haptics.tap()
                 tap()
             } label: {
                 VStack(alignment: .leading, spacing: 2) {
@@ -111,7 +117,7 @@ private struct PanelRow: View {
             .buttonStyle(.plain)
             if let run {
                 Button {
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    Haptics.tap()
                     run()
                 } label: {
                     Image(systemName: "return")
@@ -137,28 +143,44 @@ final class ShellHistory: ObservableObject {
     /// Runs under sh whatever the login shell is (fish can't read a POSIX loop).
     private static let command = #"sh -c 'for f in "$HOME/.bash_history" "$HOME/.zsh_history" "$HOME/.local/share/fish/fish_history"; do [ -f "$f" ] && tail -n 1000 "$f"; done'"#
 
-    private final class Buffer { var data = Data() }
+    private final class Buffer {
+        var data = Data()
+        var ended = false
+    }
+
+    private var loading = false
 
     func load(_ session: TerminalSession) async {
+        guard !loading else { return }
+        loading = true
+        defer { loading = false }
         let host = session.host
         let typed = TypedHistory.shared.list(host: host.id)
-        lines = typed.isEmpty ? nil : typed
-        error = nil
+        // What was read before stays up while it is read again.
+        if let before = lines {
+            var seen = Set<String>()
+            lines = (typed + before).filter { seen.insert($0).inserted }
+        } else {
+            lines = typed.isEmpty ? nil : typed
+            error = nil
+        }
         let stream = Core.shared.newStream()
         let buffer = Buffer()
-        Core.shared.watch(stream: stream, data: { buffer.data.append($0) }, end: { _ in })
+        Core.shared.watch(stream: stream, data: { buffer.data.append($0) }, end: { _ in buffer.ended = true })
         defer { Core.shared.unwatch(stream: stream) }
         do {
             _ = try await Core.shared.call("host_exec", ["vaultId": host.vaultId, "hostId": host.id, "command": Self.command, "stream": stream, "secret": session.typedSecret])
-            // What the command printed is handed over before its end: let it land.
-            await Task.yield()
+            // The output comes before its end, but on the main queue after the call returns: wait
+            // for the end (not long) so none of it is missed.
+            for _ in 0..<30 where !buffer.ended { try? await Task.sleep(for: .milliseconds(100)) }
             var seen = Set(typed)
             lines = typed + Self.parse(String(decoding: buffer.data, as: UTF8.self)).filter { seen.insert($0).inserted }
+            error = nil
         } catch let f as CoreFailure {
             // What was run here still shows when the server's files can't be read.
-            if typed.isEmpty { error = f.kind == "needSecret" ? String(localized: "The history needs the host's password") : TerminalSession.describe(f) }
+            if lines?.isEmpty ?? true { error = f.kind == "needSecret" ? String(localized: "The history needs the host's password") : TerminalSession.describe(f) }
         } catch {
-            if typed.isEmpty { self.error = error.localizedDescription }
+            if lines?.isEmpty ?? true { self.error = error.localizedDescription }
         }
     }
 

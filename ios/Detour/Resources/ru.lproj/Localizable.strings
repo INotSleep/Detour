@@ -285,3 +285,31 @@
 "No history yet" = "Истории пока нет";
 "Run" = "Выполнить";
 "The history needs the host's password" = "Для истории нужен пароль хоста";
+
+/* Android */
+"Address from the server, host:port" = "Адрес со стороны сервера, хост:порт";
+"Address on the phone, host:port" = "Адрес на телефоне, хост:порт";
+"Back" = "Назад";
+"Biometrics" = "биометрию";
+"Connections" = "Соединения";
+"Connections: %@" = "Соединений: %@";
+"Copy address" = "Скопировать адрес";
+"Expose my port on the server" = "Свой сервис на сервере";
+"From the server" = "С сервера";
+"New tunnel" = "Новый туннель";
+"No results" = "Ничего не найдено";
+"Open a server port here" = "Сервис сервера у себя";
+"Port on the phone" = "Порт на телефоне";
+"Port on the server" = "Порт на сервере";
+"Proxy through the server" = "Прокси через сервер";
+"Search" = "Поиск";
+"Server" = "Сервер";
+"Sessions: %@" = "Сессий: %@";
+"To the server" = "К серверу";
+"Tunnel" = "Туннель";
+"Tunnels" = "Туннели";
+"Tunnels: %@" = "Туннелей: %@";
+"the host" = "хосту";
+
+/* Android */
+"Haptic feedback" = "Виброотклик";

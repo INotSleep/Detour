@@ -9,6 +9,7 @@ struct SettingsView: View {
     @State private var askPassword = false
     @State private var password = ""
     @State private var error: String?
+    @AppStorage("haptics") private var haptics = true
 
     var body: some View {
         NavigationStack {
@@ -19,6 +20,7 @@ struct SettingsView: View {
                     } label: {
                         LabeledContent("App theme", value: themeName(appearance.themeId, system: String(localized: "As the system")))
                     }
+                    Toggle("Haptic feedback", isOn: $haptics)
                 }
                 Section("Terminal") {
                     NavigationLink {
@@ -97,13 +99,18 @@ struct ThemePicker: View {
 
     private func row(id: String, name: String, theme: TerminalTheme?) -> some View {
         Button {
-            selection = id
+            if selection != id { Haptics.select() }
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { selection = id }
         } label: {
             HStack(spacing: 12) {
                 swatch(theme)
                 Text(name).foregroundStyle(.primary)
                 Spacer()
-                if selection == id { Image(systemName: "checkmark").foregroundStyle(Color.accentColor) }
+                // The check pops in on the theme picked: seen even past the finger that picked it.
+                if selection == id {
+                    Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
+                        .transition(.scale.combined(with: .opacity))
+                }
             }
         }
     }

@@ -15,6 +15,7 @@ struct TeamsView: View {
                 Section {
                     Button {
                         UIPasteboard.general.string = me.detourId
+                        Haptics.success()
                         copies += 1
                     } label: {
                         HStack {

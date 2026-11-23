@@ -76,7 +76,7 @@ struct SnippetsView: View {
                                 }
                                 .contextMenu {
                                     Button { editing = s } label: { Label("Edit", systemImage: "pencil") }
-                                    Button { UIPasteboard.general.string = s.command } label: { Label("Copy", systemImage: "doc.on.doc") }
+                                    Button { UIPasteboard.general.string = s.command; Haptics.success() } label: { Label("Copy", systemImage: "doc.on.doc") }
                                     Button(role: .destructive) { Task { await delete(s) } } label: { Label("Delete", systemImage: "trash") }
                                 }
                         }
@@ -88,7 +88,7 @@ struct SnippetsView: View {
                     Section(t.name) {
                         ForEach(t.snippets) { s in
                             row(s, open: { viewing = s }).contextMenu {
-                                Button { UIPasteboard.general.string = s.command } label: { Label("Copy", systemImage: "doc.on.doc") }
+                                Button { UIPasteboard.general.string = s.command; Haptics.success() } label: { Label("Copy", systemImage: "doc.on.doc") }
                             }
                         }
                     }
@@ -278,6 +278,7 @@ private struct SnippetViewer: View {
                 Section {
                     Button {
                         UIPasteboard.general.string = snippet.command
+                        Haptics.success()
                         copies += 1
                     } label: {
                         Label(copies > 0 ? String(localized: "Copied") : String(localized: "Copy"), systemImage: copies > 0 ? "checkmark" : "doc.on.doc")

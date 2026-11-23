@@ -112,7 +112,7 @@ private struct KeysKeyboardKey: View {
     }
 
     private func press(_ key: BarKey) {
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        Haptics.tap()
         switch key.kind {
         case .ctrl: session.ctrl.toggle()
         case .alt: session.alt.toggle()

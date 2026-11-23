@@ -118,7 +118,7 @@ private struct TabBar: View {
             ForEach(MainTab.allCases) { tab in
                 let chosen = selection == tab
                 Button {
-                    UISelectionFeedbackGenerator().selectionChanged()
+                    Haptics.select()
                     withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) { selection = tab }
                 } label: {
                     HStack(spacing: 6) {

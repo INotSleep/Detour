@@ -51,7 +51,7 @@ struct HostsView: View {
                                 .contextMenu {
                                     Button { app.open(host) } label: { Label("Connect", systemImage: "terminal") }
                                     Button { app.openFiles(host) } label: { Label("Files", systemImage: "folder") }
-                                    Button { UIPasteboard.general.string = sshCommand(host) } label: { Label("Copy ssh command", systemImage: "doc.on.doc") }
+                                    Button { UIPasteboard.general.string = sshCommand(host); Haptics.success() } label: { Label("Copy ssh command", systemImage: "doc.on.doc") }
                                     if host.vaultId != "personal" {
                                         Button { ownLogin = host } label: { Label("My login", systemImage: "person.badge.key") }
                                     }

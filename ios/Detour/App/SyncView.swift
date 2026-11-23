@@ -172,6 +172,7 @@ struct AddDeviceSheet: View {
                         .foregroundStyle(.secondary)
                     Button {
                         UIPasteboard.general.string = pairing.code
+                        Haptics.success()
                         copies += 1
                     } label: {
                         Label(copies > 0 ? String(localized: "Copied") : String(localized: "Copy"), systemImage: copies > 0 ? "checkmark" : "doc.on.doc")

@@ -76,6 +76,7 @@ private struct KeyDetail: View {
                     .lineLimit(6)
                 Button {
                     UIPasteboard.general.string = key.publicKey
+                    Haptics.success()
                     copied += 1
                 } label: {
                     Label(copied > 0 ? "Copied" : "Copy the public key", systemImage: copied > 0 ? "checkmark" : "doc.on.doc")
@@ -139,6 +140,7 @@ private struct NewKeySheet: View {
                         Text(made.publicKey).font(.caption.monospaced()).textSelection(.enabled)
                         Button {
                             UIPasteboard.general.string = made.publicKey
+                            Haptics.success()
                             copied += 1
                         } label: {
                             Label(copied > 0 ? "Copied" : "Copy the public key", systemImage: copied > 0 ? "checkmark" : "doc.on.doc")

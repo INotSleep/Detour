@@ -1,0 +1,8 @@
+This module is Termux's terminal-emulator and terminal-view libraries
+(https://github.com/termux/termux-app, tag v0.118.1), which are based on
+Terminal Emulator for Android (https://github.com/jackpal/Android-Terminal-Emulator)
+and released under the Apache License 2.0.
+
+Changes by Detour: TerminalSession no longer runs a local process (JNI.java and
+the native code are gone); it is fed bytes by the app and hands what is typed
+and the window's size to the app.
