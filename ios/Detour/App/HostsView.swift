@@ -227,18 +227,19 @@ struct HostsView: View {
                 .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 6, trailing: 8))
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
-                .moveDisabled(true)
         case .host(let h, let g, let first, let last):
             hostRow(h, in: g, groups: groups)
                 .listRowBackground(Self.card(first: first, last: last))
                 .listRowSeparator(.hidden, edges: Self.edges(first: first, last: last))
                 .moveDisabled(!canDrag(h))
         case .empty:
+            // Headers and hints are not kept from moving: the list then takes no host in their
+            // place, and that is where a host goes last in a group or into an empty one. Moving
+            // them does nothing (only hosts move).
             Text("Drag hosts here")
                 .foregroundStyle(.secondary)
                 .listRowBackground(Self.card(first: true, last: true))
                 .listRowSeparator(.hidden)
-                .moveDisabled(true)
         }
     }
 
@@ -333,7 +334,8 @@ struct HostsView: View {
     }
 
     /// A host dragged to another place of the list: into the group of the row above where it
-    /// lands (a header, a host, an empty group's row), before the host under it in that group.
+    /// lands (a header, a host, an empty group's hint), before the host under it in that group.
+    /// The hint itself moved goes nowhere.
     private func moveRows(_ rows: [Row], from: IndexSet, to: Int, groups: [ListedGroup]) {
         guard let i = from.first, case .host(let h, let fromGroup, _, _) = rows[i] else { return }
         var rest = rows
