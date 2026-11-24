@@ -15,6 +15,9 @@ struct Host: Decodable, Identifiable, Hashable {
     var vaultId: String = "personal"
     /// Set by the app, in a team: this person's access to it (`none`, `view`, `secret`, `edit`).
     var access: String?
+    /// Set by the app: the user from this person's settings of its group (theirs, then the
+    /// shared one's), which connecting uses first.
+    var groupUser: String?
 
     /// May this person change it: move it, edit it, delete it.
     var editable: Bool { access == nil || access == "edit" }
@@ -26,8 +29,9 @@ struct Host: Decodable, Identifiable, Hashable {
 
     enum CodingKeys: String, CodingKey { case id, group, label, address, port, user, own, order }
 
-    /// The login used to connect: this person's own one on a team host, if set.
-    var login: String { own.flatMap { $0.active == false ? nil : $0.user } ?? user }
+    /// The login used to connect: this person's group settings, then their own login on a team
+    /// host while it is on, then the host's.
+    var login: String { groupUser ?? own.flatMap { $0.active == false ? nil : $0.user } ?? user }
 }
 
 struct VaultView: Decodable {

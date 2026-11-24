@@ -274,24 +274,18 @@ struct HostsView: View {
         if mine, let layout = v.layout {
             let next = Groups.mineMoveHost(layout, groups, host: id, to: key, before: before)
             v.layout = next
-            show(v)
             Task {
-                do { try await Groups.saveLayout(v.id, next) } catch { fail(AppModel.describe(error)) }
+                do { try await app.showWhileSaving(v) { try await Groups.saveLayout(v.id, next) } } catch { fail(AppModel.describe(error)) }
                 await app.reload()
             }
         } else {
             let changes = Groups.moved(v.hosts, host: id, to: name, before: before)
             v.hosts = Groups.applied(v.hosts, changes)
-            show(v)
             Task {
-                do { try await Groups.moveHosts(v.id, changes) } catch { fail(AppModel.describe(error)) }
+                do { try await app.showWhileSaving(v) { try await Groups.moveHosts(v.id, changes) } } catch { fail(AppModel.describe(error)) }
                 await app.reload()
             }
         }
-    }
-
-    private func show(_ v: VaultHosts) {
-        withAnimation { app.vaults = app.vaults.map { $0.id == v.id ? v : $0 } }
     }
 
     private func fail(_ message: String) {

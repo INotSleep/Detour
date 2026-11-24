@@ -62,6 +62,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalDensity
@@ -164,18 +165,18 @@ fun HostsScreen() {
     /** Puts the dragged host where it was dropped: shown at once, saved behind. */
     fun drop() {
         val v = vault ?: return
-        val (h, to) = drag.end() ?: return
-        fun show(next: VaultHosts) { AppModel.vaults = AppModel.vaults.map { if (it.id == v.id) next else it } }
         scope.launch {
+            if (!drag.settle()) return@launch
+            // The gap closes and the row appears in it in the same frame.
+            val (h, to) = drag.end() ?: return@launch
             runCatching {
                 if (mine) {
                     val layout = Groups.mineMoveHost(v.layout!!, groups, h.id, to.group, to.before)
-                    show(v.copy(layout = layout))
-                    Groups.saveLayout(v.id, layout)
+                    AppModel.showWhileSaving(v.copy(layout = layout)) { Groups.saveLayout(v.id, layout) }
                 } else {
-                    val changes = Groups.moved(v.hosts, h.id, shown.first { it.key == to.group }.name, to.before)
-                    show(v.copy(hosts = Groups.applied(v.hosts, changes)))
-                    Groups.moveHosts(v.id, changes)
+                    val group = shown.firstOrNull { it.key == to.group } ?: return@runCatching
+                    val changes = Groups.moved(v.hosts, h.id, group.name, to.before)
+                    AppModel.showWhileSaving(v.copy(hosts = Groups.applied(v.hosts, changes))) { Groups.moveHosts(v.id, changes) }
                 }
             }.onFailure { Hud.error(AppModel.describe(it)) }
             AppModel.reload()
@@ -246,18 +247,21 @@ fun HostsScreen() {
                     rename = if (canArrange && g.name.isNotEmpty()) ({ naming = Naming(g) }) else null,
                     delete = { deleteGroup(g) },
                 ) {
-                    if (g.hosts.isEmpty()) {
+                    // An empty group: the gap of a host dragged over it takes the hint's place.
+                    if (g.hosts.isEmpty() && drag.target?.group != g.key) {
                         Box(Modifier.fillMaxWidth().heightIn(min = 44.dp).padding(16.dp, 10.dp), contentAlignment = Alignment.CenterStart) {
                             Text(t("Drag hosts here"), color = colors.secondary, fontSize = 15.sp)
                         }
                     }
                     g.hosts.forEachIndexed { i, h ->
                         DropGap(drag, g.key, h.id)
-                        HostRow(
-                            h, g.key, drag, last = i == g.hosts.lastIndex,
-                            canDrag = canArrange && (mine || h.editable) && q.isEmpty(),
-                            edit = { editing = h.id }, delete = { deleteHost(h) }, ownLogin = { ownLogin = h },
-                        )
+                        androidx.compose.runtime.key(h.id) {
+                            HostRow(
+                                h, g.key, drag, last = i == g.hosts.lastIndex,
+                                canDrag = canArrange && (mine || h.editable) && q.isEmpty(),
+                                edit = { editing = h.id }, delete = { deleteHost(h) }, ownLogin = { ownLogin = h },
+                            )
+                        }
                     }
                     DropGap(drag, g.key, null)
                 }
@@ -367,7 +371,8 @@ private fun LazyListScope.groupSection(g: ListedGroup, drag: HostDrag, title: St
         var top by remember { mutableStateOf(0f) }
         var open by remember { mutableStateOf(false) }
         DisposableEffect(g.key) { onDispose { drag.sectionGone(g.key) } }
-        Column(Modifier.animateItem().padding(horizontal = 16.dp).padding(top = if (title != null) 18.dp else 22.dp).onGloballyPositioned { top = it.positionInRoot().y }) {
+        // A group whose last host was moved out goes at once: fading, it would show that host again.
+        Column(Modifier.animateItem(fadeOutSpec = null).padding(horizontal = 16.dp).padding(top = if (title != null) 18.dp else 22.dp).onGloballyPositioned { top = it.positionInRoot().y }) {
             if (title != null) {
                 Box {
                     val interaction = remember { MutableInteractionSource() }
@@ -394,6 +399,8 @@ private fun LazyListScope.groupSection(g: ListedGroup, drag: HostDrag, title: St
 /** Where the dragged host would land opens up: before the row `before` (or at the end, null) of a group. */
 @Composable
 private fun DropGap(drag: HostDrag, group: String, before: String?) {
+    // Gone at once when the drag ends: the row it was kept for is in its place then.
+    if (!drag.active) return
     val density = LocalDensity.current
     val to = drag.target
     val open = to != null && to.group == group && to.before == before
@@ -401,7 +408,7 @@ private fun DropGap(drag: HostDrag, group: String, before: String?) {
         if (open) with(density) { drag.size.height.toDp() } else 0.dp,
         androidx.compose.animation.core.spring(stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow), label = "gap",
     )
-    if (height > 0.dp) Spacer(Modifier.fillMaxWidth().height(height))
+    if (height > 0.dp) Spacer(Modifier.fillMaxWidth().height(height).then(if (open) Modifier.onGloballyPositioned { drag.gapTop = it.positionInRoot().y } else Modifier))
 }
 
 @Composable
@@ -416,8 +423,10 @@ private fun HostRow(host: Host, group: String, drag: HostDrag, last: Boolean, ca
     val highlight = rememberTapHighlight(interaction)
     val dragged = drag.host?.id == host.id
     DisposableEffect(host.id) { onDispose { drag.rowGone(host.id) } }
-    Box(Modifier.onGloballyPositioned { drag.row(host.id, it.boundsInRoot()) }.alpha(if (dragged) 0.3f else 1f)) {
-        SwipeActions(if (host.editable) listOf(deleteAction(delete), editAction(edit)) else emptyList()) {
+    var rowHeight by remember { mutableStateOf(0) }
+    Box(Modifier.onGloballyPositioned { drag.row(host.id, it.boundsInRoot()); if (!dragged) rowHeight = it.size.height }) {
+        // Lifted: out of the list, a gap of its height opens where it would land (here, at first).
+        if (!dragged) SwipeActions(if (host.editable) listOf(deleteAction(delete), editAction(edit)) else emptyList()) {
             Column(Modifier.background(colors.fill.copy(alpha = colors.fill.alpha * highlight.value))) {
                 Row(
                     Modifier.fillMaxWidth().heightIn(min = 44.dp)
@@ -433,19 +442,28 @@ private fun HostRow(host: Host, group: String, drag: HostDrag, last: Boolean, ca
                 if (!last) HorizontalDivider(Modifier.padding(start = 16.dp), thickness = 0.5.dp, color = colors.separator)
             }
         }
-        DropdownMenu(menu, { menu = false }) {
-            DropdownMenuItem(leadingIcon = menuIcon("Connect"), text = { Text(t("Connect")) }, onClick = { menu = false; AppModel.open(host) })
-            DropdownMenuItem(leadingIcon = menuIcon("Files"), text = { Text(t("Files")) }, onClick = { menu = false; AppModel.openFiles(host) })
-            DropdownMenuItem(leadingIcon = menuIcon("Copy ssh command"), text = { Text(t("Copy ssh command")) }, onClick = {
-                menu = false
-                Clipboard.copy("ssh " + (if (host.port == 22) "" else "-p ${host.port} ") + "${host.login}@${host.address}")
-            })
-            if (host.vaultId != VaultData.PERSONAL) {
-                DropdownMenuItem(leadingIcon = menuIcon("My login"), text = { Text(t("My login")) }, onClick = { menu = false; ownLogin() })
+        // The menu's anchor keeps the row's size while the row is lifted out of the list, so the
+        // menu, closing as the drag begins, fades where it opened.
+        Box(
+            Modifier.fillMaxWidth().layout { m, c ->
+                val p = m.measure(androidx.compose.ui.unit.Constraints.fixed(c.maxWidth, rowHeight))
+                layout(p.width, 0) { p.place(0, 0) }
             }
-            if (host.editable) {
-                DropdownMenuItem(leadingIcon = menuIcon("Edit"), text = { Text(t("Edit")) }, onClick = { menu = false; edit() })
-                DropdownMenuItem(leadingIcon = menuIcon("Delete"), text = { Text(t("Delete"), color = colors.red) }, onClick = { menu = false; delete() })
+        ) {
+            DropdownMenu(menu, { menu = false }) {
+                DropdownMenuItem(leadingIcon = menuIcon("Connect"), text = { Text(t("Connect")) }, onClick = { menu = false; AppModel.open(host) })
+                DropdownMenuItem(leadingIcon = menuIcon("Files"), text = { Text(t("Files")) }, onClick = { menu = false; AppModel.openFiles(host) })
+                DropdownMenuItem(leadingIcon = menuIcon("Copy ssh command"), text = { Text(t("Copy ssh command")) }, onClick = {
+                    menu = false
+                    Clipboard.copy("ssh " + (if (host.port == 22) "" else "-p ${host.port} ") + "${host.login}@${host.address}")
+                })
+                if (host.vaultId != VaultData.PERSONAL) {
+                    DropdownMenuItem(leadingIcon = menuIcon("My login"), text = { Text(t("My login")) }, onClick = { menu = false; ownLogin() })
+                }
+                if (host.editable) {
+                    DropdownMenuItem(leadingIcon = menuIcon("Edit"), text = { Text(t("Edit")) }, onClick = { menu = false; edit() })
+                    DropdownMenuItem(leadingIcon = menuIcon("Delete"), text = { Text(t("Delete"), color = colors.red) }, onClick = { menu = false; delete() })
+                }
             }
         }
     }

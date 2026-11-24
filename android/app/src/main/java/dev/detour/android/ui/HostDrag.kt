@@ -7,6 +7,7 @@ import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
@@ -29,7 +30,7 @@ import dev.detour.android.core.Host
  */
 class HostDrag {
     /** Where a drop would put the host: into `group` before `before` (or last); the line is drawn at `y`. */
-    data class Target(val group: String, val before: String?, val y: Float, val left: Float, val right: Float)
+    data class Target(val group: String, val before: String?, val y: Float, val left: Float, val right: Float, val noop: Boolean = false)
 
     private class Section(var bounds: Rect, var hosts: List<String>, var top: Float)
 
@@ -82,7 +83,14 @@ class HostDrag {
         retarget()
     }
 
+    /** Let go: the row goes to its place before the list changes under it. */
+    var settling = false
+        private set
+    /** Where the open gap starts on the screen, while one is open. */
+    var gapTop: Float? = null
+
     fun moveTo(at: Offset, currentVault: String) {
+        if (settling) return
         pointer = at
         overVault = vaults.entries.firstOrNull { it.key != currentVault && it.value.contains(at) }?.key
         retarget()
@@ -109,9 +117,27 @@ class HostDrag {
         // Back where it was: no move.
         if (key == from) {
             val i = s.hosts.indexOf(h.id)
-            if (i >= 0 && s.hosts.getOrNull(i + 1) == before) { target = null; return }
+            if (i >= 0 && s.hosts.getOrNull(i + 1) == before) { target = Target(key, before, lineY, s.bounds.left, s.bounds.right, noop = true); return }
         }
         target = Target(key, before, lineY, s.bounds.left, s.bounds.right)
+    }
+
+    /**
+     * The finger is lifted: the row slides into the gap it opened (or back to where it was), so
+     * that the list, changed after, shows it where it already is. False if it was let go already.
+     */
+    suspend fun settle(): Boolean {
+        val h = host ?: return false
+        if (settling) return false
+        settling = true
+        val to = (if (target != null) gapTop else null) ?: rows[h.id]?.top
+        if (to != null) {
+            val from = pointer.y
+            androidx.compose.animation.core.animate(from, to + grab.y, animationSpec = androidx.compose.animation.core.tween(160)) { y, _ ->
+                pointer = Offset(pointer.x, y)
+            }
+        }
+        return true
     }
 
     /** Ends the drag; returns where it landed, if it moved. */
@@ -121,7 +147,9 @@ class HostDrag {
         host = null
         target = null
         overVault = null
-        return if (h != null && t != null) h to t else null
+        settling = false
+        gapTop = null
+        return if (h != null && t != null && !t.noop) h to t else null
     }
 }
 
@@ -138,7 +166,11 @@ fun Modifier.tapHoldDrag(
 ): Modifier = composed {
     val haptic = LocalHapticFeedback.current
     val coords = remember { arrayOfNulls<LayoutCoordinates>(1) }
-    this.onGloballyPositioned { coords[0] = it }.pointerInput(drag != null) {
+    // The gesture runs on while the row shows another host: it calls what the row says now.
+    val click by rememberUpdatedState(onClick)
+    val hold by rememberUpdatedState(onHold)
+    val dragTo by rememberUpdatedState(drag)
+    this.onGloballyPositioned { coords[0] = it }.pointerInput(Unit) {
         val dragSlop = 12.dp.toPx()
         awaitEachGesture {
             val down = awaitFirstDown()
@@ -161,18 +193,19 @@ fun Modifier.tapHoldDrag(
             } == null
             if (!held) {
                 interaction.tryEmit(if (tapped) PressInteraction.Release(press) else PressInteraction.Cancel(press))
-                if (tapped) onClick()
+                if (tapped) click()
                 return@awaitEachGesture
             }
             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-            onHold()
+            hold()
             while (true) {
                 val c = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
                 c.consume()
                 if (!c.pressed) break
-                if (drag != null && (c.position - down.position).getDistance() > dragSlop) {
+                val d = dragTo
+                if (d != null && (c.position - down.position).getDistance() > dragSlop) {
                     interaction.tryEmit(PressInteraction.Cancel(press))
-                    coords[0]?.let { drag(it.localToRoot(c.position)) }
+                    coords[0]?.let { d(it.localToRoot(c.position)) }
                     return@awaitEachGesture
                 }
             }
@@ -185,7 +218,11 @@ fun Modifier.tapHoldDrag(
  * Over a list with rows that can be dragged: once a drag began in a row, the finger is followed
  * here (the row may scroll away and go), and nothing under it scrolls or swipes.
  */
-fun Modifier.followDrag(drag: HostDrag, coords: () -> LayoutCoordinates?, move: (Offset) -> Unit, drop: () -> Unit): Modifier =
+fun Modifier.followDrag(drag: HostDrag, coords: () -> LayoutCoordinates?, move: (Offset) -> Unit, drop: () -> Unit): Modifier = composed {
+    // What the screen says now (the vault shown, its groups), not what it said when this began.
+    val moveTo by rememberUpdatedState(move)
+    val dropNow by rememberUpdatedState(drop)
+    val where by rememberUpdatedState(coords)
     this.pointerInput(drag) {
         awaitPointerEventScope {
             while (true) {
@@ -193,8 +230,9 @@ fun Modifier.followDrag(drag: HostDrag, coords: () -> LayoutCoordinates?, move: 
                 if (!drag.active) continue
                 ev.changes.forEach { it.consume() }
                 val c = ev.changes.firstOrNull() ?: continue
-                if (ev.changes.none { it.pressed }) drop()
-                else coords()?.let { move(it.localToRoot(c.position)) }
+                if (ev.changes.none { it.pressed }) dropNow()
+                else where()?.let { moveTo(it.localToRoot(c.position)) }
             }
         }
     }
+}

@@ -15,14 +15,16 @@ data class Host(
     val order: Double? = null,
     /** In a team: this person's access to it (`none`, `view`, `secret`, `edit`); null in the personal vault. */
     val access: String? = null,
+    /** The user from this person's settings of its group (theirs, then the shared one's), which connecting uses first. */
+    val groupUser: String? = null,
 ) {
     /** May this person change it: move it, edit it, delete it. */
     val editable: Boolean get() = access == null || access == "edit"
 
     data class OwnLogin(val user: String, val active: Boolean?)
 
-    /** The login used to connect: this person's own one on a team host, if set. */
-    val login: String get() = own?.takeIf { it.active != false }?.user ?: user
+    /** The login used to connect: this person's group settings, then their own login on a team host while it is on, then the host's. */
+    val login: String get() = groupUser ?: own?.takeIf { it.active != false }?.user ?: user
 
     companion object {
         fun from(m: Map<String, Any?>, vault: String, access: String? = null) = Host(

@@ -184,7 +184,20 @@ object AppModel {
         reload()
     }
 
+    /** Changes shown before the core has them: a reload begun before one is saved reads what was there before. */
+    private var saving = 0
+    private var shownAt = 0
+
+    /** Shows a vault changed here at once, while `save` keeps it. */
+    suspend fun showWhileSaving(next: VaultHosts, save: suspend () -> Unit) {
+        vaults = vaults.map { if (it.id == next.id) next else it }
+        shownAt++
+        saving++
+        try { save() } finally { saving-- }
+    }
+
     suspend fun reload() {
+        val began = shownAt
         val all = ArrayList<VaultHosts>()
         runCatching { Core.call("vault_get").obj() }.getOrNull()?.let { v ->
             all += VaultHosts(VaultData.PERSONAL, null, null, v["hosts"].list().map { Host.from(it.obj(), VaultData.PERSONAL) }, v["groups"].list().map { HostGroup.from(it.obj()) }, null)
@@ -204,13 +217,26 @@ object AppModel {
             )
             signIns += ErrorDetail.from(view["remote"].obj()["error"])
         }
-        vaults = all
-        val out = all.flatMap { v ->
-            Groups.list(v.hosts, v.groups, false).map { g ->
-                HostSection("${v.id}/${g.name}", listOfNotNull(v.name, g.name.ifEmpty { null }).joinToString(" / "), g.hosts)
+        // The user connecting goes with, as the core picks it: this person's settings of the host's
+        // group of theirs, then of its shared group.
+        val prefs = runCatching { Core.call("group_prefs").list().map { it.obj() } }.getOrDefault(emptyList())
+            .associateBy { it.str("key") ?: "" }
+        fun loginPrefs(key: String) = prefs[key]?.takeIf { it["user"] != null || it["auth"] != null }
+        // Read before a change shown here was saved: the reload after saving it shows it.
+        if (saving == 0 && began == shownAt) {
+            vaults = all.map { v ->
+                v.copy(hosts = v.hosts.map { h ->
+                    val mine = v.layout?.firstOrNull { h.id in it.hosts }?.let { loginPrefs("${v.id}/mine:${it.id}") }
+                    val login = mine ?: loginPrefs("${v.id}/team:${h.group}")
+                    login?.str("user")?.takeIf { it.isNotEmpty() }?.let { h.copy(groupUser = it) } ?: h
+                })
+            }
+            sections = vaults.flatMap { v ->
+                Groups.list(v.hosts, v.groups, false).map { g ->
+                    HostSection("${v.id}/${g.name}", listOfNotNull(v.name, g.name.ifEmpty { null }).joinToString(" / "), g.hosts)
+                }
             }
         }
-        sections = out
         val st = runCatching { Core.call("sync_status") }.getOrNull()
         sync = SyncStatus.from(st)
         syncDrive = st.obj()["drive"]?.obj()?.let { DriveFolderRef.from(it) }

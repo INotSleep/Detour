@@ -112,7 +112,7 @@ enum Groups {
         hosts.map { h in
             guard let c = changes[h.id] else { return h }
             var h = h
-            h = Host(id: h.id, group: c.group, label: h.label, address: h.address, port: h.port, user: h.user, own: h.own, order: c.order, vaultId: h.vaultId, access: h.access)
+            h = Host(id: h.id, group: c.group, label: h.label, address: h.address, port: h.port, user: h.user, own: h.own, order: c.order, vaultId: h.vaultId, access: h.access, groupUser: h.groupUser)
             return h
         }
     }

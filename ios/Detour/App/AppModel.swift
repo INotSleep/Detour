@@ -145,7 +145,21 @@ final class AppModel: ObservableObject {
         await reload()
     }
 
+    /// Changes shown before the core has them: a reload begun before one is saved reads what was there before.
+    private var saving = 0
+    private var shownAt = 0
+
+    /// Shows a vault changed here at once, while `save` keeps it.
+    func showWhileSaving(_ next: VaultHosts, save: () async throws -> Void) async throws {
+        withAnimation { vaults = vaults.map { $0.id == next.id ? next : $0 } }
+        shownAt += 1
+        saving += 1
+        defer { saving -= 1 }
+        try await save()
+    }
+
     func reload() async {
+        let began = shownAt
         var all: [VaultHosts] = []
         if let personal = try? await Core.shared.call("vault_get", as: VaultView.self) {
             all.append(VaultHosts(id: VaultData.personal, name: nil, role: nil, hosts: personal.hosts.map { h in var h = h; h.vaultId = VaultData.personal; return h }, groups: personal.groups ?? [], layout: nil))
@@ -167,10 +181,31 @@ final class AppModel: ObservableObject {
                 signIns.append(v.remote?.error)
             }
         }
-        vaults = all
-        sections = all.flatMap { v in
-            Groups.list(v.hosts, v.groups, withEmpty: false).map { g in
-                HostSection(id: "\(v.id)/\(g.name)", title: [v.name, g.name.isEmpty ? nil : g.name].compactMap { $0 }.joined(separator: " / "), hosts: g.hosts)
+        // The user connecting goes with, as the core picks it: this person's settings of the host's
+        // group of theirs, then of its shared group.
+        let prefs = (try? await Core.shared.call("group_prefs") as? [[String: Any]]) ?? []
+        var byKey: [String: [String: Any]] = [:]
+        for p in prefs { if let k = p["key"] as? String { byKey[k] = p } }
+        func loginPrefs(_ key: String) -> [String: Any]? {
+            guard let p = byKey[key], p["user"] is String || p["auth"] is [String: Any] else { return nil }
+            return p
+        }
+        // Read before a change shown here was saved: the reload after saving it shows it.
+        if saving == 0 && began == shownAt {
+            vaults = all.map { v in
+                var next = v
+                next.hosts = v.hosts.map { h in
+                    var h = h
+                    let mine = v.layout?.first { $0.hosts.contains(h.id) }.flatMap { loginPrefs("\(v.id)/mine:\($0.id)") }
+                    if let user = (mine ?? loginPrefs("\(v.id)/team:\(h.group)"))?["user"] as? String, !user.isEmpty { h.groupUser = user }
+                    return h
+                }
+                return next
+            }
+            sections = vaults.flatMap { v in
+                Groups.list(v.hosts, v.groups, withEmpty: false).map { g in
+                    HostSection(id: "\(v.id)/\(g.name)", title: [v.name, g.name.isEmpty ? nil : g.name].compactMap { $0 }.joined(separator: " / "), hosts: g.hosts)
+                }
             }
         }
         sync = try? await Core.shared.call("sync_status", as: SyncStatus.self)
