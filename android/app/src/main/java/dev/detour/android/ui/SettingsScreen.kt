@@ -11,6 +11,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Keyboard
 import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.StarOutline
+import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
@@ -78,7 +80,7 @@ fun SettingsScreen() {
             }
             section(t("Terminal"), key = "terminal") {
                 ChevronCell(t("Theme"), themeName(TerminalSettings.themeId, asApp)) { page = SettingsPage.TerminalTheme }
-                Cell {
+                Cell(padding = 6.dp) {
                     Text(t("Font size"), color = colors.label, fontSize = 17.sp, modifier = Modifier.weight(1f))
                     Text("${TerminalSettings.fontSize.toInt()}", color = colors.secondary, fontSize = 17.sp)
                     Spacer(Modifier.width(12.dp))
@@ -101,7 +103,14 @@ fun SettingsScreen() {
                 }
                 ButtonCell(t("Lock"), icon = Icons.Outlined.Lock, last = true) { scope.launch { AppModel.lock() } }
             }
-            section(key = "version") { ValueCell(t("Version"), version, last = true) }
+            section(key = "version") {
+                ValueCell(t("Version"), version)
+                // A quiet way to help: no prompt, just these rows. Rating only where it can be done:
+                // installed from Google Play.
+                val fromPlay = remember { installedFromPlay(context) }
+                ButtonCell(t("Star on GitHub"), icon = Icons.Outlined.StarOutline, last = !fromPlay) { open(context, "https://github.com/INotSleep/Detour") }
+                if (fromPlay) ButtonCell(t("Rate Detour"), icon = Icons.Outlined.FavoriteBorder, last = true) { open(context, "market://details?id=${context.packageName}") }
+            }
             item { Spacer(Modifier.height(40.dp)) }
         }
         TitleBar()
@@ -138,4 +147,18 @@ private fun PasswordDialog(dismiss: () -> Unit, done: (String) -> Unit) {
         containerColor = colors.background,
         titleContentColor = colors.label,
     )
+}
+
+/** Installed through Google Play (so it can be rated there). */
+private fun installedFromPlay(context: android.content.Context): Boolean = runCatching {
+    val pm = context.packageManager
+    val installer = if (android.os.Build.VERSION.SDK_INT >= 30) pm.getInstallSourceInfo(context.packageName).installingPackageName
+    else @Suppress("DEPRECATION") pm.getInstallerPackageName(context.packageName)
+    installer == "com.android.vending"
+}.getOrDefault(false)
+
+private fun open(context: android.content.Context, url: String) {
+    runCatching {
+        context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
 }

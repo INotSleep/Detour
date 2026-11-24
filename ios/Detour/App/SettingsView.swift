@@ -54,6 +54,13 @@ struct SettingsView: View {
                 }
                 Section {
                     LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")
+                    // A quiet way to help: no prompt, just these two rows.
+                    Link(destination: URL(string: "https://github.com/INotSleep/Detour")!) {
+                        Label("Star on GitHub", systemImage: "star")
+                    }
+                    Link(destination: URL(string: "https://apps.apple.com/app/id6836001774?action=write-review")!) {
+                        Label("Rate Detour", systemImage: "heart")
+                    }
                 }
             }
             .navigationTitle("Settings")
@@ -88,6 +95,11 @@ struct ThemePicker: View {
     @Binding var selection: String
     let title: LocalizedStringKey
     let system: String
+    /// The theme just tapped: checked at once, put on a moment later (once the row's highlight has
+    /// gone, which would otherwise stay in the old theme's colours while all else changes).
+    @State private var picked: String?
+
+    private var shown: String { picked ?? selection }
 
     var body: some View {
         List {
@@ -99,15 +111,21 @@ struct ThemePicker: View {
 
     private func row(id: String, name: String, theme: TerminalTheme?) -> some View {
         Button {
-            if selection != id { Haptics.select() }
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { selection = id }
+            guard shown != id else { return }
+            Haptics.select()
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { picked = id }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                guard picked == id else { return }
+                withAnimation(.easeInOut(duration: 0.25)) { selection = id }
+                picked = nil
+            }
         } label: {
             HStack(spacing: 12) {
                 swatch(theme)
                 Text(name).foregroundStyle(.primary)
                 Spacer()
                 // The check pops in on the theme picked: seen even past the finger that picked it.
-                if selection == id {
+                if shown == id {
                     Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
                         .transition(.scale.combined(with: .opacity))
                 }

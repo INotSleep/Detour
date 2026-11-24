@@ -86,7 +86,7 @@ pub struct Core {
 impl Core {
     fn new(data_dir: PathBuf, trust: Trust) -> Arc<Self> {
         let settings = std::fs::read(data_dir.join("core.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
-        Arc::new(Self {
+        let core = Arc::new(Self {
             store: Arc::new(Mutex::new(Store::open(&data_dir))),
             data_dir,
             sessions: Sessions::default(),
@@ -101,7 +101,15 @@ impl Core {
             next_conn: AtomicU64::new(1),
             last_activity: Mutex::new(Instant::now()),
             quit: Notify::new(),
-        })
+        });
+        // How far a long download from a drive is (a team opened from a folder), for its progress bar.
+        let weak = Arc::downgrade(&core);
+        detour_core::drive::mirror::on_progress(move |done, total| {
+            if let Some(c) = weak.upgrade() {
+                c.emit("drive.progress", serde_json::json!({ "done": done, "total": total }));
+            }
+        });
+        core
     }
 
     /// Tells every trusted client that something changed. `by` is the connection that did it (0: the core itself).

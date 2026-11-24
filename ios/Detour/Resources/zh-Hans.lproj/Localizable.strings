@@ -313,3 +313,25 @@
 
 /* Android */
 "Haptic feedback" = "触感反馈";
+
+/* Android */
+"Signing in" = "正在登录";
+
+/* Android */
+"Star on GitHub" = "在 GitHub 上加星";
+"Rate Detour" = "为 Detour 评分";
+
+/* Android */
+"Opening %@" = "正在打开 %@";
+
+/* Android */
+"Personal" = "个人";
+"Shared groups" = "共享";
+"My groups" = "我的";
+"New group" = "新建分组";
+"Drag hosts here" = "将主机拖到这里";
+"No group" = "未分组";
+"Can't move hosts between vaults" = "主机不能在保管库之间移动";
+
+/* Android */
+"Move to group" = "移到分组";

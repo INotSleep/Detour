@@ -97,6 +97,10 @@ fun HistoryPanel(session: TerminalSession) {
         }
         else -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) { CircularProgressIndicator(Modifier.padding(top = 40.dp), color = colors.accent) }
     }
+    // Reading the server's history (a connection of its own, which takes a moment) shows.
+    if (history.loading && lines != null) {
+        androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp), color = colors.accent, trackColor = colors.fill)
+    }
 }
 
 /** A row of a panel: a tap does its thing; with `run`, an arrow on the right runs it. */
@@ -136,10 +140,21 @@ class ShellHistory {
     var lines by mutableStateOf<List<String>?>(null)
     var error by mutableStateOf<String?>(null)
 
-    private var loading = false
+    /** Reading the server's files now: shown over the list. */
+    var loading by mutableStateOf(false)
+        private set
+    /** When the server's files were last read: not again within half a minute. */
+    private var readAt = 0L
 
     suspend fun load(session: TerminalSession) {
         if (loading) return
+        val typedNow = TypedHistory.list(session.host.id)
+        if (lines != null && System.currentTimeMillis() - readAt < 30_000) {
+            // Read just now: only what was typed since goes on top.
+            val seen = typedNow.toMutableSet()
+            lines = typedNow + lines!!.filter { seen.add(it) }
+            return
+        }
         loading = true
         val host = session.host
         val typed = TypedHistory.list(host.id)
@@ -161,6 +176,7 @@ class ShellHistory {
             val seen = typed.toMutableSet()
             lines = typed + parse(text).filter { seen.add(it) }
             error = null
+            readAt = System.currentTimeMillis()
         } catch (f: CoreFailure) {
             // What was run here still shows when the server's files can't be read.
             if (lines.isNullOrEmpty()) error = if (f.kind == "needSecret") t("The history needs the host's password") else TerminalSession.describe(f)

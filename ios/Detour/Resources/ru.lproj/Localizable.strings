@@ -313,3 +313,25 @@
 
 /* Android */
 "Haptic feedback" = "Виброотклик";
+
+/* Android */
+"Signing in" = "Вход";
+
+/* Android */
+"Star on GitHub" = "Поставить звезду на GitHub";
+"Rate Detour" = "Оценить Detour";
+
+/* Android */
+"Opening %@" = "Открытие: %@";
+
+/* Android */
+"Personal" = "Личное";
+"Shared groups" = "Общие";
+"My groups" = "Мои";
+"New group" = "Новая группа";
+"Drag hosts here" = "Перетащите сюда хосты";
+"No group" = "Без группы";
+"Can't move hosts between vaults" = "Хосты нельзя переносить между хранилищами";
+
+/* Android */
+"Move to group" = "Переместить в группу";

@@ -1,25 +1,65 @@
 import Foundation
 
-/// Changes to the personal vault, the way the desktop app makes them: the vault as the core
-/// last showed it, changed, and put back with what it was (`base`), so only these changes apply.
-enum PersonalVault {
+/// Changes to a vault (the personal one or a team's), the way the desktop app makes them: the
+/// vault as the core last showed it, changed, and put back with what it was (`base`), so only these
+/// changes apply.
+enum VaultData {
     typealias JSON = [String: Any]
+    static let personal = "personal"
 
-    static func get() async throws -> JSON {
-        try await Core.shared.call("vault_get") as? JSON ?? [:]
+    static func get(_ vault: String) async throws -> JSON {
+        if vault == personal { return try await Core.shared.call("vault_get") as? JSON ?? [:] }
+        let teams = try await Core.shared.call("teams_list") as? [JSON] ?? []
+        let view = teams.first { $0["id"] as? String == vault }?["view"] as? JSON
+        return view?["data"] as? JSON ?? [:]
     }
 
     /// Reads the vault, lets `change` edit it, and saves the result.
-    static func edit(_ change: (inout JSON) throws -> Void) async throws {
-        let base = try await get()
+    static func edit(_ vault: String, _ change: (inout JSON) throws -> Void) async throws {
+        let base = try await get(vault)
         var next = base
         try change(&next)
-        _ = try await Core.shared.call("vault_put", ["update": pick(next), "base": pick(base)])
+        if vault == personal {
+            _ = try await Core.shared.call("vault_put", ["update": pick(next), "base": pick(base)])
+        } else {
+            _ = try await Core.shared.call("team_put", ["id": vault, "update": pick(next), "base": pick(base)])
+        }
     }
 
     private static func pick(_ d: JSON) -> JSON {
-        ["hosts": d["hosts"] ?? [], "keys": d["keys"] ?? [], "snippets": d["snippets"] ?? [], "tunnels": d["tunnels"] ?? [], "proxies": d["proxies"] ?? []]
+        ["hosts": d["hosts"] ?? [], "keys": d["keys"] ?? [], "snippets": d["snippets"] ?? [], "tunnels": d["tunnels"] ?? [], "proxies": d["proxies"] ?? [], "groups": d["groups"] ?? []]
     }
+
+    /// Adds `host`, or replaces the one with its id.
+    static func save(host: JSON, in vault: String) async throws {
+        try await edit(vault) { v in
+            var hosts = v["hosts"] as? [JSON] ?? []
+            if let i = hosts.firstIndex(where: { $0["id"] as? String == host["id"] as? String }) { hosts[i] = host } else { hosts.append(host) }
+            v["hosts"] = hosts
+        }
+    }
+
+    /// Removes a host; returns it as it was, for Undo.
+    @discardableResult
+    static func remove(host id: String, in vault: String) async throws -> JSON? {
+        var removed: JSON?
+        try await edit(vault) { v in
+            var hosts = v["hosts"] as? [JSON] ?? []
+            if let i = hosts.firstIndex(where: { $0["id"] as? String == id }) { removed = hosts.remove(at: i) }
+            v["hosts"] = hosts
+        }
+        return removed
+    }
+}
+
+/// Changes to the personal vault.
+enum PersonalVault {
+    typealias JSON = [String: Any]
+
+    static func get() async throws -> JSON { try await VaultData.get(VaultData.personal) }
+
+    /// Reads the vault, lets `change` edit it, and saves the result.
+    static func edit(_ change: (inout JSON) throws -> Void) async throws { try await VaultData.edit(VaultData.personal, change) }
 
     static func newId() -> String { UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased() }
 
@@ -31,25 +71,11 @@ enum PersonalVault {
     }
 
     /// Adds `host`, or replaces the one with its id.
-    static func save(host: JSON) async throws {
-        try await edit { v in
-            var hosts = v["hosts"] as? [JSON] ?? []
-            if let i = hosts.firstIndex(where: { $0["id"] as? String == host["id"] as? String }) { hosts[i] = host } else { hosts.append(host) }
-            v["hosts"] = hosts
-        }
-    }
+    static func save(host: JSON) async throws { try await VaultData.save(host: host, in: VaultData.personal) }
 
     /// Removes a host; returns it as it was, for Undo.
     @discardableResult
-    static func remove(host id: String) async throws -> JSON? {
-        var removed: JSON?
-        try await edit { v in
-            var hosts = v["hosts"] as? [JSON] ?? []
-            if let i = hosts.firstIndex(where: { $0["id"] as? String == id }) { removed = hosts.remove(at: i) }
-            v["hosts"] = hosts
-        }
-        return removed
-    }
+    static func remove(host id: String) async throws -> JSON? { try await VaultData.remove(host: id, in: VaultData.personal) }
 
     // MARK: keys
 

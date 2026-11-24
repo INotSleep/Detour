@@ -25,3 +25,9 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "sync"] }
 uniffi = "0.32.2"
+
+# Android: the core checks TLS certificates with the system's store, which it reaches through the
+# JVM (see `Java_dev_detour_android_core_Native_init`).
+[target.'cfg(target_os = "android")'.dependencies]
+jni = { version = "0.22", default-features = false }
+rustls-platform-verifier = "0.7.1"

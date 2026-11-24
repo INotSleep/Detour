@@ -2,6 +2,7 @@ package dev.detour.android
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.detour.android.core.Biometry
@@ -12,10 +13,17 @@ import dev.detour.android.core.DriveSignInNeed
 import dev.detour.android.core.Drives
 import dev.detour.android.core.ErrorDetail
 import dev.detour.android.core.PendingTeam
+import dev.detour.android.core.Groups
 import dev.detour.android.core.Host
+import dev.detour.android.core.HostGroup
+import dev.detour.android.core.MyGroup
+import dev.detour.android.core.VaultData
+import dev.detour.android.core.VaultHosts
 import dev.detour.android.core.HostSection
 import dev.detour.android.core.SyncStatus
 import dev.detour.android.core.bool
+import dev.detour.android.core.double
+import dev.detour.android.core.t
 import dev.detour.android.core.list
 import dev.detour.android.core.obj
 import dev.detour.android.core.str
@@ -26,7 +34,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
-import java.text.Collator
 import java.util.UUID
 
 /** An open session: a terminal or a host's files over SFTP. */
@@ -45,6 +52,13 @@ sealed interface OpenSession {
     }
 }
 
+/** A team being opened from a drive folder: how far the download is, or why it failed. */
+class OpeningTeam {
+    var done by mutableStateOf(0)
+    var total by mutableStateOf(0)
+    var error by mutableStateOf<String?>(null)
+}
+
 /** The app's tabs, in the order of the tab bar. */
 enum class MainTab { Hosts, Sessions, Keys, Snippets, Proxies, Teams, Settings }
 
@@ -56,6 +70,31 @@ object AppModel {
 
     var phase by mutableStateOf(Phase.Loading)
     var sections by mutableStateOf<List<HostSection>>(emptyList())
+    /** The personal vault and the teams, with their hosts, groups and this person's own grouping. */
+    var vaults by mutableStateOf<List<VaultHosts>>(emptyList())
+    /** The vault the hosts screen shows: new hosts go there. */
+    var hostsVault by mutableStateOf(prefs?.getString("hostsVault", null) ?: VaultData.PERSONAL)
+        private set
+    /** Teams whose hosts show in this person's own groups, not the shared ones. */
+    var mineViews by mutableStateOf(prefs?.getStringSet("mineViews", null)?.toSet() ?: emptySet())
+        private set
+
+    private val prefs get() = if (KeepAliveService.ready) KeepAliveService.context.getSharedPreferences("app", android.content.Context.MODE_PRIVATE) else null
+
+    fun showVault(id: String) {
+        hostsVault = id
+        prefs?.edit()?.putString("hostsVault", id)?.apply()
+    }
+
+    /** Shows a team's hosts in this person's own groups (made from the shared ones the first time) or the shared ones. */
+    fun setMineView(team: VaultHosts, on: Boolean) {
+        mineViews = if (on) mineViews + team.id else mineViews - team.id
+        prefs?.edit()?.putStringSet("mineViews", mineViews)?.apply()
+        if (on && team.layout == null) scope.launch {
+            runCatching { Groups.saveLayout(team.id, Groups.layoutFrom(team.hosts, team.groups)) }.onFailure { dev.detour.android.ui.Hud.error(describe(it)) }
+            reload()
+        }
+    }
     var sync by mutableStateOf<SyncStatus?>(null)
     val sessions = mutableStateListOf<OpenSession>()
     var current by mutableStateOf<UUID?>(null)
@@ -74,6 +113,10 @@ object AppModel {
     /** A `detour://join` link (the other device's QR) waiting for the join form. */
     var pendingJoin by mutableStateOf<JoinLink?>(null)
     private var lastPassword: String? = null
+    /** Teams being opened from a drive folder, by team id: shown with their progress in the lists. */
+    val openingTeams = mutableStateMapOf<String, OpeningTeam>()
+    /** Bumped when a team joined here: the teams screen reads its list again. */
+    var teamsVersion by mutableStateOf(0)
 
     val terminals: List<TerminalSession> get() = sessions.mapNotNull { (it as? OpenSession.Terminal)?.session }
 
@@ -82,10 +125,14 @@ object AppModel {
     fun start() {
         if (started) return
         started = true
-        Core.onEvent { name, _ ->
+        Core.onEvent { name, data ->
             when (name) {
                 "locked" -> phase = Phase.Locked
                 "data.changed", "unlocked" -> if (phase == Phase.Ready) scope.launch { reload() }
+                "drive.progress" -> openingTeams.values.filter { it.error == null }.forEach {
+                    it.done = data.double("done")?.toInt() ?: 0
+                    it.total = data.double("total")?.toInt() ?: 0
+                }
             }
         }
         scope.launch {
@@ -138,17 +185,30 @@ object AppModel {
     }
 
     suspend fun reload() {
-        val out = ArrayList<HostSection>()
+        val all = ArrayList<VaultHosts>()
         runCatching { Core.call("vault_get").obj() }.getOrNull()?.let { v ->
-            out += grouped(v["hosts"].list().map { Host.from(it.obj(), "personal") }, "personal", null)
+            all += VaultHosts(VaultData.PERSONAL, null, null, v["hosts"].list().map { Host.from(it.obj(), VaultData.PERSONAL) }, v["groups"].list().map { HostGroup.from(it.obj()) }, null)
         }
         val signIns = ArrayList<ErrorDetail?>()
         runCatching { Core.call("teams_list").list() }.getOrNull()?.forEach { t ->
             val view = t.obj()["view"]?.obj() ?: return@forEach
             val id = view.str("id") ?: return@forEach
-            val hosts = view["data"].obj()["hosts"].list().map { Host.from(it.obj(), id) }
-            out += grouped(hosts, id, view.str("name"))
+            val me = view["members"].list().map { it.obj() }.firstOrNull { it.bool("isYou") == true }
+            val levels = view["access"].list().map { it.obj() }.filter { it.str("member") == me?.str("id") }.associate { (it.str("record") ?: "") to (it.str("level") ?: "none") }
+            val data = view["data"].obj()
+            all += VaultHosts(
+                id, view.str("name") ?: "", me?.str("role"),
+                data["hosts"].list().map { h -> h.obj().let { Host.from(it, id, levels[it.str("id")] ?: "none") } },
+                data["groups"].list().map { HostGroup.from(it.obj()) },
+                view["layout"]?.obj()?.let { l -> l["groups"].list().map { MyGroup.from(it.obj()) } },
+            )
             signIns += ErrorDetail.from(view["remote"].obj()["error"])
+        }
+        vaults = all
+        val out = all.flatMap { v ->
+            Groups.list(v.hosts, v.groups, false).map { g ->
+                HostSection("${v.id}/${g.name}", listOfNotNull(v.name, g.name.ifEmpty { null }).joinToString(" / "), g.hosts)
+            }
         }
         sections = out
         val st = runCatching { Core.call("sync_status") }.getOrNull()
@@ -189,38 +249,33 @@ object AppModel {
         reload()
     }
 
+    /**
+     * Opens here a team kept in a drive folder. It runs on its own: the list of teams shows how
+     * far it is, and the sheet that started it is gone.
+     */
+    fun openTeamFromDrive(team: PendingTeam, folder: DriveFolderRef) {
+        if (openingTeams[team.teamId]?.error == null && team.teamId in openingTeams) return
+        val o = OpeningTeam()
+        openingTeams[team.teamId] = o
+        tab = MainTab.Teams
+        scope.launch {
+            try {
+                KeepAliveService.whileBusy(t("Opening %@", team.name)) {
+                    Core.call("team_join_linked_drive", mapOf("teamId" to team.teamId, "drive" to folder.json))
+                }
+                reload()
+                openingTeams.remove(team.teamId)
+                teamsVersion++
+            } catch (e: Exception) {
+                o.error = Drives.errorText(e)
+            }
+        }
+    }
+
     /** Pulls what changed on other devices. */
     suspend fun syncNow() {
         if (sync?.enabled == true) runCatching { Core.call("sync_now") }
         reload()
-    }
-
-    private val collator = Collator.getInstance().apply { strength = Collator.SECONDARY }
-
-    /** As iOS's `localizedStandardCompare`: numbers within names by their value ("web-2" before "web-10"). */
-    private val natural = Comparator<String> { a, b ->
-        val parts = Regex("\\d+|\\D+")
-        val x = parts.findAll(a).map { it.value }.toList()
-        val y = parts.findAll(b).map { it.value }.toList()
-        for (i in 0 until minOf(x.size, y.size)) {
-            val p = x[i]
-            val q = y[i]
-            val c = if (p[0].isDigit() && q[0].isDigit()) p.trimStart('0').length.compareTo(q.trimStart('0').length).takeIf { it != 0 } ?: p.trimStart('0').compareTo(q.trimStart('0'))
-            else collator.compare(p, q)
-            if (c != 0) return@Comparator c
-        }
-        x.size.compareTo(y.size)
-    }
-
-    private fun grouped(hosts: List<Host>, vault: String, prefix: String?): List<HostSection> {
-        val groups = hosts.groupBy { it.group }
-        val names = groups.keys.sortedWith { a, b ->
-            if (a.isEmpty() != b.isEmpty()) (if (a.isEmpty()) 1 else -1) else natural.compare(a, b)
-        }
-        return names.map { g ->
-            val title = listOfNotNull(prefix, g.ifEmpty { null }).joinToString(" / ")
-            HostSection("$vault/$g", title, groups.getValue(g).sortedWith { a, b -> natural.compare(a.label, b.label) })
-        }
     }
 
     // Sessions

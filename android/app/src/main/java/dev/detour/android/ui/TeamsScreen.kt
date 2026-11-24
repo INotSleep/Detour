@@ -108,7 +108,7 @@ fun TeamsScreen() {
         teams = loadTeams()
     }
 
-    LaunchedEffect(active) { if (active) load() }
+    LaunchedEffect(active, AppModel.teamsVersion) { if (active) load() }
 
     Box(Modifier.fillMaxSize()) {
         PullToRefreshBox(refreshing, { scope.launch { refreshing = true; AppModel.syncNow(); load(); refreshing = false } }, Modifier.fillMaxSize()) {

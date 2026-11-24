@@ -111,6 +111,7 @@ const uk: typeof en = {
   lock: "Заблокувати",
   about: "Про програму",
   version: "Версія",
+  support: "Підтримати проєкт",
   license: "Ліцензія",
   log: "Журнал",
   openLog: "Відкрити",

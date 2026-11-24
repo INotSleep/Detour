@@ -29,6 +29,62 @@ pub struct Listing {
     pub folders: BTreeMap<String, String>,
 }
 
+/// Files at the same time while pulling.
+const DOWNLOADS: usize = 8;
+
+/// Pulls of at least this many files report how far they are (opening a team or a vault on a
+/// new device; an everyday sync brings a few).
+const REPORTED: usize = 10;
+
+type Progress = std::sync::Arc<dyn Fn(usize, usize) + Send + Sync>;
+static PROGRESS: std::sync::Mutex<Option<Progress>> = std::sync::Mutex::new(None);
+
+/// Called with (files done, files in all) while a long pull downloads. Replaces the one before.
+pub fn on_progress(f: impl Fn(usize, usize) + Send + Sync + 'static) {
+    *PROGRESS.lock().unwrap() = Some(std::sync::Arc::new(f));
+}
+
+/// Downloads the items, `DOWNLOADS` at a time, in their order. The first failure is returned.
+fn download_all(storage: &dyn Storage, items: &[(&String, &Item)]) -> Result<Vec<Vec<u8>>> {
+    if items.len() < 2 {
+        return items.iter().map(|(_, i)| storage.download(i)).collect();
+    }
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let done = std::sync::atomic::AtomicUsize::new(0);
+    let report = PROGRESS.lock().unwrap().clone().filter(|_| items.len() >= REPORTED);
+    if let Some(f) = &report {
+        f(0, items.len());
+    }
+    let failed = std::sync::atomic::AtomicBool::new(false);
+    let slots: Vec<std::sync::Mutex<Option<Result<Vec<u8>>>>> = items.iter().map(|_| std::sync::Mutex::new(None)).collect();
+    std::thread::scope(|s| {
+        for _ in 0..DOWNLOADS.min(items.len()) {
+            s.spawn(|| {
+                use std::sync::atomic::Ordering::Relaxed;
+                while !failed.load(Relaxed) {
+                    let n = next.fetch_add(1, Relaxed);
+                    let Some((_, item)) = items.get(n) else { break };
+                    let r = storage.download(item);
+                    if r.is_err() {
+                        failed.store(true, Relaxed);
+                    }
+                    let d = done.fetch_add(1, Relaxed) + 1;
+                    if let Some(f) = &report {
+                        f(d, items.len());
+                    }
+                    *slots[n].lock().unwrap() = Some(r);
+                }
+            });
+        }
+    });
+    let mut got: Vec<Option<Result<Vec<u8>>>> = slots.into_iter().map(|m| m.into_inner().unwrap()).collect();
+    // Some were not fetched only when one failed: that failure is the answer.
+    if let Some(i) = got.iter().position(|r| matches!(r, Some(Err(_)))) {
+        return Err(got.swap_remove(i).unwrap().unwrap_err());
+    }
+    Ok(got.into_iter().map(|r| r.expect("each fetched").expect("no failure")).collect())
+}
+
 /// One drive's API, on the vault's folder. Blocking: called off the async threads.
 pub trait Storage: Send + Sync {
     fn list(&self) -> Result<Listing>;
@@ -172,11 +228,11 @@ impl Mirror {
         let listing = storage.list()?;
         let mut synced = Synced::default();
         let local = self.local()?;
-        for (path, item) in &listing.files {
-            if st.remote.get(path) == Some(item) {
-                continue;
-            }
-            let data = storage.download(item)?;
+        // What changed there, fetched several at a time: one request per file, and a team or a
+        // vault opened on a new device is hundreds of them.
+        let wanted: Vec<(&String, &Item)> = listing.files.iter().filter(|(p, i)| st.remote.get(*p) != Some(*i)).collect();
+        let fetched = download_all(storage, &wanted)?;
+        for ((path, item), data) in wanted.into_iter().zip(fetched) {
             let h = hash(&data);
             match local.get(path) {
                 // The same here already.

@@ -1047,7 +1047,7 @@ export const api = {
   teamRollback: (id: string, to: Rollback): Promise<{ view: TeamView; done: { applied: number; skipped: number; entry: string | null } }> => invoke("team_rollback", { id, to }),
 
   /** Native folder picker; null if cancelled or not in the app window. */
-  /** Opens a page in the system browser (only github.com is allowed). */
+  /** Opens a page in the system browser (only the sites in the capabilities: GitHub, the drives' sign-ins, Ko-fi). */
   async openInBrowser(url: string): Promise<void> {
     if (real) return openUrl(url);
     if (url.includes("/installations/")) demoGithub.installed = true;

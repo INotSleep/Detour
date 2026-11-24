@@ -3,6 +3,9 @@ package dev.detour.android.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -333,13 +336,36 @@ fun DriveSignInAgainRows(need: DriveSignInNeed, last: Boolean, done: () -> Unit)
     if (error != null) ErrorCell(error, last = last)
 }
 
-/** A team on another device kept in a folder its drive's own app syncs: a row that opens it here. */
+/**
+ * A team on another device kept in a folder its drive's own app syncs: a row that opens it here.
+ * While it is being opened, it shows how far.
+ */
 @Composable
 fun FolderTeamRow(team: PendingTeam, last: Boolean, onClick: () -> Unit) {
-    Cell(last = last, onClick = onClick, inset = 52) {
+    val opening = AppModel.openingTeams[team.teamId]
+    val going = opening != null && opening.error == null
+    Cell(last = last, onClick = if (going) null else onClick, inset = 52) {
         CellIcon(Icons.Outlined.Groups)
-        Text(team.name, color = colors.label, fontSize = 17.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-        Text(t("Open from a cloud drive"), color = colors.secondary, fontSize = 15.sp, maxLines = 1, modifier = Modifier.padding(start = 8.dp))
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(team.name, color = colors.label, fontSize = 17.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                if (opening != null && going) {
+                    if (opening.total > 0) Text("${opening.done} / ${opening.total}", color = colors.secondary, fontSize = 15.sp, maxLines = 1, modifier = Modifier.padding(start = 8.dp))
+                } else {
+                    Text(t("Open from a cloud drive"), color = colors.secondary, fontSize = 15.sp, maxLines = 1, modifier = Modifier.padding(start = 8.dp))
+                }
+            }
+            if (opening != null && going) {
+                val progress by animateFloatAsState(if (opening.total > 0) opening.done.toFloat() / opening.total else 0f, label = "opening")
+                Spacer(Modifier.height(8.dp))
+                if (opening.total > 0) {
+                    LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth().height(4.dp), color = colors.accent, trackColor = colors.separator, gapSize = 0.dp, drawStopIndicator = {})
+                } else {
+                    LinearProgressIndicator(Modifier.fillMaxWidth().height(4.dp), color = colors.accent, trackColor = colors.separator, gapSize = 0.dp)
+                }
+            }
+            opening?.error?.let { Text(it, color = colors.red, fontSize = 13.sp, modifier = Modifier.padding(top = 2.dp)) }
+        }
     }
 }
 
@@ -350,36 +376,23 @@ fun FolderTeamRow(team: PendingTeam, last: Boolean, onClick: () -> Unit) {
 @Composable
 fun TeamFromDriveSheet(team: PendingTeam, close: () -> Unit) {
     val pick = remember { DrivePick() }
-    var busy by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-    val scope = rememberCoroutineScope()
     val ready = pick.folder != null && pick.account != null
 
+    // Opening goes on by itself: the sheet goes, and the teams show how far it is.
     fun open() {
         val folder = pick.folder?.copy(account = pick.account) ?: return
-        busy = true
-        error = null
-        scope.launch {
-            try {
-                Core.call("team_join_linked_drive", mapOf("teamId" to team.teamId, "drive" to folder.json))
-                AppModel.reload()
-                close()
-            } catch (e: Exception) {
-                error = Drives.errorText(e)
-            }
-            busy = false
-        }
+        AppModel.openTeamFromDrive(team, folder)
+        close()
     }
 
     Sheet(close) {
         SheetBar(
             team.name,
             left = { BarButton(t("Cancel"), onClick = close) },
-            right = { if (busy) CircularProgressIndicator(Modifier.size(22.dp), color = colors.accent) else BarButton(t("Open"), bold = true, enabled = ready) { open() } },
+            right = { BarButton(t("Open"), bold = true, enabled = ready) { open() } },
         )
         LazyColumn(Modifier.fillMaxSize()) {
             driveSections(pick, "team")
-            errorItem(error)
         }
     }
 }

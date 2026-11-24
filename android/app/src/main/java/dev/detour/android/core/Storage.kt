@@ -63,7 +63,10 @@ class DriveSignInFlow {
     var error by mutableStateOf<String?>(null)
 
     /** The account signed in to, or null (cancelled, refused, or a code to paste first). */
-    suspend fun signIn(context: android.content.Context, p: DriveProvider): String? {
+    suspend fun signIn(context: android.content.Context, p: DriveProvider): String? =
+        dev.detour.android.KeepAliveService.whileSigningIn { signInNow(context, p) }
+
+    private suspend fun signInNow(context: android.content.Context, p: DriveProvider): String? {
         busy = true
         error = null
         try {
@@ -165,7 +168,9 @@ class StorageModel {
     }
 
     /** Signs this device in with GitHub: a code to enter on GitHub's page, then waits. */
-    suspend fun startGithub(open: (String) -> Unit) {
+    suspend fun startGithub(open: (String) -> Unit) = dev.detour.android.KeepAliveService.whileSigningIn { startGithubNow(open) }
+
+    private suspend fun startGithubNow(open: (String) -> Unit) {
         signInError = null
         try {
             val d = Core.call("github_start").obj()
@@ -178,7 +183,12 @@ class StorageModel {
             var interval = d.double("interval") ?: 5.0
             while (signIn != null) {
                 delay((interval * 1000).toLong())
-                val r = Core.call("github_poll", mapOf("deviceCode" to device)).obj()
+                // A check that couldn't get through is just tried again at the next one.
+                val r = try {
+                    Core.call("github_poll", mapOf("deviceCode" to device)).obj()
+                } catch (f: CoreFailure) {
+                    if (f.kind == "unreachable") continue else throw f
+                }
                 when (r.str("status")) {
                     "done" -> {
                         github = r.str("user")

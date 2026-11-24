@@ -90,10 +90,7 @@ private fun TunnelRow(tunnel: Tunnel, last: Boolean, edit: (Tunnel?) -> Unit) {
                     ?: if (on) t("Connections: %@", status.connections) else route(tunnel)
                 CellText(tunnel.name, detail, mono = error == null && status?.error == null && !on)
                 if (busy) CircularProgressIndicator(Modifier.size(22.dp), color = colors.accent, strokeWidth = 2.dp)
-                else Switch(
-                    on, { want -> if (want) start() else scope.launch { Tunnels.stop(tunnel) } },
-                    colors = SwitchDefaults.colors(checkedTrackColor = colors.green, checkedThumbColor = Color.White, uncheckedThumbColor = Color.White, uncheckedTrackColor = colors.fill, uncheckedBorderColor = Color.Transparent),
-                )
+                else IosSwitch(on, { want -> if (want) start() else scope.launch { Tunnels.stop(tunnel) } })
             }
         }
         DropdownMenu(menu, { menu = false }) {

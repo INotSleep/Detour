@@ -111,6 +111,7 @@ const ru: typeof en = {
   lock: "Заблокировать",
   about: "О программе",
   version: "Версия",
+  support: "Поддержать проект",
   license: "Лицензия",
   log: "Журнал",
   openLog: "Открыть",

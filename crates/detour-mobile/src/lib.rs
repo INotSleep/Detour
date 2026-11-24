@@ -70,3 +70,18 @@ impl DetourCore {
         self.core.stop();
     }
 }
+
+/// Android: lets the core check TLS certificates (sync, cloud drives, GitHub) with the system's
+/// store: rustls-platform-verifier calls into the JVM for it and has to be handed the app's context
+/// first. Called once at start by `dev.detour.android.core.Native.init(context)`.
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_detour_android_core_Native_init<'caller>(
+    mut unowned_env: jni::EnvUnowned<'caller>,
+    _class: jni::objects::JClass<'caller>,
+    context: jni::objects::JObject<'caller>,
+) {
+    unowned_env
+        .with_env(|env| -> jni::errors::Result<()> { rustls_platform_verifier::android::init_with_env(env, context) })
+        .resolve::<jni::errors::ThrowRuntimeExAndDefault>()
+}

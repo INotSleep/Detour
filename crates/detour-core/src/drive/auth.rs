@@ -112,6 +112,21 @@ fn pending() -> std::sync::MutexGuard<'static, HashMap<Provider, Pending>> {
 /// port Dropbox's fixed one would otherwise still hold).
 static WAITING: LazyLock<Mutex<HashMap<Provider, tokio::task::AbortHandle>>> = LazyLock::new(Default::default);
 
+/// What a browser sign-in waits with, kept so it can listen again on the same port: iOS takes a
+/// listening socket away from an app it suspends (the person off in another app for a password),
+/// and the drive's answer then finds nobody. Back in front, the app asks for it again (`relisten`).
+#[derive(Clone)]
+struct Listen {
+    port: u16,
+    state: String,
+    back: Option<String>,
+    client: String,
+    verifier: String,
+    redirect: String,
+}
+
+static LISTENS: LazyLock<Mutex<HashMap<Provider, Listen>>> = LazyLock::new(Default::default);
+
 fn stop_waiting(p: Provider) {
     if let Some(h) = WAITING.lock().unwrap_or_else(|e| e.into_inner()).remove(&p) {
         h.abort();
@@ -188,24 +203,73 @@ pub async fn start(p: Provider, back: Option<String>) -> Result<Start> {
             }
             pending().insert(p, Pending::Browser { verifier: verifier.clone(), redirect: redirect.clone(), done: None });
             if let (Some(l), Some(r)) = (listener, redirect) {
-                let task = tokio::spawn(async move {
-                    let got = match tokio::time::timeout(Duration::from_secs(600), wait_for_code(l, &state, back.as_deref())).await {
-                        Ok(Ok(code)) => {
-                            let client = client.clone();
-                            blocking(move || exchange(p, &client, &code, &verifier, Some(&r))).await
-                        }
-                        Ok(Err(e)) => Err(e),
-                        Err(_) => Err(Error::Drive { provider: p.id().into(), message: "the sign-in timed out".into() }),
-                    };
-                    if let Some(Pending::Browser { done, .. }) = pending().get_mut(&p) {
-                        *done = Some(got);
-                    }
-                });
-                WAITING.lock().unwrap_or_else(|e| e.into_inner()).insert(p, task.abort_handle());
+                let port = l.local_addr()?.port();
+                listen(p, Listen { port, state, back, client, verifier, redirect: r }, Some(l));
             }
             Ok(Start::Browser { url, paste: !matches!(pending().get(&p), Some(Pending::Browser { redirect: Some(_), .. })) })
         }
     }
+}
+
+/// Waits (up to ten minutes) for the browser to come back to `port`, then swaps the code for tokens.
+/// A listener that breaks is opened again on the same port.
+fn listen(p: Provider, w: Listen, first: Option<tokio::net::TcpListener>) {
+    stop_waiting(p);
+    LISTENS.lock().unwrap_or_else(|e| e.into_inner()).insert(p, w.clone());
+    let task = tokio::spawn(async move {
+        let waited = tokio::time::timeout(Duration::from_secs(600), async {
+            let mut first = first;
+            loop {
+                let l = match first.take() {
+                    Some(l) => l,
+                    None => bind(p, w.port).await?,
+                };
+                match wait_for_code(l, &w.state, w.back.as_deref()).await? {
+                    Some(code) => {
+                        // The browser is done: nothing to listen again for (the app coming back to
+                        // the front asks for that, and must not cut the swap for tokens short).
+                        LISTENS.lock().unwrap_or_else(|e| e.into_inner()).remove(&p);
+                        return Ok(code);
+                    }
+                    None => tokio::time::sleep(Duration::from_millis(200)).await,
+                }
+            }
+        })
+        .await;
+        let got = match waited {
+            Ok(Ok(code)) => {
+                let (client, verifier, redirect) = (w.client.clone(), w.verifier.clone(), w.redirect.clone());
+                blocking(move || exchange(p, &client, &code, &verifier, Some(&redirect))).await
+            }
+            Ok(Err(e)) => Err(e),
+            Err(_) => Err(Error::Drive { provider: p.id().into(), message: "the sign-in timed out".into() }),
+        };
+        LISTENS.lock().unwrap_or_else(|e| e.into_inner()).remove(&p);
+        if let Some(Pending::Browser { done, .. }) = pending().get_mut(&p) {
+            *done = Some(got);
+        }
+    });
+    WAITING.lock().unwrap_or_else(|e| e.into_inner()).insert(p, task.abort_handle());
+}
+
+/// The sign-ins still waiting for the browser listen again, each on its own port: after the app was
+/// suspended, its listening sockets may be gone.
+pub fn relisten() {
+    let waiting: Vec<(Provider, Listen)> = LISTENS.lock().unwrap_or_else(|e| e.into_inner()).iter().map(|(p, w)| (*p, w.clone())).collect();
+    for (p, w) in waiting {
+        listen(p, w, None);
+    }
+}
+
+/// Listens on a port again; the listener before it lets go of the port once its task is dropped.
+async fn bind(p: Provider, port: u16) -> Result<tokio::net::TcpListener> {
+    for _ in 0..40 {
+        if let Ok(l) = tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
+            return Ok(l);
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    Err(Error::Drive { provider: p.id().into(), message: "can't listen for the sign-in".into() })
 }
 
 /// Swaps a browser sign-in's code for tokens.
@@ -229,10 +293,11 @@ fn exchange(p: Provider, client: &str, code: &str, verifier: &str, redirect: Opt
     }
 }
 
-/// Waits for the browser to come back with the code (other requests, like a favicon, are turned away).
-async fn wait_for_code(l: tokio::net::TcpListener, state: &str, back: Option<&str>) -> Result<String> {
+/// Waits for the browser to come back with the code (other requests, like a favicon, are turned
+/// away). None: the listener broke, to be opened again.
+async fn wait_for_code(l: tokio::net::TcpListener, state: &str, back: Option<&str>) -> Result<Option<String>> {
     loop {
-        let (mut s, _) = l.accept().await?;
+        let Ok((mut s, _)) = l.accept().await else { return Ok(None) };
         let mut buf = vec![0u8; 8192];
         let n = s.read(&mut buf).await.unwrap_or(0);
         let req = String::from_utf8_lossy(&buf[..n]).to_string();
@@ -251,7 +316,7 @@ async fn wait_for_code(l: tokio::net::TcpListener, state: &str, back: Option<&st
         };
         let _ = s.write_all(format!("{head}Content-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await;
         return match (ok, query.get("code")) {
-            (true, Some(code)) => Ok(code.clone()),
+            (true, Some(code)) => Ok(Some(code.clone())),
             _ => Err(Error::Drive { provider: "oauth".into(), message: query.get("error").cloned().unwrap_or_else(|| "the sign-in was refused".into()) }),
         };
     }

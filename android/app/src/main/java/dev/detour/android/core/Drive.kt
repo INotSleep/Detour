@@ -161,6 +161,8 @@ object Drives {
 
     /** The app is in front again: without the link above, the page was closed. */
     fun resumed() {
+        // A sign-in waiting for the browser listens again (its socket may have gone meanwhile).
+        main.launch { runCatching { Core.call("drive_sign_in_resume") } }
         val b = back ?: return
         // The link, when there is one, comes just before this.
         main.launch { delay(600); b.complete(null) }

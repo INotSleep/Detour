@@ -57,6 +57,8 @@ dependencies {
     implementation("com.google.zxing:core:3.5.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation(project(":terminal"))
+    // Must match rustls-platform-verifier-android in Cargo.lock.
+    implementation("org.rustls:rustls-platform-verifier:0.2.0")
     // The core's Kotlin side (UniFFI) reaches it through JNA.
     implementation("net.java.dev.jna:jna:5.18.1@aar")
 }

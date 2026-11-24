@@ -2,7 +2,7 @@ package dev.detour.android.ui
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -24,6 +24,9 @@ fun Sheet(onDismiss: () -> Unit, full: Boolean = true, content: @Composable Colu
         containerColor = colors.background,
         dragHandle = null,
     ) {
-        Column(Modifier.fillMaxWidth().then(if (full) Modifier.fillMaxHeight(0.94f) else Modifier), content = content)
+        // A fixed height from the screen: a fraction of the sheet's own height changes while the
+        // sheet is dragged, and the two chased each other (the sheet bounced up and down).
+        val screen = androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp.dp
+        Column(Modifier.fillMaxWidth().then(if (full) Modifier.height(screen * 0.94f) else Modifier), content = content)
     }
 }

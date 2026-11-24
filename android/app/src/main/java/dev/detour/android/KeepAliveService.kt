@@ -44,10 +44,33 @@ class KeepAliveService : Service() {
         private const val CHANNEL = "connections"
         private const val ID = 1
         lateinit var context: Context
+        val ready: Boolean get() = ::context.isInitialized
+
+        /**
+         * Sign-ins under way in the browser, and teams being opened from a drive. Android cuts the
+         * network of an app gone to the background, so the core couldn't hear back from the drive
+         * or GitHub: the service keeps the app running for as long as one is going on.
+         */
+        private val busy = ArrayList<String>()
+
+        suspend fun <T> whileSigningIn(block: suspend () -> T): T = whileBusy(t("Signing in"), block)
+
+        /** Keeps the app running while `block` runs; `what` shows in the notification. */
+        suspend fun <T> whileBusy(what: String, block: suspend () -> T): T {
+            busy += what
+            update()
+            try {
+                return block()
+            } finally {
+                busy.remove(what)
+                update()
+            }
+        }
 
         /** What is open: "2 sessions, 1 tunnel", or nothing. */
         private fun summary(): String? {
             val parts = buildList {
+                addAll(busy.distinct())
                 val s = AppModel.sessions.size
                 if (s > 0) add(t("Sessions: %@", s))
                 val tunnels = Tunnels.running

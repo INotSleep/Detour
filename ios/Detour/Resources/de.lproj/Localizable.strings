@@ -313,3 +313,25 @@
 
 /* Android */
 "Haptic feedback" = "Haptisches Feedback";
+
+/* Android */
+"Signing in" = "Anmeldung";
+
+/* Android */
+"Star on GitHub" = "Stern auf GitHub geben";
+"Rate Detour" = "Detour bewerten";
+
+/* Android */
+"Opening %@" = "Wird geöffnet: %@";
+
+/* Android */
+"Personal" = "Persönlich";
+"Shared groups" = "Geteilt";
+"My groups" = "Meine";
+"New group" = "Neue Gruppe";
+"Drag hosts here" = "Hosts hierher ziehen";
+"No group" = "Ohne Gruppe";
+"Can't move hosts between vaults" = "Hosts lassen sich nicht zwischen Tresoren verschieben";
+
+/* Android */
+"Move to group" = "In Gruppe verschieben";

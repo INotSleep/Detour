@@ -27,6 +27,13 @@ enum OpenSession: Identifiable {
     }
 }
 
+/// A team being opened from a drive folder: how far the download is, or why it failed.
+struct OpeningTeam: Equatable {
+    var done = 0
+    var total = 0
+    var error: String?
+}
+
 /// The app's tabs, in the order of the tab bar.
 enum MainTab: String, CaseIterable, Identifiable {
     case hosts, sessions, keys, snippets, proxies, teams, settings
@@ -45,6 +52,16 @@ final class AppModel: ObservableObject {
     @Published var driveSignIns: [DriveSignInNeed] = []
     /// Teams on this person's other devices kept in a folder: opened here through a drive.
     @Published var folderTeams: [PendingTeam] = []
+    /// The personal vault and the teams, with their hosts, groups and this person's own grouping.
+    @Published var vaults: [VaultHosts] = []
+    /// The vault the hosts screen shows: new hosts go there.
+    @Published private(set) var hostsVault = UserDefaults.standard.string(forKey: "hostsVault") ?? VaultData.personal
+    /// Teams whose hosts show in this person's own groups, not the shared ones.
+    @Published private(set) var mineViews = Set(UserDefaults.standard.stringArray(forKey: "mineViews") ?? [])
+    /// Teams being opened from a drive folder, by team id: shown with their progress in the lists.
+    @Published var openingTeams: [String: OpeningTeam] = [:]
+    /// Bumped when a team joined here: the teams screen reads its list again.
+    @Published var teamsVersion = 0
     @Published var sessions: [OpenSession] = []
     @Published var current: OpenSession.ID?
     @Published var showTerminals = false
@@ -68,11 +85,17 @@ final class AppModel: ObservableObject {
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.networkChanged(now) } }
         }
         network.start(queue: .global(qos: .utility))
-        Core.shared.onEvent { [weak self] name, _ in
+        Core.shared.onEvent { [weak self] name, data in
             guard let self else { return }
             switch name {
             case "locked": self.phase = .locked
             case "data.changed", "unlocked": if self.phase == .ready { Task { await self.reload() } }
+            case "drive.progress":
+                let done = (data["done"] as? NSNumber)?.intValue ?? 0
+                let total = (data["total"] as? NSNumber)?.intValue ?? 0
+                for (id, o) in self.openingTeams where o.error == nil {
+                    self.openingTeams[id] = OpeningTeam(done: done, total: total)
+                }
             default: break
             }
         }
@@ -123,19 +146,33 @@ final class AppModel: ObservableObject {
     }
 
     func reload() async {
-        var out: [HostSection] = []
+        var all: [VaultHosts] = []
         if let personal = try? await Core.shared.call("vault_get", as: VaultView.self) {
-            out += Self.grouped(personal.hosts, vault: "personal", prefix: nil)
+            all.append(VaultHosts(id: VaultData.personal, name: nil, role: nil, hosts: personal.hosts.map { h in var h = h; h.vaultId = VaultData.personal; return h }, groups: personal.groups ?? [], layout: nil))
         }
         var signIns: [CoreErrorInfo?] = []
         if let teams = try? await Core.shared.call("teams_list", as: [TeamEntry].self) {
             for t in teams {
                 guard let v = t.view else { continue }
-                out += Self.grouped(v.data.hosts, vault: v.id, prefix: v.name)
+                let me = v.members.first { $0.isYou }
+                var levels: [String: String] = [:]
+                for a in v.access ?? [] where a.member == me?.id { levels[a.record] = a.level }
+                let hosts = v.data.hosts.map { h in
+                    var h = h
+                    h.vaultId = v.id
+                    h.access = levels[h.id] ?? "none"
+                    return h
+                }
+                all.append(VaultHosts(id: v.id, name: v.name, role: me?.role, hosts: hosts, groups: v.data.groups ?? [], layout: v.layout?.groups))
                 signIns.append(v.remote?.error)
             }
         }
-        sections = out
+        vaults = all
+        sections = all.flatMap { v in
+            Groups.list(v.hosts, v.groups, withEmpty: false).map { g in
+                HostSection(id: "\(v.id)/\(g.name)", title: [v.name, g.name.isEmpty ? nil : g.name].compactMap { $0 }.joined(separator: " / "), hosts: g.hosts)
+            }
+        }
         sync = try? await Core.shared.call("sync_status", as: SyncStatus.self)
         signIns.append(sync?.error)
         var needs: [DriveSignInNeed] = signIns.compactMap { e in e?.kind == "driveSignIn" ? e?.drive.map { DriveSignInNeed(provider: $0, account: e?.account) } : nil }
@@ -167,22 +204,67 @@ final class AppModel: ObservableObject {
         await reload()
     }
 
+    /// Opens here a team kept in a drive folder. It runs on its own: the list of teams shows how
+    /// far it is, and the sheet that started it is gone.
+    func openTeamFromDrive(_ team: PendingTeam, folder: DriveFolderRef) {
+        if let o = openingTeams[team.teamId], o.error == nil { return }
+        openingTeams[team.teamId] = OpeningTeam()
+        tab = .teams
+        // A look at another app meanwhile doesn't stop it.
+        let id = team.teamId
+        opening[id] = UIApplication.shared.beginBackgroundTask(withName: "team") { [weak self] in
+            MainActor.assumeIsolated { self?.endOpening(id) }
+        }
+        Task {
+            defer { endOpening(id) }
+            do {
+                _ = try await Core.shared.call("team_join_linked_drive", ["teamId": team.teamId, "drive": folder.json])
+                await reload()
+                openingTeams[team.teamId] = nil
+                teamsVersion += 1
+            } catch {
+                openingTeams[team.teamId]?.error = Drives.errorText(error)
+            }
+        }
+    }
+
+    /// iOS's time in the background for the teams being opened.
+    private var opening: [String: UIBackgroundTaskIdentifier] = [:]
+
+    private func endOpening(_ id: String) {
+        guard let t = opening.removeValue(forKey: id) else { return }
+        UIApplication.shared.endBackgroundTask(t)
+    }
+
     /// Pulls what changed on other devices.
     func syncNow() async {
         if sync?.enabled == true { _ = try? await Core.shared.call("sync_now") }
         await reload()
     }
 
-    private static func grouped(_ hosts: [Host], vault: String, prefix: String?) -> [HostSection] {
-        let tagged = hosts.map { h -> Host in
-            var h = h
-            h.vaultId = vault
-            return h
-        }
-        let groups = Dictionary(grouping: tagged, by: \.group)
-        return groups.keys.sorted { a, b in a.isEmpty != b.isEmpty ? !a.isEmpty : a.localizedStandardCompare(b) == .orderedAscending }.map { g in
-            let title = [prefix, g.isEmpty ? nil : g].compactMap { $0 }.joined(separator: " / ")
-            return HostSection(id: "\(vault)/\(g)", title: title, hosts: groups[g]!.sorted { $0.label.localizedStandardCompare($1.label) == .orderedAscending })
+    /// What a failed call says to the person.
+    nonisolated static func describe(_ error: Error) -> String {
+        if let f = error as? CoreFailure { return TerminalSession.describe(f) }
+        return error.localizedDescription
+    }
+
+    func showVault(_ id: String) {
+        hostsVault = id
+        UserDefaults.standard.set(id, forKey: "hostsVault")
+    }
+
+    /// Shows a team's hosts in this person's own groups (made from the shared ones the first
+    /// time) or the shared ones. Returns why making them failed.
+    func setMineView(_ team: VaultHosts, _ on: Bool) async -> String? {
+        if on { mineViews.insert(team.id) } else { mineViews.remove(team.id) }
+        UserDefaults.standard.set(Array(mineViews), forKey: "mineViews")
+        guard on, team.layout == nil else { return nil }
+        defer { Task { await reload() } }
+        do {
+            try await Groups.saveLayout(team.id, Groups.layoutFrom(team.hosts, team.groups))
+            return nil
+        } catch {
+            return Self.describe(error)
         }
     }
 
@@ -224,6 +306,9 @@ final class AppModel: ObservableObject {
     /// Back in front: sessions whose connection went while the app slept connect again.
     func resumed() {
         endBackground()
+        // A drive's sign-in waiting for the browser: iOS may have taken its listening socket while
+        // the app was away (the person off finding a password), so it listens again.
+        Task { _ = try? await Core.shared.call("drive_sign_in_resume") }
         guard phase == .ready else { return }
         for t in terminals { t.checkConnection() }
     }

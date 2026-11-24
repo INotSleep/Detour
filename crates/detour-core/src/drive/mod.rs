@@ -209,6 +209,8 @@ pub(crate) mod http {
 
     /// A network failure as the UI shows it: unreachable, or another connection problem.
     pub fn net_error(p: Provider, e: ureq::Error) -> Error {
+        // What failed, for the log: "no connection" alone tells nothing of why.
+        crate::logfile::write("warn", &format!("{}: {e}", p.endpoint()));
         match e {
             ureq::Error::Io(_) | ureq::Error::HostNotFound | ureq::Error::ConnectionFailed | ureq::Error::Timeout(_) => Error::Unreachable { endpoint: p.endpoint().into() },
             other => Error::Connect { message: other.to_string() },

@@ -15,10 +15,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -38,15 +40,24 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 
-/** A short note that something was done ("Copied"), at the top of the screen for a moment. */
+/** A short note that something was done ("Copied"), or why it wasn't, at the top of the screen for a moment. */
 object Hud {
     var text by mutableStateOf<String?>(null)
         private set
     var shown by mutableIntStateOf(0)
         private set
+    var failed by mutableStateOf(false)
+        private set
 
     fun show(text: String) {
         this.text = text
+        failed = false
+        shown++
+    }
+
+    fun error(text: String) {
+        this.text = text
+        failed = true
         shown++
     }
 }
@@ -57,9 +68,9 @@ fun HudView() {
     var visible by androidx.compose.runtime.remember { mutableStateOf(false) }
     LaunchedEffect(Hud.shown) {
         if (Hud.shown == 0) return@LaunchedEffect
-        haptic.performHapticFeedback(HapticFeedbackType.Confirm)
+        haptic.performHapticFeedback(if (Hud.failed) HapticFeedbackType.Reject else HapticFeedbackType.Confirm)
         visible = true
-        delay(1400)
+        delay(if (Hud.failed) 3000 else 1400)
         visible = false
     }
     Box(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars).padding(top = 8.dp), contentAlignment = Alignment.TopCenter) {
@@ -68,9 +79,10 @@ fun HudView() {
                 Modifier.shadow(10.dp, CircleShape).clip(CircleShape).background(colors.cell).padding(horizontal = 18.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(Icons.Outlined.Check, null, tint = colors.green, modifier = Modifier.size(18.dp))
+                if (Hud.failed) Icon(Icons.Outlined.ErrorOutline, null, tint = colors.red, modifier = Modifier.size(18.dp))
+                else Icon(Icons.Outlined.Check, null, tint = colors.green, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
-                Text(Hud.text ?: "", color = colors.label, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                Text(Hud.text ?: "", color = colors.label, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, modifier = Modifier.widthIn(max = 300.dp))
             }
         }
     }

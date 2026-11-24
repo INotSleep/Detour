@@ -81,6 +81,18 @@ struct HistoryPanel: View {
             }
             .padding(.vertical, 4)
         }
+        // Reading the server's history shows, over what is already there.
+        .overlay(alignment: .topTrailing) {
+            if history.loading && history.lines != nil {
+                ProgressView()
+                    .controlSize(.small)
+                    .padding(8)
+                    .background(.regularMaterial, in: Circle())
+                    .padding(6)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: history.loading)
         .task { await history.load(session) }
     }
 }
@@ -148,14 +160,23 @@ final class ShellHistory: ObservableObject {
         var ended = false
     }
 
-    private var loading = false
+    /// Reading the server's files now (a connection of its own, which takes a moment): shown.
+    @Published private(set) var loading = false
+    /// When the server's files were last read: not again within half a minute.
+    private var readAt = Date.distantPast
 
     func load(_ session: TerminalSession) async {
         guard !loading else { return }
-        loading = true
-        defer { loading = false }
         let host = session.host
         let typed = TypedHistory.shared.list(host: host.id)
+        if let before = lines, Date().timeIntervalSince(readAt) < 30 {
+            // Read just now: only what was typed since goes on top.
+            var seen = Set<String>()
+            lines = (typed + before).filter { seen.insert($0).inserted }
+            return
+        }
+        loading = true
+        defer { loading = false }
         // What was read before stays up while it is read again.
         if let before = lines {
             var seen = Set<String>()
@@ -176,6 +197,7 @@ final class ShellHistory: ObservableObject {
             var seen = Set(typed)
             lines = typed + Self.parse(String(decoding: buffer.data, as: UTF8.self)).filter { seen.insert($0).inserted }
             error = nil
+            readAt = Date()
         } catch let f as CoreFailure {
             // What was run here still shows when the server's files can't be read.
             if lines?.isEmpty ?? true { error = f.kind == "needSecret" ? String(localized: "The history needs the host's password") : TerminalSession.describe(f) }

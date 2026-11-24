@@ -44,14 +44,7 @@ struct TeamsView: View {
                         }
                     }
                     ForEach(app.folderTeams) { t in
-                        Button { folderTeam = t } label: {
-                            LabeledContent {
-                                Text("Open from a cloud drive")
-                            } label: {
-                                Label(t.name, systemImage: "person.3")
-                            }
-                        }
-                        .foregroundStyle(.primary)
+                        FolderTeamRow(team: t) { folderTeam = t }
                     }
                 }
             }
@@ -78,6 +71,7 @@ struct TeamsView: View {
             await load()
         }
         .task { await load() }
+        .onChange(of: app.teamsVersion) { Task { await load() } }
         .sheet(isPresented: $joining, onDismiss: { Task { await load() } }) { JoinTeamView() }
         .sheet(item: $folderTeam, onDismiss: { Task { await load() } }) { t in TeamFromDriveView(team: t) }
     }

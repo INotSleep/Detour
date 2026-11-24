@@ -386,7 +386,8 @@ struct DriveBrowser: View {
 }
 
 /// A team joined on another device that keeps it in a folder its drive's own app syncs: opened
-/// here through the drive.
+/// here through the drive. Opening goes on by itself: the sheet goes, and the teams show how far
+/// it is.
 struct TeamFromDriveView: View {
     let team: PendingTeam
     @EnvironmentObject var app: AppModel
@@ -394,40 +395,70 @@ struct TeamFromDriveView: View {
     @State private var provider: DriveProvider = .onedrive
     @State private var folder: DriveFolderRef?
     @State private var account: String?
-    @State private var busy = false
-    @State private var error: String?
 
     var body: some View {
         NavigationStack {
             Form {
                 DriveSections(provider: $provider, folder: $folder, account: $account)
-                if let error {
-                    Text(error).foregroundStyle(.red).font(.footnote)
-                }
             }
             .navigationTitle(team.name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    if busy { ProgressView() } else { Button("Open") { Task { await open() } }.disabled(folder == nil || account == nil) }
+                    Button("Open") { open() }.disabled(folder == nil || account == nil)
                 }
             }
         }
     }
 
-    private func open() async {
+    private func open() {
         guard var folder else { return }
         folder.account = account
-        busy = true
-        error = nil
-        defer { busy = false }
-        do {
-            _ = try await Core.shared.call("team_join_linked_drive", ["teamId": team.teamId, "drive": folder.json])
-            await app.reload()
-            dismiss()
-        } catch {
-            self.error = Drives.errorText(error)
+        app.openTeamFromDrive(team, folder: folder)
+        dismiss()
+    }
+}
+
+/// A team on another device kept in a folder its drive's own app syncs: a row that opens it here.
+/// While it is being opened, it shows how far.
+struct FolderTeamRow: View {
+    let team: PendingTeam
+    let open: () -> Void
+    @EnvironmentObject var app: AppModel
+
+    var body: some View {
+        let opening = app.openingTeams[team.teamId]
+        if let opening, opening.error == nil {
+            VStack(alignment: .leading, spacing: 8) {
+                LabeledContent {
+                    if opening.total > 0 {
+                        Text("\(opening.done) / \(opening.total)").monospacedDigit()
+                    } else {
+                        ProgressView()
+                    }
+                } label: {
+                    Label(team.name, systemImage: "person.3")
+                }
+                if opening.total > 0 {
+                    ProgressView(value: Double(opening.done), total: Double(opening.total))
+                }
+            }
+            .animation(.easeOut(duration: 0.2), value: opening)
+        } else {
+            Button(action: open) {
+                VStack(alignment: .leading, spacing: 2) {
+                    LabeledContent {
+                        Text("Open from a cloud drive")
+                    } label: {
+                        Label(team.name, systemImage: "person.3")
+                    }
+                    if let e = opening?.error {
+                        Text(e).font(.footnote).foregroundStyle(.red)
+                    }
+                }
+            }
+            .foregroundStyle(.primary)
         }
     }
 }

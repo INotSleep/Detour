@@ -9,15 +9,22 @@ struct Host: Decodable, Identifiable, Hashable {
     let port: Int
     let user: String
     var own: OwnLogin?
+    /// Its place in its group; hosts without one come after, as they are.
+    var order: Double?
     /// Set by the app: the vault it is in.
     var vaultId: String = "personal"
+    /// Set by the app, in a team: this person's access to it (`none`, `view`, `secret`, `edit`).
+    var access: String?
+
+    /// May this person change it: move it, edit it, delete it.
+    var editable: Bool { access == nil || access == "edit" }
 
     struct OwnLogin: Decodable, Hashable {
         let user: String
         let active: Bool?
     }
 
-    enum CodingKeys: String, CodingKey { case id, group, label, address, port, user, own }
+    enum CodingKeys: String, CodingKey { case id, group, label, address, port, user, own, order }
 
     /// The login used to connect: this person's own one on a team host, if set.
     var login: String { own.flatMap { $0.active == false ? nil : $0.user } ?? user }
@@ -25,6 +32,43 @@ struct Host: Decodable, Identifiable, Hashable {
 
 struct VaultView: Decodable {
     let hosts: [Host]
+    var groups: [HostGroup]?
+}
+
+/// A vault's record of a group: its place among the others (its hosts name it).
+struct HostGroup: Decodable, Hashable {
+    let id: String
+    let name: String
+    var order: Double?
+}
+
+/// A group of this person's own grouping of a team's hosts ("My groups"): host ids in order.
+struct MyGroup: Codable, Hashable {
+    let id: String
+    var name: String
+    var hosts: [String]
+}
+
+/// This person's own grouping of a team's hosts.
+struct Layout: Codable {
+    var groups: [MyGroup]
+}
+
+/// A vault's hosts as the hosts screen shows them: the personal vault or a team.
+struct VaultHosts: Identifiable {
+    let id: String
+    /// The team's name; nil for the personal vault.
+    let name: String?
+    /// In a team: `owner`, `admin` or `member`.
+    let role: String?
+    var hosts: [Host]
+    let groups: [HostGroup]
+    /// This person's own grouping of a team's hosts, once made.
+    var layout: [MyGroup]?
+
+    var team: Bool { name != nil }
+    /// The shared groups and their order are for those who manage the team.
+    var canManage: Bool { !team || role == "owner" || role == "admin" }
 }
 
 struct TeamEntry: Decodable {
@@ -42,6 +86,15 @@ struct TeamEntry: Decodable {
         let members: [Member]
         let data: VaultView
         let remote: Remote?
+        let layout: Layout?
+        /// Who has which access to the records this person can see.
+        let access: [Access]?
+    }
+
+    struct Access: Decodable {
+        let record: String
+        let member: String
+        let level: String
     }
 
     struct Member: Decodable {

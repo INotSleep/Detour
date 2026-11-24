@@ -146,6 +146,7 @@ fn git(message: &str) -> Error {
 }
 
 fn net_error(e: ureq::Error) -> Error {
+    crate::logfile::write("warn", &format!("github.com: {e}"));
     match e {
         ureq::Error::Io(_) | ureq::Error::HostNotFound | ureq::Error::ConnectionFailed | ureq::Error::Timeout(_) => Error::Unreachable { endpoint: "github.com".into() },
         other => Error::Connect { message: other.to_string() },

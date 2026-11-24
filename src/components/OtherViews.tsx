@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Code, Download, Ellipsis, Lock, Pencil, Play, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Code, Download, Ellipsis, Heart, Lock, Pencil, Play, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { languages, locale, useT } from "../i18n";
 import { api, errorText, isCoreError } from "../lib/api";
 import { uid, useStore } from "../lib/store";
@@ -12,6 +12,9 @@ import { SyncSettings } from "./SyncSettings";
 import { useEditors } from "./Editors";
 import { ThemeSetting } from "./Themes";
 import { isNoReleases } from "../lib/updates";
+
+/** Where people can support the project. */
+const KOFI = "https://ko-fi.com/inotsleep";
 
 /* ---------- snippets ---------- */
 
@@ -217,6 +220,10 @@ export function SettingsView() {
         <div className="setting">
           <span>{t.version}</span>
           <span className="muted mono">{coreInfo ? `${coreInfo.coreVersion} · ${coreInfo.os}` : "0.5.0"}</span>
+        </div>
+        <div className="setting">
+          <span>{t.support}</span>
+          <Button size="sm" icon={Heart} onClick={() => void api.openInBrowser(KOFI).catch((e) => toast({ text: errorText(e), tone: "error" }))}>Ko-fi</Button>
         </div>
         <div className="setting">
           <span>{t.license}</span>

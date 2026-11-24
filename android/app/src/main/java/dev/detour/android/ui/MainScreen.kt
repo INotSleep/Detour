@@ -107,7 +107,8 @@ val MainTab.icon: ImageVector
  */
 @Composable
 fun MainScreen() {
-    val opened = remember { mutableStateMapOf(MainTab.Hosts to true) }
+    // The tab chosen is made at once (the app can come back on any tab, its state kept).
+    val opened = remember { mutableStateMapOf(MainTab.Hosts to true, AppModel.tab to true) }
     var leaving by remember { mutableStateOf<MainTab?>(null) }
     var shown by remember { mutableStateOf(AppModel.tab) }
     val slide = remember { Animatable(0f) }

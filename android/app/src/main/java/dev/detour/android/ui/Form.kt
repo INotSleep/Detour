@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -94,11 +95,29 @@ fun ToggleCell(title: String, on: Boolean, last: Boolean = false, onChange: (Boo
         haptic.performHapticFeedback(if (v) androidx.compose.ui.hapticfeedback.HapticFeedbackType.ToggleOn else androidx.compose.ui.hapticfeedback.HapticFeedbackType.ToggleOff)
         onChange(v)
     }
-    Cell(last = last, onClick = { change(!on) }) {
+    Cell(last = last, onClick = { change(!on) }, padding = 6.dp) {
         Text(title, color = colors.label, fontSize = 17.sp, modifier = Modifier.weight(1f))
-        Switch(
-            on, change,
-            colors = SwitchDefaults.colors(checkedTrackColor = colors.green, checkedThumbColor = Color.White, uncheckedThumbColor = Color.White, uncheckedTrackColor = colors.fill, uncheckedBorderColor = Color.Transparent),
+        IosSwitch(on, change)
+    }
+}
+
+/**
+ * iOS's switch, 51 by 31: Material's is bigger and wants a 48dp touch area, which made a row with
+ * one taller than the rest. Its row takes the taps too.
+ */
+@Composable
+fun IosSwitch(on: Boolean, onChange: (Boolean) -> Unit, modifier: Modifier = Modifier) {
+    val pos by androidx.compose.animation.core.animateFloatAsState(if (on) 1f else 0f, androidx.compose.animation.core.spring(dampingRatio = 0.8f, stiffness = 700f), label = "switch")
+    val track = androidx.compose.ui.graphics.lerp(if (colors.dark) Color(0xFF39393D) else Color(0xFFE9E9EA), colors.green, pos)
+    Box(
+        modifier.width(51.dp).height(31.dp).clip(RoundedCornerShape(16.dp)).background(track)
+            .clickable(remember { MutableInteractionSource() }, null) { onChange(!on) }
+            .padding(2.dp),
+    ) {
+        Box(
+            Modifier.offset(x = 20.dp * pos).size(27.dp)
+                .shadow(2.dp, androidx.compose.foundation.shape.CircleShape)
+                .background(Color.White, androidx.compose.foundation.shape.CircleShape)
         )
     }
 }

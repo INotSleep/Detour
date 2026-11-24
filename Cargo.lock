@@ -1654,6 +1654,8 @@ dependencies = [
  "detour-core",
  "detour-daemon",
  "detour-ipc",
+ "jni 0.22.4",
+ "rustls-platform-verifier",
  "serde_json",
  "thiserror 2.0.21",
  "tokio",

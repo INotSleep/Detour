@@ -30,6 +30,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import kotlinx.coroutines.launch
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.runtime.mutableStateOf
@@ -117,9 +118,9 @@ fun SheetBar(title: String, left: (@Composable () -> Unit)? = null, right: (@Com
     ) { (l, t, r), c ->
         val w = c.maxWidth
         val loose = c.copy(minWidth = 0, minHeight = 0)
-        // The title as wide as it wants, up to 60% of the bar.
-        val titleWant = t.maxIntrinsicWidth(c.maxHeight).coerceAtMost(w * 6 / 10)
-        val side = ((w - titleWant) / 2 - gap).coerceAtLeast(0)
+        // The buttons whole first (up to a third of the bar each), as iOS does; the title gets
+        // what is left between them and is cut short there.
+        val side = w * 35 / 100
         val lp = l.measure(loose.copy(maxWidth = side))
         val rp = r.measure(loose.copy(maxWidth = side))
         val titleMax = (w - 2 * maxOf(lp.width, rp.width) - 2 * gap).coerceAtLeast(0)
@@ -142,6 +143,8 @@ fun BarButton(text: String, bold: Boolean = false, enabled: Boolean = true, onCl
         color = if (!enabled) colors.tertiary else colors.accent.copy(alpha = if (pressed) 0.4f else 1f),
         fontSize = 17.sp,
         fontWeight = if (bold) FontWeight.SemiBold else FontWeight.Normal,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
         modifier = Modifier.clickable(interaction, null, enabled = enabled, onClick = onClick).padding(vertical = 8.dp),
     )
 }
@@ -179,20 +182,42 @@ fun Cell(
     onClick: (() -> Unit)? = null,
     onLongClick: (() -> Unit)? = null,
     inset: Int = 16,
+    /** Above and below the content: less around a switch, so its row is as tall as the others. */
+    padding: androidx.compose.ui.unit.Dp = 10.dp,
     content: @Composable RowScope.() -> Unit,
 ) {
     val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
-    Column(Modifier.background(if (pressed) colors.fill else Color.Transparent)) {
+    val highlight = rememberTapHighlight(interaction)
+    Column(Modifier.background(colors.fill.copy(alpha = colors.fill.alpha * highlight.value))) {
         Row(
             Modifier.fillMaxWidth().heightIn(min = 44.dp)
                 .then(if (onClick != null || onLongClick != null) Modifier.combinedClick(interaction, onClick, onLongClick) else Modifier)
-                .padding(horizontal = 16.dp, vertical = 10.dp),
+                .padding(horizontal = 16.dp, vertical = padding),
             verticalAlignment = Alignment.CenterVertically,
             content = content,
         )
         if (!last) HorizontalDivider(Modifier.padding(start = inset.dp), thickness = 0.5.dp, color = colors.separator)
     }
+}
+
+/**
+ * A row's highlight as iOS draws it: on at once with the finger (even a quick tap, which ends
+ * before a pressed state is ever drawn), then fading out.
+ */
+@Composable
+fun rememberTapHighlight(interaction: MutableInteractionSource): androidx.compose.animation.core.Animatable<Float, androidx.compose.animation.core.AnimationVector1D> {
+    val level = remember { androidx.compose.animation.core.Animatable(0f) }
+    androidx.compose.runtime.LaunchedEffect(interaction) {
+        interaction.interactions.collect { i ->
+            when (i) {
+                is androidx.compose.foundation.interaction.PressInteraction.Press -> level.snapTo(1f)
+                is androidx.compose.foundation.interaction.PressInteraction.Release,
+                is androidx.compose.foundation.interaction.PressInteraction.Cancel ->
+                    launch { level.animateTo(0f, androidx.compose.animation.core.tween(300)) }
+            }
+        }
+    }
+    return level
 }
 
 /** A cell's leading icon. */

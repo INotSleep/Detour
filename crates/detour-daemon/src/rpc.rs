@@ -68,7 +68,7 @@ fn git_remote(url: String, auth: Auth, token: Option<String>, github: Option<boo
 pub(crate) const READ_ONLY: &[&str] = &[
     "hello", "core_info", "vault_status", "vault_get", "ssh_import_preview", "sync_status", "teams_pending", "sync_recovery_key", "sync_add_device",
     "host_password", "key_export", "my_id", "id_inspect", "recovery_key_new", "teams_list", "team_inspect", "team_inspect_git", "team_log", "team_history", "team_deleted", "team_rollback_plan",
-    "github_user", "github_start", "github_repo_access", "drive_accounts", "drive_sign_in", "drive_browse", "drive_link", "team_inspect_drive", "session_input", "session_resize", "session_check", "session_attach", "session_detach", "sessions_list", "session_runs",
+    "github_user", "github_start", "github_repo_access", "drive_accounts", "drive_sign_in", "drive_sign_in_resume", "drive_browse", "drive_link", "team_inspect_drive", "session_input", "session_resize", "session_check", "session_attach", "session_detach", "sessions_list", "session_runs",
     "files_open", "files_list", "files_resolve", "files_cancel", "files_close", "tunnels_status", "tunnel_start", "tunnel_stop", "proxy_check", "proxy_parse", "proxy_export", "settings_get",
     "settings_set", "activity", "log_write", "log_tail", "quit", "trust_request", "trust_answer", "trust_with_password", "hosts_export",
     "hosts_file_counts", "hosts_file_export", "hosts_file_open",
@@ -410,6 +410,10 @@ pub(crate) async fn dispatch(core: &Arc<Core>, ctx: &Ctx, method: &str, p: Value
         "drive_sign_in" => {
             let a = args!(method, p, { provider: Provider, back: Option<String> });
             ok(drive::auth::start(a.provider, a.back).await)
+        }
+        "drive_sign_in_resume" => {
+            drive::auth::relisten();
+            Ok(Value::Null)
         }
         "drive_sign_in_poll" => {
             let a = args!(method, p, { provider: Provider });

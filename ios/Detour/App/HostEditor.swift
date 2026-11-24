@@ -1,10 +1,12 @@
 import SwiftUI
 
-/// Adds a host to the personal vault, or changes one. Fields the phone doesn't show (proxy,
+/// Adds a host to a vault (the personal one or a team's), or changes one. Fields the phone doesn't show (proxy,
 /// tags, ssh-agent forwarding...) are kept as they are.
 struct HostEditor: View {
     /// The host to change; nil adds one.
     let hostId: String?
+    /// The vault it is in, or goes to.
+    var vault: String = VaultData.personal
     let saved: () async -> Void
     @Environment(\.dismiss) private var dismiss
 
@@ -105,8 +107,9 @@ struct HostEditor: View {
 
     private func load() async {
         guard !loaded else { return }
-        let v = (try? await PersonalVault.get()) ?? [:]
-        keys = (try? await Core.shared.call("vault_get", as: VaultKeys.self).keys) ?? []
+        let v = (try? await VaultData.get(vault)) ?? [:]
+        // The vault's own keys: a team host logs in with the team's.
+        if let data = try? JSONSerialization.data(withJSONObject: v["keys"] ?? []), let k = try? JSONDecoder().decode([SshKey].self, from: data) { keys = k }
         let hosts = v["hosts"] as? [PersonalVault.JSON] ?? []
         groups = Array(Set(hosts.compactMap { $0["group"] as? String })).sorted()
         if let id = hostId, let h = hosts.first(where: { $0["id"] as? String == id }) {
@@ -147,7 +150,7 @@ struct HostEditor: View {
             if !password.isEmpty { h["newPassword"] = password }
         }
         do {
-            try await PersonalVault.save(host: h)
+            try await VaultData.save(host: h, in: vault)
             await saved()
             dismiss()
         } catch let f as CoreFailure {

@@ -110,6 +110,7 @@ const en = {
   lock: "Lock",
   about: "About",
   version: "Version",
+  support: "Support the project",
   license: "License",
   log: "Log",
   openLog: "Open",

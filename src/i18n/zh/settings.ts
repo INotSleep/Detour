@@ -111,6 +111,7 @@ const zh: typeof en = {
   lock: "锁定",
   about: "关于",
   version: "版本",
+  support: "支持项目",
   license: "许可证",
   log: "日志",
   openLog: "打开",

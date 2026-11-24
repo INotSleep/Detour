@@ -22,6 +22,7 @@ import androidx.compose.ui.unit.sp
 import dev.detour.android.AppModel
 import dev.detour.android.core.CoreFailure
 import dev.detour.android.core.PersonalVault
+import dev.detour.android.core.VaultData
 import dev.detour.android.core.SshKey
 import dev.detour.android.core.bool
 import dev.detour.android.core.int
@@ -32,11 +33,11 @@ import dev.detour.android.core.t
 import kotlinx.coroutines.launch
 
 /**
- * Adds a host to the personal vault, or changes one. Fields the phone doesn't show (proxy, tags,
+ * Adds a host to a vault (the personal one or a team's), or changes one. Fields the phone doesn't show (proxy, tags,
  * agent forwarding...) are kept as they are.
  */
 @Composable
-fun HostEditor(hostId: String?, close: () -> Unit) {
+fun HostEditor(hostId: String?, vault: String = VaultData.PERSONAL, close: () -> Unit) {
     var original by remember { mutableStateOf<Map<String, Any?>?>(null) }
     var label by remember { mutableStateOf("") }
     var address by remember { mutableStateOf("") }
@@ -58,7 +59,7 @@ fun HostEditor(hostId: String?, close: () -> Unit) {
     val ready = loaded && address.isNotBlank() && user.isNotBlank() && portNumber != null && (auth != "key" || keyId.isNotEmpty())
 
     LaunchedEffect(Unit) {
-        val v = runCatching { PersonalVault.get() }.getOrDefault(emptyMap())
+        val v = runCatching { VaultData.get(vault) }.getOrDefault(emptyMap())
         keys = v["keys"].list().map { SshKey.from(it.obj()) }
         val h = hostId?.let { id -> v["hosts"].list().map { it.obj() }.firstOrNull { it.str("id") == id } }
         if (h != null) {
@@ -100,7 +101,7 @@ fun HostEditor(hostId: String?, close: () -> Unit) {
         }
         scope.launch {
             try {
-                PersonalVault.saveHost(h)
+                VaultData.save(vault, "hosts", h)
                 AppModel.reload()
                 close()
             } catch (f: CoreFailure) {

@@ -187,6 +187,18 @@ fn folders_of(items: Vec<DriveItem>) -> Vec<DriveFolder> {
     out
 }
 
+/// What Microsoft Graph said about a refusal: its error's code and message.
+fn graph_error(body: &[u8]) -> String {
+    let v: serde_json::Value = serde_json::from_slice(body).unwrap_or_default();
+    let e = &v["error"];
+    match (e["code"].as_str(), e["message"].as_str()) {
+        (Some(c), Some(m)) => format!("{c}: {m}"),
+        (Some(c), None) => c.to_string(),
+        (None, Some(m)) => m.to_string(),
+        _ => "the drive refused".into(),
+    }
+}
+
 /// The folders in a folder; at the top, this person's drive and what is shared with them.
 pub fn browse(token: &str, folder: Option<&DriveRemote>) -> Result<DriveListing> {
     match folder {
@@ -196,14 +208,35 @@ pub fn browse(token: &str, folder: Option<&DriveRemote>) -> Result<DriveListing>
             Ok(DriveListing { folder: f.clone(), folders: folders_of(items).into_iter().map(|mut x| { x.drive = x.drive.or_else(|| Some(drive.clone())); x }).collect() })
         }
         None => {
-            let root: DriveItem = get(&format!("{}/me/drive/root?$select=id,name,parentReference", api()), token)?.expect(P)?;
-            let mut folders = folders_of(pages(format!("{}/me/drive/root/children?$select=id,name,folder,parentReference&$top=999", api()), token)?);
+            // No folder picked yet. The account's drive, by its id: `/me/drive/root` answers
+            // "itemNotFound" for some accounts whose drive is there all the same (listed under
+            // `/me/drives`). A refusal here is about the account, not a folder: Microsoft's own
+            // words go to the person.
+            let first = get(&format!("{}/me/drive?$select=id", api()), token)?;
+            let mut drive = if first.ok() { first.json::<serde_json::Value>(P).ok().and_then(|v| v["id"].as_str().map(String::from)) } else { None };
+            if drive.is_none() {
+                let all = get(&format!("{}/me/drives?$select=id", api()), token)?;
+                if all.ok() {
+                    drive = all.json::<serde_json::Value>(P).ok().and_then(|v| v["value"][0]["id"].as_str().map(String::from));
+                }
+            }
+            let Some(drive) = drive else {
+                return Err(Error::Drive { provider: P.id().into(), message: graph_error(&first.body) });
+            };
+            let r = get(&format!("{}/drives/{}/root?$select=id,name,parentReference", api(), enc(&drive)), token)?;
+            if r.status == 403 || r.status == 404 {
+                return Err(Error::Drive { provider: P.id().into(), message: graph_error(&r.body) });
+            }
+            let root: DriveItem = r.expect(P)?;
+            let mut folders: Vec<DriveFolder> = folders_of(pages(format!("{}/drives/{}/root/children?$select=id,name,folder,parentReference&$top=999", api(), enc(&drive)), token)?)
+                .into_iter()
+                .map(|mut f| { f.drive = f.drive.or_else(|| Some(drive.clone())); f })
+                .collect();
             // Shared folders; not every account offers this list, which is fine.
             if let Ok(shared) = pages(format!("{}/me/drive/sharedWithMe", api()), token) {
                 folders.extend(folders_of(shared).into_iter().filter(|f| f.shared));
             }
-            let drive = root.drive_id();
-            Ok(DriveListing { folder: DriveRemote { provider: P, id: root.id, drive, label: String::new(), link: None, account: None }, folders })
+            Ok(DriveListing { folder: DriveRemote { provider: P, id: root.id, drive: Some(drive), label: String::new(), link: None, account: None }, folders })
         }
     }
 }

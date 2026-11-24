@@ -111,6 +111,7 @@ const es: typeof en = {
   lock: "Bloquear",
   about: "Acerca de",
   version: "Versión",
+  support: "Apoyar el proyecto",
   license: "Licencia",
   log: "Registro",
   openLog: "Abrir",
