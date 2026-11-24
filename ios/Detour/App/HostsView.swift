@@ -41,16 +41,41 @@ struct HostsView: View {
         }
     }
 
-    /// A row of a group: a host, or what an empty group shows.
+    /// A row of the hosts list: a group's header, one of its hosts, or what an empty group shows.
+    /// The groups are rows of one list (not sections), so that a host dragged moves into another
+    /// group as well (SwiftUI moves rows within one ForEach only).
     private enum Row: Identifiable {
-        case host(Host)
-        case empty(String)
+        case header(ListedGroup, title: String)
+        case host(Host, ListedGroup, first: Bool, last: Bool)
+        case empty(ListedGroup)
+
         var id: String {
             switch self {
-            case .host(let h): h.id
-            case .empty(let key): "empty-\(key)"
+            case .header(let g, _): "head-\(g.key)"
+            case .host(let h, _, _, _): h.id
+            case .empty(let g): "empty-\(g.key)"
             }
         }
+
+        var group: ListedGroup {
+            switch self {
+            case .header(let g, _), .host(_, let g, _, _), .empty(let g): g
+            }
+        }
+    }
+
+    private static func rows(_ groups: [ListedGroup], named: Bool) -> [Row] {
+        var out: [Row] = []
+        for g in groups {
+            if let title = g.name.isEmpty ? (named ? String(localized: "No group") : nil) : g.name {
+                out.append(.header(g, title: title))
+            }
+            if g.hosts.isEmpty { out.append(.empty(g)) }
+            for (i, h) in g.hosts.enumerated() {
+                out.append(.host(h, g, first: i == 0, last: i == g.hosts.count - 1))
+            }
+        }
+        return out
     }
 
     private static let dragPrefix = "detour-host:"
@@ -93,18 +118,11 @@ struct HostsView: View {
                         }
                     }
                 }
-                ForEach(groups) { g in
-                    let ids = g.hosts.map(\.id)
+                let rows = Self.rows(groups, named: named)
+                if !rows.isEmpty {
                     Section {
-                        ForEach(g.hosts.isEmpty ? [Row.empty(g.key)] : g.hosts.map(Row.host)) { row in
-                            switch row {
-                            case .host(let h): hostRow(h, in: g, groups: groups)
-                            case .empty: Text("Drag hosts here").foregroundStyle(.secondary)
-                            }
-                        }
-                        .onInsert(of: [.plainText]) { i, providers in drop(providers, into: g, ids: ids, at: i, groups: groups) }
-                    } header: {
-                        header(g, named: named)
+                        ForEach(rows) { row in rowView(row, groups: groups) }
+                            .onMove { from, to in moveRows(rows, from: from, to: to, groups: groups) }
                     }
                 }
             }
@@ -197,26 +215,64 @@ struct HostsView: View {
         }
     }
 
+    /// A row of the list, drawn as the sections were: headers on the background, a group's hosts
+    /// on a card of their own.
+    @ViewBuilder private func rowView(_ row: Row, groups: [ListedGroup]) -> some View {
+        switch row {
+        case .header(let g, let title):
+            header(g, title: title)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .padding(.top, 18)
+                .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 6, trailing: 8))
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .moveDisabled(true)
+        case .host(let h, let g, let first, let last):
+            hostRow(h, in: g, groups: groups)
+                .listRowBackground(Self.card(first: first, last: last))
+                .listRowSeparator(.hidden, edges: Self.edges(first: first, last: last))
+                .moveDisabled(!canDrag(h))
+        case .empty:
+            Text("Drag hosts here")
+                .foregroundStyle(.secondary)
+                .listRowBackground(Self.card(first: true, last: true))
+                .listRowSeparator(.hidden)
+                .moveDisabled(true)
+        }
+    }
+
+    /// A group's card behind its row: rounded at the group's first and last host.
+    private static func card(first: Bool, last: Bool) -> some View {
+        UnevenRoundedRectangle(topLeadingRadius: first ? 10 : 0, bottomLeadingRadius: last ? 10 : 0, bottomTrailingRadius: last ? 10 : 0, topTrailingRadius: first ? 10 : 0)
+            .fill(Color(.secondarySystemGroupedBackground))
+    }
+
+    /// No line above a group's first host or under its last.
+    private static func edges(first: Bool, last: Bool) -> VerticalEdge.Set {
+        var e: VerticalEdge.Set = []
+        if first { e.insert(.top) }
+        if last { e.insert(.bottom) }
+        return e
+    }
+
     /// A group's header: its menu behind "…" (and a hold), for a named group.
-    @ViewBuilder private func header(_ g: ListedGroup, named: Bool) -> some View {
-        let title = g.name.isEmpty ? (named ? String(localized: "No group") : nil) : g.name
-        if let title {
-            if g.name.isEmpty {
-                Text(title)
-            } else {
-                HStack {
-                    Text(title)
-                    Spacer()
-                    Menu { groupMenu(g) } label: {
-                        Image(systemName: "ellipsis")
-                            .font(.body)
-                            .frame(width: 32, height: 22)
-                            .contentShape(Rectangle())
-                    }
-                    .accessibilityLabel("Settings")
+    @ViewBuilder private func header(_ g: ListedGroup, title: String) -> some View {
+        if g.name.isEmpty {
+            Text(title).textCase(.uppercase)
+        } else {
+            HStack {
+                Text(title).textCase(.uppercase)
+                Spacer()
+                Menu { groupMenu(g) } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.body)
+                        .frame(width: 32, height: 22)
+                        .contentShape(Rectangle())
                 }
-                .contextMenu { groupMenu(g) }
+                .accessibilityLabel("Settings")
             }
+            .contextMenu { groupMenu(g) }
         }
     }
 
@@ -276,22 +332,26 @@ struct HostsView: View {
         }
     }
 
-    /// A host dropped into a group at row `i` (of `ids`, the group's hosts as shown).
-    private func drop(_ providers: [NSItemProvider], into g: ListedGroup, ids: [String], at i: Int, groups: [ListedGroup]) {
-        guard let p = providers.first, p.canLoadObject(ofClass: NSString.self) else { return }
-        let key = g.key, name = g.name, prefix = Self.dragPrefix
-        _ = p.loadObject(ofClass: NSString.self) { obj, _ in
-            guard let s = obj as? String, s.hasPrefix(prefix) else { return }
-            let id = String(s.dropFirst(prefix.count))
-            Task { @MainActor in
-                overVault = nil
-                // Dropped where it was: no move.
-                if let at = ids.firstIndex(of: id), i == at || i == at + 1 { return }
-                var before = i < ids.count ? ids[i] : nil
-                if before == id { before = i + 1 < ids.count ? ids[i + 1] : nil }
-                move(id, to: key, name: name, before: before, groups: groups)
-            }
+    /// A host dragged to another place of the list: into the group of the row above where it
+    /// lands (a header, a host, an empty group's row), before the host under it in that group.
+    private func moveRows(_ rows: [Row], from: IndexSet, to: Int, groups: [ListedGroup]) {
+        guard let i = from.first, case .host(let h, let fromGroup, _, _) = rows[i] else { return }
+        var rest = rows
+        rest.remove(at: i)
+        let at = to > i ? to - 1 : to
+        guard let g = (at > 0 ? rest[at - 1] : rest.first)?.group else { return }
+        var before: String?
+        if at == 0 {
+            before = g.hosts.first { $0.id != h.id }?.id
+        } else if at < rest.count, case .host(let next, let ng, _, _) = rest[at], ng.key == g.key {
+            before = next.id
         }
+        // Back where it was: no move.
+        if g.key == fromGroup.key {
+            let ids = fromGroup.hosts.map(\.id)
+            if let k = ids.firstIndex(of: h.id), (k + 1 < ids.count ? ids[k + 1] : nil) == before { return }
+        }
+        move(h.id, to: g.key, name: g.name, before: before, groups: groups)
     }
 
     /// Puts a host of the vault shown into a group, before `before` (or last): shown at once, saved behind.
