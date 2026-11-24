@@ -345,3 +345,6 @@
 "Not set" = "未设置";
 "Saved" = "已保存";
 "Through %@" = "经由 %@";
+
+/* Android */
+"Folder not found" = "找不到文件夹";

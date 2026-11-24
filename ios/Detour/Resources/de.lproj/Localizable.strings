@@ -345,3 +345,6 @@
 "Not set" = "Nicht gesetzt";
 "Saved" = "Gespeichert";
 "Through %@" = "Über %@";
+
+/* Android */
+"Folder not found" = "Ordner nicht gefunden";

@@ -223,11 +223,15 @@ struct HostsView: View {
     /// A group's settings (this person's login and proxy for its hosts), and for those who may
     /// arrange it, renaming and deleting it.
     @ViewBuilder private func groupMenu(_ g: ListedGroup) -> some View {
-        Button { settingsOf = g } label: { Label("Settings", systemImage: "slider.horizontal.3") }
-        if canArrange {
-            Button { newName = g.name; naming = Naming(from: g) } label: { Label("Rename", systemImage: "pencil") }
-            Button(role: .destructive) { Task { await deleteGroup(g) } } label: { Label("Delete", systemImage: "trash") }
+        // In a section's header, whose capitals the menu would take too.
+        Group {
+            Button { settingsOf = g } label: { Label("Settings", systemImage: "slider.horizontal.3") }
+            if canArrange {
+                Button { newName = g.name; naming = Naming(from: g) } label: { Label("Rename", systemImage: "pencil") }
+                Button(role: .destructive) { Task { await deleteGroup(g) } } label: { Label("Delete", systemImage: "trash") }
+            }
         }
+        .textCase(nil)
     }
 
     @ViewBuilder private func hostRow(_ host: Host, in g: ListedGroup, groups: [ListedGroup]) -> some View {

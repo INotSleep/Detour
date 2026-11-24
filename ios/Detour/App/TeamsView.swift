@@ -39,7 +39,7 @@ struct TeamsView: View {
                         } else {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(t.path).lineLimit(1).truncationMode(.middle)
-                                if let e = t.error { Text(e).font(.footnote).foregroundStyle(.red) }
+                                if let e = t.error { Text(Self.describe(e)).font(.footnote).foregroundStyle(.red) }
                             }
                         }
                     }
@@ -77,6 +77,13 @@ struct TeamsView: View {
         .onChange(of: app.tab) { if app.tab == .teams { Task { await load() } } }
         .sheet(isPresented: $joining, onDismiss: { Task { await load() } }) { JoinTeamView() }
         .sheet(item: $folderTeam, onDismiss: { Task { await load() } }) { t in TeamFromDriveView(team: t) }
+    }
+
+    /// Why a team could not be opened, as the core says it (JSON of its error).
+    static func describe(_ error: String) -> String {
+        guard let data = error.data(using: .utf8), let e = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return error }
+        if e["kind"] as? String == "unavailable" { return String(localized: "Folder not found") }
+        return e["message"] as? String ?? e["kind"] as? String ?? error
     }
 
     private func load() async {

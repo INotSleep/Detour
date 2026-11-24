@@ -229,9 +229,11 @@ fun HostsScreen() {
                 }
                 SearchField(query) { query = it }
                 if (vaults.size > 1 && vault != null) VaultChips(vaults, vault, drag)
-                AnimatedVisibility(vault?.team == true, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
+                // Switching vaults changes what is below at once, with it: animated, the groups of
+                // one went before this had made room for the other's.
+                if (vault?.team == true) {
                     Box(Modifier.padding(horizontal = 16.dp).padding(top = 8.dp)) {
-                        Segmented(listOf(false to t("Shared groups"), true to t("My groups")), mine) { on -> vault?.let { AppModel.setMineView(it, on) } }
+                        Segmented(listOf(false to t("Shared groups"), true to t("My groups")), mine) { on -> AppModel.setMineView(vault, on) }
                     }
                 }
             }
@@ -376,8 +378,9 @@ private fun LazyListScope.groupSection(g: ListedGroup, drag: HostDrag, title: St
         var top by remember { mutableStateOf(0f) }
         var open by remember { mutableStateOf(false) }
         DisposableEffect(g.key) { onDispose { drag.sectionGone(g.key) } }
-        // A group whose last host was moved out goes at once: fading, it would show that host again.
-        Column(Modifier.animateItem(fadeOutSpec = null).padding(horizontal = 16.dp).padding(top = if (title != null) 18.dp else 22.dp).onGloballyPositioned { top = it.positionInRoot().y }) {
+        // Groups come and go at once (another vault, a host moved out of its last place: fading, it
+        // would show that host again); the rest move to their places.
+        Column(Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null).padding(horizontal = 16.dp).padding(top = if (title != null) 18.dp else 22.dp).onGloballyPositioned { top = it.positionInRoot().y }) {
             if (title != null) {
                 val named = settings != null
                 Box {

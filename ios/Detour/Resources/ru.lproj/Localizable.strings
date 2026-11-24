@@ -345,3 +345,6 @@
 "Not set" = "Не задан";
 "Saved" = "Сохранено";
 "Through %@" = "Через %@";
+
+/* Android */
+"Folder not found" = "Папка не найдена";

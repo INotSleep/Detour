@@ -203,7 +203,8 @@ impl Store {
         };
         self.state = Some(Unlocked { identity, vault });
         let migrated = migrate_proxies(self.vault_mut()?);
-        if self.ensure_member()? || migrated {
+        let moved = rebase_copies(&self.dir.clone(), self.vault_mut()?);
+        if self.ensure_member()? || migrated || moved {
             self.save()?;
         }
         self.open_teams();
@@ -1585,6 +1586,38 @@ impl Store {
     }
 }
 
+/// The local copies of teams in Git or a drive, and of the synced vault, live in this device's
+/// data folder, and their refs keep full paths. iOS moves an app to a new folder at times (an
+/// update): a copy missing at its path but found at the same place in the folder now is taken
+/// from there. Returns whether any path changed.
+fn rebase_copies(dir: &Path, v: &mut VaultData) -> bool {
+    let mut moved = false;
+    let refs = v.teams.iter_mut().chain(v.sync.iter_mut()).filter(|r| r.remote.is_some() || r.drive.is_some());
+    for r in refs {
+        if let Some(found) = rebased(dir, &r.path) {
+            crate::logfile::write("info", &format!("{} found again at {}", r.path, found));
+            r.path = found;
+            moved = true;
+        }
+    }
+    moved
+}
+
+/// `path` if it is gone and the data folder holds the same last parts (`teams/<id>/files`,
+/// `sync/files`) now.
+fn rebased(dir: &Path, path: &str) -> Option<String> {
+    let p = Path::new(path);
+    if p.exists() {
+        return None;
+    }
+    let parts: Vec<_> = p.components().collect();
+    (2..=3.min(parts.len())).find_map(|k| {
+        let tail: PathBuf = parts[parts.len() - k..].iter().collect();
+        let here = dir.join(tail);
+        here.exists().then(|| here.display().to_string())
+    })
+}
+
 /// The keys this device reaches its repositories with: its sync's and its teams' in Git.
 fn repo_keys(v: &VaultData) -> Vec<String> {
     let remotes = v.sync.iter().chain(&v.teams).filter_map(|t| t.remote.as_ref());
@@ -1622,6 +1655,21 @@ mod tests {
         let d = std::env::temp_dir().join(format!("detour-test-{}", crate::new_id()));
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn copies_found_again_after_the_data_folder_moved() {
+        let dir = temp_dir();
+        std::fs::create_dir_all(dir.join("teams/t1/files")).unwrap();
+        std::fs::create_dir_all(dir.join("sync/files")).unwrap();
+        let old = "/var/mobile/Containers/Data/Application/OLD/Library/Application Support/Detour";
+        let found = |p: String| rebased(&dir, &p).map(PathBuf::from);
+        assert_eq!(found(format!("{old}/teams/t1/files")), Some(dir.join("teams").join("t1").join("files")));
+        assert_eq!(found(format!("{old}/sync/files")), Some(dir.join("sync").join("files")));
+        // Still where it was, or nowhere here: left alone.
+        let kept = dir.join("teams/t1/files").display().to_string();
+        assert_eq!(rebased(&dir, &kept), None);
+        assert_eq!(rebased(&dir, &format!("{old}/teams/t2/files")), None);
     }
 
     fn host(id: &str, auth: Auth) -> HostView {

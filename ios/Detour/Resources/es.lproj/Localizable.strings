@@ -345,3 +345,6 @@
 "Not set" = "Sin definir";
 "Saved" = "Guardado";
 "Through %@" = "Vía %@";
+
+/* Android */
+"Folder not found" = "Carpeta no encontrada";

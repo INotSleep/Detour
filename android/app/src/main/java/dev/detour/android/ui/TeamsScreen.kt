@@ -83,6 +83,13 @@ data class TeamEntry(val id: String, val path: String, val view: TeamView?, val 
     }
 }
 
+/** Why a team could not be opened, as the core says it (JSON of its error). */
+private fun teamError(error: String): String {
+    val e = runCatching { dev.detour.android.core.Json.parse(error).obj() }.getOrNull() ?: return error
+    if (e.str("kind") == "unavailable") return t("Folder not found")
+    return e.str("message") ?: e.str("kind") ?: error
+}
+
 /** This person's identity: what an admin adds to a team. */
 data class MyId(val detourId: String, val fingerprint: String)
 
@@ -141,7 +148,7 @@ fun TeamsScreen() {
                                 Cell(last = last) {
                                     Column(Modifier.weight(1f)) {
                                         Text(entry.path, color = colors.label, fontSize = 17.sp, maxLines = 1, overflow = TextOverflow.MiddleEllipsis)
-                                        entry.error?.let { Text(it, color = colors.red, fontSize = 13.sp) }
+                                        entry.error?.let { Text(teamError(it), color = colors.red, fontSize = 13.sp) }
                                     }
                                 }
                             }

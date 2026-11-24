@@ -345,3 +345,6 @@
 "Not set" = "Não definido";
 "Saved" = "Salvo";
 "Through %@" = "Via %@";
+
+/* Android */
+"Folder not found" = "Pasta não encontrada";
