@@ -400,7 +400,15 @@ private fun OverlayCard(session: TerminalSession) {
             when (state) {
                 TerminalSession.State.Connecting -> {
                     CircularProgressIndicator(color = colors.accent, modifier = Modifier.size(28.dp))
-                    Text(t("Connecting to %@@%@", session.host.login, session.host.address), color = colors.label, fontSize = 15.sp, textAlign = TextAlign.Center)
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(t("Connecting"), color = colors.label, fontSize = 15.sp)
+                        // One line, however long: the middle gives way.
+                        Text(
+                            "${session.host.login}@${session.host.address}", color = colors.secondary, fontSize = 13.sp,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace, maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.MiddleEllipsis,
+                        )
+                    }
                 }
                 is TerminalSession.State.Closed -> {
                     Text(if (state.dropped) t("Connection lost") else t("Session ended"), color = colors.label, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)

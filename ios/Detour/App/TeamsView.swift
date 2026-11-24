@@ -72,6 +72,9 @@ struct TeamsView: View {
         }
         .task { await load() }
         .onChange(of: app.teamsVersion) { Task { await load() } }
+        // A team joined by itself (from another device's link, a drive signed in to) shows too.
+        .onChange(of: app.vaults.map(\.id)) { Task { await load() } }
+        .onChange(of: app.tab) { if app.tab == .teams { Task { await load() } } }
         .sheet(isPresented: $joining, onDismiss: { Task { await load() } }) { JoinTeamView() }
         .sheet(item: $folderTeam, onDismiss: { Task { await load() } }) { t in TeamFromDriveView(team: t) }
     }

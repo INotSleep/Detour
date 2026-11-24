@@ -17,6 +17,8 @@ struct HostsView: View {
     @State private var folderTeam: PendingTeam?
     /// A group being named: a new one (`from` nil) or one renamed.
     @State private var naming: Naming?
+    /// A group whose settings are open.
+    @State private var settingsOf: ListedGroup?
     @State private var newName = ""
     /// Why the last change failed, shown for a moment.
     @State private var failure: String?
@@ -135,6 +137,9 @@ struct HostsView: View {
             .sheet(item: $editing) { t in HostEditor(hostId: t.id.isEmpty ? nil : t.id, vault: vault?.id ?? VaultData.personal, saved: { await app.reload() }) }
             .sheet(item: $ownLogin) { h in OwnLoginEditor(host: h, saved: { await app.reload() }) }
             .sheet(item: $folderTeam) { t in TeamFromDriveView(team: t) }
+            .sheet(item: $settingsOf) { g in
+                if let v = vault { GroupSettingsView(vault: v, group: g) }
+            }
             .task { await shot() }
             .onAppear { joinIfLinked() }
             .onChange(of: app.pendingJoin) { joinIfLinked() }
@@ -192,18 +197,36 @@ struct HostsView: View {
         }
     }
 
-    /// A group's header: a hold opens its menu, when it can be renamed.
+    /// A group's header: its menu behind "…" (and a hold), for a named group.
     @ViewBuilder private func header(_ g: ListedGroup, named: Bool) -> some View {
         let title = g.name.isEmpty ? (named ? String(localized: "No group") : nil) : g.name
         if let title {
-            if canArrange && !g.name.isEmpty {
-                Text(title).contextMenu {
-                    Button { newName = g.name; naming = Naming(from: g) } label: { Label("Rename", systemImage: "pencil") }
-                    Button(role: .destructive) { Task { await deleteGroup(g) } } label: { Label("Delete", systemImage: "trash") }
-                }
-            } else {
+            if g.name.isEmpty {
                 Text(title)
+            } else {
+                HStack {
+                    Text(title)
+                    Spacer()
+                    Menu { groupMenu(g) } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.body)
+                            .frame(width: 32, height: 22)
+                            .contentShape(Rectangle())
+                    }
+                    .accessibilityLabel("Settings")
+                }
+                .contextMenu { groupMenu(g) }
             }
+        }
+    }
+
+    /// A group's settings (this person's login and proxy for its hosts), and for those who may
+    /// arrange it, renaming and deleting it.
+    @ViewBuilder private func groupMenu(_ g: ListedGroup) -> some View {
+        Button { settingsOf = g } label: { Label("Settings", systemImage: "slider.horizontal.3") }
+        if canArrange {
+            Button { newName = g.name; naming = Naming(from: g) } label: { Label("Rename", systemImage: "pencil") }
+            Button(role: .destructive) { Task { await deleteGroup(g) } } label: { Label("Delete", systemImage: "trash") }
         }
     }
 

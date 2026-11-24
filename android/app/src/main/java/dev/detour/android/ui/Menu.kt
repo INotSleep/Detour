@@ -24,6 +24,7 @@ import androidx.compose.material.icons.outlined.FileDownload
 import androidx.compose.material.icons.outlined.FileUpload
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.ManageAccounts
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -136,6 +137,7 @@ fun menuIcon(action: String): (@Composable () -> Unit)? {
         "Move up" -> Icons.Outlined.ArrowUpward
         "Move down" -> Icons.Outlined.ArrowDownward
         "My login" -> Icons.Outlined.ManageAccounts
+        "Settings" -> Icons.Outlined.Tune
         else -> return null
     }
     val red = action == "Delete" || action == "Remove" || action == "Close"

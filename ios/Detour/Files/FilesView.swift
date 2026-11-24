@@ -194,7 +194,9 @@ private struct FolderView: View {
 
     private func load() async {
         do {
-            entries = try await files.list(path)
+            let list = try await files.list(path)
+            // Read again after a change: what went goes and what came comes, the rest move.
+            if entries == nil { entries = list } else { withAnimation { entries = list } }
             error = nil
         } catch let f as CoreFailure {
             error = f["message"] ?? f.kind

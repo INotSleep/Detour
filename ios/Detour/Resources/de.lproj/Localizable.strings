@@ -335,3 +335,13 @@
 
 /* Android */
 "Move to group" = "In Gruppe verschieben";
+
+/* Android */
+"Connecting" = "Verbindung wird hergestellt";
+
+/* Android */
+"Proxy" = "Proxy";
+"Proxy for the whole team" = "Proxy für das ganze Team";
+"Not set" = "Nicht gesetzt";
+"Saved" = "Gespeichert";
+"Through %@" = "Über %@";

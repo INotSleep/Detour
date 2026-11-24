@@ -307,6 +307,8 @@ private fun FolderView(
                 if (entries != null && entries.isNotEmpty()) {
                     item { Spacer(Modifier.height(16.dp)) }
                     itemsIndexed(entries, key = { _, f -> f.name }) { i, f ->
+                        // Deleted, renamed or new: the others move to their places, it fades.
+                        Box(Modifier.animateItem()) {
                         FileRow(
                             f, first = i == 0, last = i == entries.lastIndex, busy = opening == f.name,
                             open = { open(f) },
@@ -314,6 +316,7 @@ private fun FolderView(
                             copyPath = { Clipboard.copy(FilesSession.join(path, f.name)) },
                             delete = { deleting = f },
                         )
+                        }
                     }
                     item { Spacer(Modifier.height(100.dp)) }
                 } else if (error != null) {

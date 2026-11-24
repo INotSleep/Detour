@@ -22,6 +22,11 @@ struct HostEditor: View {
     @State private var hasPassword = false
     @State private var keys: [SshKey] = []
     @State private var groups: [String] = []
+    /// The way to the host: "" direct, "p:<id>" a saved proxy, "j:<host id>" through a host,
+    /// "legacy" as an older version wrote it.
+    @State private var route = ""
+    @State private var routeBefore = ""
+    @State private var routes: [Choice] = []
     @State private var loaded = false
     @State private var busy = false
     @State private var error: String?
@@ -78,6 +83,11 @@ struct HostEditor: View {
                         }
                     }
                 }
+                Section {
+                    Picker("Proxy", selection: $route) {
+                        ForEach(routes) { r in Text(verbatim: r.name).tag(r.id) }
+                    }
+                }
                 if let error {
                     Text(error).foregroundStyle(.red).font(.footnote)
                 }
@@ -128,6 +138,31 @@ struct HostEditor: View {
             focus = .address
         }
         if keyId.isEmpty { keyId = keys.first?.id ?? "" }
+        // The way to it: a saved proxy of the same vault, or another of its hosts.
+        let this = hostId.flatMap { id in hosts.first { $0["id"] as? String == id } }
+        let wasProxy = this?["proxy"] as? PersonalVault.JSON
+        if let id = this?["proxyId"] as? String {
+            route = "p:\(id)"
+        } else if wasProxy?["type"] as? String == "jump", let id = wasProxy?["hostId"] as? String {
+            route = "j:\(id)"
+        } else if let p = wasProxy, !p.isEmpty {
+            route = "legacy"
+        }
+        routeBefore = route
+        var list = [Choice(id: "", name: String(localized: "Not set"))]
+        if route == "legacy", let p = wasProxy {
+            list.append(Choice(id: "legacy", name: "\((p["type"] as? String ?? "").uppercased()) \(p["address"] as? String ?? ""):\(p["port"] as? Int ?? 0)"))
+        }
+        for p in v["proxies"] as? [PersonalVault.JSON] ?? [] {
+            if let id = p["id"] as? String { list.append(Choice(id: "p:\(id)", name: p["name"] as? String ?? "")) }
+        }
+        for h in hosts where h["id"] as? String != hostId {
+            if let id = h["id"] as? String {
+                let name = h["label"] as? String ?? h["address"] as? String ?? ""
+                list.append(Choice(id: "j:\(id)", name: String(localized: "Through \(name)")))
+            }
+        }
+        routes = list
         loaded = true
     }
 
@@ -142,6 +177,19 @@ struct HostEditor: View {
         h["port"] = port
         h["user"] = user.trimmingCharacters(in: .whitespaces)
         h["group"] = group.trimmingCharacters(in: .whitespaces)
+        // Unchanged, the host keeps what older versions on other devices know how to reach it by.
+        if route != routeBefore {
+            if route.hasPrefix("p:") {
+                h["proxyId"] = String(route.dropFirst(2))
+                h["proxy"] = nil
+            } else if route.hasPrefix("j:") {
+                h["proxy"] = ["type": "jump", "hostId": String(route.dropFirst(2))]
+                h["proxyId"] = nil
+            } else if route.isEmpty {
+                h["proxy"] = nil
+                h["proxyId"] = nil
+            }
+        }
         switch auth {
         case "key": h["auth"] = ["type": "key", "keyId": keyId]
         case "agent": h["auth"] = ["type": "agent"]

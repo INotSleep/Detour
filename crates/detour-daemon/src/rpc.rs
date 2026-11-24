@@ -70,7 +70,7 @@ pub(crate) const READ_ONLY: &[&str] = &[
     "host_password", "key_export", "my_id", "id_inspect", "recovery_key_new", "teams_list", "team_inspect", "team_inspect_git", "team_log", "team_history", "team_deleted", "team_rollback_plan",
     "github_user", "github_start", "github_repo_access", "drive_accounts", "drive_sign_in", "drive_sign_in_resume", "drive_browse", "drive_link", "team_inspect_drive", "session_input", "session_resize", "session_check", "session_attach", "session_detach", "sessions_list", "session_runs",
     "files_open", "files_list", "files_resolve", "files_cancel", "files_close", "tunnels_status", "tunnel_start", "tunnel_stop", "proxy_check", "proxy_parse", "proxy_export", "settings_get",
-    "settings_set", "activity", "log_write", "log_tail", "quit", "trust_request", "trust_answer", "trust_with_password", "hosts_export",
+    "settings_set", "activity", "log_write", "log_tail", "quit", "group_prefs", "trust_request", "trust_answer", "trust_with_password", "hosts_export",
     "hosts_file_counts", "hosts_file_export", "hosts_file_open",
     "agents_pending", "agents_list", "agents_answer", "agents_set", "agents_revoke",
 ];

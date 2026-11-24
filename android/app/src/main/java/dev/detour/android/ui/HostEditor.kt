@@ -49,6 +49,10 @@ fun HostEditor(hostId: String?, vault: String = VaultData.PERSONAL, close: () ->
     var password by remember { mutableStateOf("") }
     var hasPassword by remember { mutableStateOf(false) }
     var keys by remember { mutableStateOf<List<SshKey>>(emptyList()) }
+    /** The way to the host: "" direct, "p:<id>" a saved proxy, "j:<host id>" through a host, "legacy" as an older version wrote it. */
+    var route by remember { mutableStateOf("") }
+    var routeBefore by remember { mutableStateOf("") }
+    var routes by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
     var loaded by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -61,6 +65,23 @@ fun HostEditor(hostId: String?, vault: String = VaultData.PERSONAL, close: () ->
     LaunchedEffect(Unit) {
         val v = runCatching { VaultData.get(vault) }.getOrDefault(emptyMap())
         keys = v["keys"].list().map { SshKey.from(it.obj()) }
+        // The way to it: a saved proxy of the same vault, or another of its hosts.
+        val all = v["hosts"].list().map { it.obj() }
+        val wasProxy = hostId?.let { id -> all.firstOrNull { it.str("id") == id } }?.get("proxy")?.obj()
+        val wasProxyId = hostId?.let { id -> all.firstOrNull { it.str("id") == id } }?.str("proxyId")
+        route = when {
+            wasProxyId != null -> "p:$wasProxyId"
+            wasProxy?.str("type") == "jump" -> "j:${wasProxy.str("hostId")}"
+            wasProxy != null && wasProxy.isNotEmpty() -> "legacy"
+            else -> ""
+        }
+        routeBefore = route
+        routes = buildList {
+            add("" to t("Not set"))
+            if (route == "legacy" && wasProxy != null) add("legacy" to "${wasProxy.str("type")?.uppercase()} ${wasProxy.str("address") ?: ""}:${(wasProxy["port"] as? Number)?.toInt() ?: ""}")
+            v["proxies"].list().map { it.obj() }.forEach { p -> add("p:${p.str("id")}" to (p.str("name") ?: "")) }
+            all.filter { it.str("id") != hostId }.forEach { h -> add("j:${h.str("id")}" to t("Through %@", h.str("label") ?: h.str("address") ?: "")) }
+        }
         val h = hostId?.let { id -> v["hosts"].list().map { it.obj() }.firstOrNull { it.str("id") == id } }
         if (h != null) {
             original = h
@@ -91,6 +112,12 @@ fun HostEditor(hostId: String?, vault: String = VaultData.PERSONAL, close: () ->
         h["port"] = portNumber
         h["user"] = user.trim()
         h["group"] = group.trim()
+        // Unchanged, the host keeps what older versions on other devices know how to reach it by.
+        if (route != routeBefore) when {
+            route.startsWith("p:") -> { h["proxyId"] = route.removePrefix("p:"); h.remove("proxy") }
+            route.startsWith("j:") -> { h["proxy"] = mapOf("type" to "jump", "hostId" to route.removePrefix("j:")); h.remove("proxyId") }
+            route == "" -> { h.remove("proxy"); h.remove("proxyId") }
+        }
         when (auth) {
             "key" -> h["auth"] = mapOf("type" to "key", "keyId" to keyId)
             "agent" -> h["auth"] = mapOf("type" to "agent")
@@ -150,6 +177,9 @@ fun HostEditor(hostId: String?, vault: String = VaultData.PERSONAL, close: () ->
             }
             section {
                 FieldCell(group, { group = it }, t("Group"), last = true, ime = androidx.compose.ui.text.input.ImeAction.Done, onDone = { save() })
+            }
+            section(key = "route") {
+                PickCell(t("Proxy"), route, routes, last = true) { route = it }
             }
             error?.let { e -> item { Text(e, color = colors.red, fontSize = 13.sp, modifier = Modifier.padding(32.dp, 8.dp)) } }
         }

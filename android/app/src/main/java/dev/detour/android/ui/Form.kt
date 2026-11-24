@@ -5,6 +5,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.UnfoldMore
+import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -128,6 +133,40 @@ fun ValueCell(title: String, value: String, last: Boolean = false, onClick: (() 
     Cell(last = last, onClick = onClick) {
         Text(title, color = colors.label, fontSize = 17.sp, modifier = Modifier.weight(1f))
         Text(value, color = colors.secondary, fontSize = 17.sp, maxLines = 1)
+    }
+}
+
+/**
+ * A row with a title and its value that opens a menu of the choices (as iOS's pop-up button in a
+ * form): the one chosen has a check.
+ */
+@Composable
+fun <T> PickCell(title: String, value: T, choices: List<Pair<T, String>>, last: Boolean = false, onPick: (T) -> Unit) {
+    var open by remember { androidx.compose.runtime.mutableStateOf(false) }
+    Cell(last = last, onClick = { open = true }) {
+        Text(title, color = colors.label, fontSize = 17.sp)
+        Spacer(Modifier.width(12.dp).weight(1f))
+        // The menu opens at the value, on the right.
+        Box {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    choices.firstOrNull { it.first == value }?.second ?: "", color = colors.secondary, fontSize = 17.sp, maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, textAlign = TextAlign.End,
+                    modifier = Modifier.widthIn(max = 220.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Outlined.UnfoldMore, null, tint = colors.secondary, modifier = Modifier.size(18.dp))
+            }
+            DropdownMenu(open, { open = false }) {
+                choices.forEach { (v, label) ->
+                    DropdownMenuItem(
+                        { Text(label, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
+                        { open = false; onPick(v) },
+                        trailingIcon = if (v == value) ({ androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Outlined.Check, null, tint = colors.accent) }) else null,
+                    )
+                }
+            }
+        }
     }
 }
 

@@ -335,3 +335,13 @@
 
 /* Android */
 "Move to group" = "移到分组";
+
+/* Android */
+"Connecting" = "正在连接";
+
+/* Android */
+"Proxy" = "代理";
+"Proxy for the whole team" = "整个团队的代理";
+"Not set" = "未设置";
+"Saved" = "已保存";
+"Through %@" = "经由 %@";

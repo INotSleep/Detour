@@ -38,6 +38,7 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.Dns
 import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -109,6 +110,8 @@ fun HostsScreen() {
     var folderTeam by remember { mutableStateOf<PendingTeam?>(null) }
     var joining by remember { mutableStateOf(false) }
     var naming by remember { mutableStateOf<Naming?>(null) }
+    /** A group whose settings (this person's login and proxy for its hosts) are open. */
+    var groupSettings by remember { mutableStateOf<ListedGroup?>(null) }
     var addMenu by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val list = rememberLazyListState()
@@ -244,6 +247,7 @@ fun HostsScreen() {
                 groupSection(
                     g, drag,
                     title = g.name.ifEmpty { if (named) t("No group") else null },
+                    settings = if (g.name.isNotEmpty()) ({ groupSettings = g }) else null,
                     rename = if (canArrange && g.name.isNotEmpty()) ({ naming = Naming(g) }) else null,
                     delete = { deleteGroup(g) },
                 ) {
@@ -315,6 +319,7 @@ fun HostsScreen() {
     ownLogin?.let { h -> OwnLoginEditor(h) { ownLogin = null } }
     folderTeam?.let { t -> TeamFromDriveSheet(t) { folderTeam = null } }
     if (joining) SyncJoinSheet { joining = false }
+    groupSettings?.let { g -> vault?.let { v -> GroupSettingsSheet(v, g) { groupSettings = null } } }
     naming?.let { n ->
         GroupNameDialog(n.from?.name ?: "", close = { naming = null }) { name ->
             val v = vault ?: return@GroupNameDialog
@@ -365,8 +370,8 @@ private fun VaultChips(vaults: List<VaultHosts>, current: VaultHosts, drag: Host
     }
 }
 
-/** A group of hosts: its header (a hold opens its menu, when it can be renamed) and its rows. */
-private fun LazyListScope.groupSection(g: ListedGroup, drag: HostDrag, title: String?, rename: (() -> Unit)?, delete: () -> Unit, rows: @Composable () -> Unit) {
+/** A group of hosts: its header (its menu behind "…" or a hold, for a named group) and its rows. */
+private fun LazyListScope.groupSection(g: ListedGroup, drag: HostDrag, title: String?, settings: (() -> Unit)?, rename: (() -> Unit)?, delete: () -> Unit, rows: @Composable () -> Unit) {
     item(key = g.key) {
         var top by remember { mutableStateOf(0f) }
         var open by remember { mutableStateOf(false) }
@@ -374,17 +379,35 @@ private fun LazyListScope.groupSection(g: ListedGroup, drag: HostDrag, title: St
         // A group whose last host was moved out goes at once: fading, it would show that host again.
         Column(Modifier.animateItem(fadeOutSpec = null).padding(horizontal = 16.dp).padding(top = if (title != null) 18.dp else 22.dp).onGloballyPositioned { top = it.positionInRoot().y }) {
             if (title != null) {
+                val named = settings != null
                 Box {
                     val interaction = remember { MutableInteractionSource() }
-                    Text(
-                        title.uppercase(), color = colors.secondary, fontSize = 13.sp,
-                        modifier = Modifier.fillMaxWidth()
-                            .then(if (rename != null) Modifier.tapHoldDrag(interaction, onClick = {}, onHold = { open = true }, drag = null) else Modifier)
-                            .padding(start = 16.dp, bottom = 6.dp, top = 4.dp),
-                    )
-                    if (rename != null) DropdownMenu(open, { open = false }) {
-                        DropdownMenuItem({ Text(t("Rename")) }, { open = false; rename() }, leadingIcon = menuIcon("Rename"))
-                        DropdownMenuItem({ Text(t("Delete"), color = colors.red) }, { open = false; delete() }, leadingIcon = menuIcon("Delete"))
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .then(if (named) Modifier.tapHoldDrag(interaction, onClick = {}, onHold = { open = true }, drag = null) else Modifier),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            title.uppercase(), color = colors.secondary, fontSize = 13.sp, maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f).padding(start = 16.dp, bottom = 6.dp, top = 4.dp),
+                        )
+                        // The group's menu: its settings, and renaming and deleting it. It opens at this button.
+                        if (named) Box {
+                            Box(
+                                Modifier.size(36.dp, 28.dp).clip(RoundedCornerShape(8.dp)).clickable { open = true },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(androidx.compose.material.icons.Icons.Outlined.MoreHoriz, t("Settings"), tint = colors.secondary, modifier = Modifier.size(20.dp))
+                            }
+                            DropdownMenu(open, { open = false }) {
+                                DropdownMenuItem({ Text(t("Settings")) }, { open = false; settings?.invoke() }, leadingIcon = menuIcon("Settings"))
+                                if (rename != null) {
+                                    DropdownMenuItem({ Text(t("Rename")) }, { open = false; rename() }, leadingIcon = menuIcon("Rename"))
+                                    DropdownMenuItem({ Text(t("Delete"), color = colors.red) }, { open = false; delete() }, leadingIcon = menuIcon("Delete"))
+                                }
+                            }
+                        }
                     }
                 }
             }

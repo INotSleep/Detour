@@ -434,7 +434,18 @@ private struct SessionScreen<Sessions: View>: View {
         case .connected:
             EmptyView()
         case .connecting:
-            card { ProgressView(); Text("Connecting to \(session.host.login)@\(session.host.address)").font(.subheadline) }
+            card {
+                ProgressView()
+                VStack(spacing: 4) {
+                    Text("Connecting").font(.subheadline)
+                    // One line, however long: the middle gives way.
+                    Text(verbatim: "\(session.host.login)@\(session.host.address)")
+                        .font(.footnote.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
         case .closed(let dropped):
             card {
                 Text(dropped ? "Connection lost" : "Session ended").font(.headline)

@@ -158,7 +158,21 @@ final class AppModel: ObservableObject {
         try await save()
     }
 
+    private var reloading = false
+    private var reloadAgain = false
+
+    /// Reads everything again. One at a time: asked for meanwhile, it runs once more after.
     func reload() async {
+        if reloading { reloadAgain = true; return }
+        reloading = true
+        defer { reloading = false }
+        repeat {
+            reloadAgain = false
+            await loadAll()
+        } while reloadAgain
+    }
+
+    private func loadAll() async {
         let began = shownAt
         var all: [VaultHosts] = []
         if let personal = try? await Core.shared.call("vault_get", as: VaultView.self) {

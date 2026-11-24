@@ -196,7 +196,24 @@ object AppModel {
         try { save() } finally { saving-- }
     }
 
+    private var reloading = false
+    private var reloadAgain = false
+
+    /** Reads everything again. One at a time: asked for meanwhile, it runs once more after. */
     suspend fun reload() {
+        if (reloading) { reloadAgain = true; return }
+        reloading = true
+        try {
+            do {
+                reloadAgain = false
+                load()
+            } while (reloadAgain)
+        } finally {
+            reloading = false
+        }
+    }
+
+    private suspend fun load() {
         val began = shownAt
         val all = ArrayList<VaultHosts>()
         runCatching { Core.call("vault_get").obj() }.getOrNull()?.let { v ->
