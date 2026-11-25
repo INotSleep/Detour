@@ -7,6 +7,8 @@ import UniformTypeIdentifiers
 struct HostsView: View {
     @EnvironmentObject var app: AppModel
     @State private var query = ""
+    /// Draws the list again from the data, after a row that isn't a host was moved.
+    @State private var listVersion = 0
     @State private var joining = false
     /// The host editor: a host's id, or "" for a new one.
     @State private var editing: EditTarget?
@@ -129,6 +131,7 @@ struct HostsView: View {
                     Section {
                         ForEach(rows) { row in rowView(row, groups: groups) }
                             .onMove { from, to in moveRows(rows, from: from, to: to, groups: groups) }
+                            .id(listVersion)
                     }
                 }
             }
@@ -248,12 +251,12 @@ struct HostsView: View {
                 .listRowSeparator(.hidden, edges: Self.edges(first: first, last: last))
                 .moveDisabled(!canDrag(h))
         case .empty:
-            let movable = ["B", "C", "D", "E"].contains(Self.dragMode)
+            let movable = ["B", "C", "D", "E", "G", "J", "K", "L"].contains(Self.dragMode)
             Text("Drag hosts here")
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
-                .modifier(HoldBlocker(on: Self.dragMode == "C"))
+                .modifier(HoldBlocker(mode: Self.dragMode))
                 .disabled(Self.dragMode == "D")
                 .allowsHitTesting(Self.dragMode != "E")
                 .listRowBackground(Self.card(first: true, last: true))
@@ -273,9 +276,16 @@ struct HostsView: View {
 
     /// Takes a hold on a row's content for itself, so the list doesn't lift the row.
     private struct HoldBlocker: ViewModifier {
-        let on: Bool
-        func body(content: Content) -> some View {
-            if on { content.onLongPressGesture(minimumDuration: 0.2) {} } else { content }
+        let mode: String
+        @ViewBuilder func body(content: Content) -> some View {
+            switch mode {
+            case "C": content.onLongPressGesture(minimumDuration: 0.2) {}
+            case "G": content.onDrag { NSItemProvider() }
+            case "J": content.highPriorityGesture(LongPressGesture(minimumDuration: 0.15).onEnded { _ in })
+            case "K": content.gesture(DragGesture(minimumDistance: 0))
+            case "L": content.highPriorityGesture(DragGesture(minimumDistance: 0))
+            default: content
+            }
         }
     }
 
@@ -383,7 +393,11 @@ struct HostsView: View {
             }
         }.joined(separator: " "))
         #endif
-        guard let i = from.first, case .host(let h, let fromGroup, _, _) = rows[i] else { return }
+        guard let i = from.first, case .host(let h, let fromGroup, _, _) = rows[i] else {
+            // The list moved it on screen already: back where it is.
+            listVersion += 1
+            return
+        }
         var rest = rows
         rest.remove(at: i)
         let at = to > i ? to - 1 : to

@@ -130,8 +130,10 @@ final class DragTests: XCTestCase {
         record("\(id): web-1 -> \(groupAt(host("web-1").frame.minY)) (wanted Staging); \(how)")
     }
 
-    func testA() { control("A"); drags("A") }
-    func testD() { drags("D"); lift("D") }
-    func testE() { drags("E"); lift("E") }
-    func testF() { drags("F") }
+    func testG() { lift("G"); drags("G") }
+    func testJ() { lift("J"); drags("J") }
+    func testK() { lift("K"); drags("K") }
+    func testL() { lift("L"); drags("L") }
+    /// Lifted anyway: comes back.
+    func testD() { lift("D") }
 }
