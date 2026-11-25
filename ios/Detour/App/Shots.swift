@@ -27,7 +27,10 @@ enum Shots {
             await seed()
         } else if st?.unlocked != true {
             _ = try? await Core.shared.call("vault_unlock", ["masterPassword": password])
+            // Every drag case starts from the same groups.
+            if screen == "drag" { await seed() }
         }
+        log("== case \(dragCase) mode \(dragMode)")
     }
 
     private static func seed() async {
@@ -66,6 +69,18 @@ enum Shots {
             }
         }
     }
+
+    /// The drag test's variant of the hosts list (`-dragmode`), and the case it runs (`-dragcase`).
+    static let dragMode: String = {
+        let a = ProcessInfo.processInfo.arguments
+        guard let i = a.firstIndex(of: "-dragmode"), i + 1 < a.count else { return "A" }
+        return a[i + 1]
+    }()
+    static let dragCase: String = {
+        let a = ProcessInfo.processInfo.arguments
+        guard let i = a.firstIndex(of: "-dragcase"), i + 1 < a.count else { return "" }
+        return a[i + 1]
+    }()
 
     /// A line in Documents/drag.txt (the drag test reads it back).
     static func log(_ line: String) {
