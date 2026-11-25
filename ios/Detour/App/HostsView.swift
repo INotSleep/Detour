@@ -350,6 +350,16 @@ struct HostsView: View {
     /// lands (a header, a host, an empty group's hint), before the host under it in that group.
     /// Only hosts move.
     private func moveRows(_ rows: [Row], from: IndexSet, to: Int, groups: [ListedGroup]) {
+        #if DEBUG
+        Shots.log("onMove from \(Array(from)) to \(to) rows " + rows.enumerated().map { i, r in
+            switch r {
+            case .header(let g, _): "\(i):H[\(g.name)]"
+            case .host(let h, _, _, _): "\(i):\(h.label)"
+            case .empty(let g): "\(i):E[\(g.name)]"
+            case .slot(let g, let end): "\(i):S\(end ? "end" : "top")[\(g.name)]"
+            }
+        }.joined(separator: " "))
+        #endif
         guard let i = from.first, case .host(let h, let fromGroup, _, _) = rows[i] else { return }
         var rest = rows
         rest.remove(at: i)
@@ -364,6 +374,9 @@ struct HostsView: View {
             // Just under the header, over the group's top slot: first in it.
             before = g.hosts.first { $0.id != h.id }?.id
         }
+        #if DEBUG
+        Shots.log("  -> group \(g.key) before \(before ?? "-")")
+        #endif
         // Back where it was: no move.
         if g.key == fromGroup.key {
             let ids = fromGroup.hosts.map(\.id)

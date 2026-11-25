@@ -58,7 +58,21 @@ enum Shots {
         try? await PersonalVault.edit { v in
             v["hosts"] = hosts
             v["snippets"] = snippets
+            if screen == "drag" {
+                // The drag test (UITests/DragTests.swift): empty groups between the others.
+                v["groups"] = ["Empty A", "Production", "Empty B", "Staging", "Empty C", "Lab"].enumerated().map { i, name in
+                    ["id": PersonalVault.newId(), "name": name, "order": Double(i + 1)] as PersonalVault.JSON
+                }
+            }
         }
+    }
+
+    /// A line in Documents/drag.txt (the drag test reads it back).
+    static func log(_ line: String) {
+        guard screen == "drag", let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        let url = dir.appendingPathComponent("drag.txt")
+        let old = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        try? (old + line + "\n").write(to: url, atomically: true, encoding: .utf8)
     }
 
     /// What the terminal shows: a few everyday commands on the Mac (scripts/screenshots.sh puts
