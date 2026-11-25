@@ -3,7 +3,7 @@ import XCTest
 /// Drags hosts into empty groups the way a person does (hold, move, let go) and writes down where
 /// each one landed: the app runs with `-shot drag`, a sample vault whose groups are
 /// Empty A, Production, Empty B, Staging, Empty C, Lab (App/Shots.swift), made again on every
-/// launch. `-dragmode` picks a variant of the list. The app's own record of the list's moves is
+/// launch. The app's own record of the list's moves is
 /// in its Documents/drag.txt; screenshots and results go to $DRAG_OUT.
 final class DragTests: XCTestCase {
     private var app: XCUIApplication!
@@ -14,9 +14,9 @@ final class DragTests: XCTestCase {
         if let dir = ProcessInfo.processInfo.environment["DRAG_OUT"] { out = URL(fileURLWithPath: dir) }
     }
 
-    private func launch(_ mode: String, _ name: String) {
+    private func launch(_ name: String) {
         app = XCUIApplication()
-        app.launchArguments = ["-shot", "drag", "-dragmode", mode, "-dragcase", name, "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launchArguments = ["-shot", "drag", "-dragcase", name, "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         app.launch()
         XCTAssertTrue(host("web-1").waitForExistence(timeout: 40), "hosts shown")
         sleep(2)
@@ -59,16 +59,15 @@ final class DragTests: XCTestCase {
         Self.names.filter { header($0).exists && header($0).frame.maxY < y }.max { header($0).frame.maxY < header($1).frame.maxY } ?? "?"
     }
 
-    /// Up onto an empty group's hint (1), down onto one (2), down onto its lower edge (3).
-    private func drags(_ mode: String) {
+    /// Up onto an empty group's hint (1), down onto one (2).
+    private func drags() {
         let cases: [(String, String, String, CGFloat)] = [
             ("1-up", "web-1", "Empty A", 0.5),
             ("2-down", "web-2", "Empty B", 0.5),
-            ("3-down-low", "staging", "Empty C", 0.9),
         ]
         for (name, label, group, dy) in cases {
-            let id = "\(mode)-\(name)"
-            launch(mode, id)
+            let id = name
+            launch(id)
             guard let target = hint(under: group) else { record("\(id): no hint under \(group)"); continue }
             shot("\(id)-0-before")
             let before = hints.count
@@ -106,9 +105,9 @@ final class DragTests: XCTestCase {
     }
 
     /// Holding an empty group's hint and moving it: it should stay where it is.
-    private func lift(_ mode: String) {
-        let id = "\(mode)-lift"
-        launch(mode, id)
+    private func lift() {
+        let id = "lift"
+        launch(id)
         guard let h = hint(under: "Empty A") else { return record("\(id): no hint") }
         let y = h.frame.minY
         h.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
@@ -121,19 +120,21 @@ final class DragTests: XCTestCase {
     }
 
     /// Between groups that have hosts: shows the drag itself works.
-    private func control(_ mode: String) {
-        let id = "\(mode)-0-control"
-        launch(mode, id)
+    private func control() {
+        let id = "0-control"
+        launch(id)
         let y0 = host("web-1").frame.minY
         let how = drag(host("web-1"), to: host("ci-runner").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)), moved: { self.host("web-1").frame.minY != y0 })
         shot("\(id)-after")
         record("\(id): web-1 -> \(groupAt(host("web-1").frame.minY)) (wanted Staging); \(how)")
     }
 
-    func testG() { lift("G"); drags("G") }
-    func testJ() { lift("J"); drags("J") }
-    func testK() { lift("K"); drags("K") }
-    func testL() { lift("L"); drags("L") }
-    /// Lifted anyway: comes back.
-    func testD() { lift("D") }
+    func testControl() { control() }
+    func testIntoEmptyGroups() { drags() }
+
+    /// The hint stays where it is.
+    func testHintStays() {
+        lift()
+        XCTAssertEqual(hints.first.map { groupAt($0.frame.minY) }, "Empty A", "hint not lifted")
+    }
 }

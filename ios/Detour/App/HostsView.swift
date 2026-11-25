@@ -251,41 +251,15 @@ struct HostsView: View {
                 .listRowSeparator(.hidden, edges: Self.edges(first: first, last: last))
                 .moveDisabled(!canDrag(h))
         case .empty:
-            let movable = ["B", "C", "D", "E", "G", "J", "K", "L"].contains(Self.dragMode)
+            // Movable, or the list cancels a host let go over it (a row that can't move takes
+            // no drop); its hold is taken first, so the hint itself is never lifted.
             Text("Drag hosts here")
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
-                .modifier(HoldBlocker(mode: Self.dragMode))
-                .disabled(Self.dragMode == "D")
-                .allowsHitTesting(Self.dragMode != "E")
+                .highPriorityGesture(LongPressGesture(minimumDuration: 0.15).onEnded { _ in })
                 .listRowBackground(Self.card(first: true, last: true))
                 .listRowSeparator(.hidden)
-                .moveDisabled(!movable)
-        }
-    }
-
-    /// The drag test's variant (debug builds); "" otherwise.
-    private static var dragMode: String {
-        #if DEBUG
-        Shots.screen == "drag" ? Shots.dragMode : ""
-        #else
-        ""
-        #endif
-    }
-
-    /// Takes a hold on a row's content for itself, so the list doesn't lift the row.
-    private struct HoldBlocker: ViewModifier {
-        let mode: String
-        @ViewBuilder func body(content: Content) -> some View {
-            switch mode {
-            case "C": content.onLongPressGesture(minimumDuration: 0.2) {}
-            case "G": content.onDrag { NSItemProvider() }
-            case "J": content.highPriorityGesture(LongPressGesture(minimumDuration: 0.15).onEnded { _ in })
-            case "K": content.gesture(DragGesture(minimumDistance: 0))
-            case "L": content.highPriorityGesture(DragGesture(minimumDistance: 0))
-            default: content
-            }
         }
     }
 
@@ -372,7 +346,7 @@ struct HostsView: View {
                     Button(role: .destructive) { Task { await delete(host) } } label: { Label("Delete", systemImage: "trash") }
                 }
             }
-        if canDrag(host), Self.dragMode != "F" {
+        if canDrag(host) {
             row.onDrag { NSItemProvider(object: (Self.dragPrefix + host.id) as NSString) }
         } else {
             row

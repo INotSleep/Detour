@@ -30,7 +30,7 @@ enum Shots {
             // Every drag case starts from the same groups.
             if screen == "drag" { await seed() }
         }
-        log("== case \(dragCase) mode \(dragMode)")
+        log("== case \(dragCase)")
     }
 
     private static func seed() async {
@@ -70,12 +70,7 @@ enum Shots {
         }
     }
 
-    /// The drag test's variant of the hosts list (`-dragmode`), and the case it runs (`-dragcase`).
-    static let dragMode: String = {
-        let a = ProcessInfo.processInfo.arguments
-        guard let i = a.firstIndex(of: "-dragmode"), i + 1 < a.count else { return "A" }
-        return a[i + 1]
-    }()
+    /// The drag test's case (`-dragcase`), for its record.
     static let dragCase: String = {
         let a = ProcessInfo.processInfo.arguments
         guard let i = a.firstIndex(of: "-dragcase"), i + 1 < a.count else { return "" }
