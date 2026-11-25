@@ -72,15 +72,37 @@ final class DragTests: XCTestCase {
             guard let target = hint(under: group) else { record("\(id): no hint under \(group)"); continue }
             shot("\(id)-0-before")
             let before = hints.count
-            host(label).coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.5))
-                .press(forDuration: 1.2, thenDragTo: target.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: dy)),
-                       withVelocity: .slow, thenHoldForDuration: 1.0)
-            sleep(3)
+            let y0 = host(label).frame.minY
+            let how = drag(host(label), to: target.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: dy)), moved: { self.host(label).frame.minY != y0 })
             shot("\(id)-1-after")
             let landed = groupAt(host(label).frame.minY)
-            record("\(id): \(label) -> \(landed) (wanted \(group)); hints \(before) -> \(hints.count)")
+            record("\(id): \(label) -> \(landed) (wanted \(group)); hints \(before) -> \(hints.count); \(how)")
             XCTAssertEqual(landed, group, id)
         }
+    }
+
+    private var menuShown: Bool { app.buttons["Copy ssh command"].exists }
+
+    /// Holds an element and moves it to `target`. A hold that opens the row's menu instead of
+    /// lifting it is tried again, longer or shorter; says which one did something.
+    @discardableResult
+    private func drag(_ e: XCUIElement, to target: XCUICoordinate, moved: () -> Bool) -> String {
+        var tried: [String] = []
+        for (hold, speed) in [(0.6, XCUIGestureVelocity.default), (0.9, .slow), (0.4, .default), (1.5, .slow)] {
+            e.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.5))
+                .press(forDuration: hold, thenDragTo: target, withVelocity: speed, thenHoldForDuration: 1.0)
+            sleep(3)
+            if menuShown {
+                tried.append("\(hold)s: menu")
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.04)).tap()
+                sleep(1)
+                continue
+            }
+            let did = moved()
+            tried.append("\(hold)s: \(did ? "moved" : "no move")")
+            if did { break }
+        }
+        return tried.joined(separator: ", ")
     }
 
     /// Holding an empty group's hint and moving it: it should stay where it is.
@@ -90,7 +112,7 @@ final class DragTests: XCTestCase {
         guard let h = hint(under: "Empty A") else { return record("\(id): no hint") }
         let y = h.frame.minY
         h.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-            .press(forDuration: 1.2, thenDragTo: host("db-primary").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)),
+            .press(forDuration: 0.8, thenDragTo: host("db-primary").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)),
                    withVelocity: .slow, thenHoldForDuration: 1.0)
         sleep(3)
         shot("\(id)-after")
@@ -98,8 +120,18 @@ final class DragTests: XCTestCase {
         record("\(id): hint under Empty A at \(Int(y)) -> \(now.map { "\(Int($0.frame.minY))" } ?? "gone"), group of first hint now \(hints.first.map { groupAt($0.frame.minY) } ?? "-")")
     }
 
-    func testA() { drags("A") }
-    func testB() { drags("B"); lift("B") }
-    func testC() { drags("C"); lift("C") }
+    /// Between groups that have hosts: shows the drag itself works.
+    private func control(_ mode: String) {
+        let id = "\(mode)-0-control"
+        launch(mode, id)
+        let y0 = host("web-1").frame.minY
+        let how = drag(host("web-1"), to: host("ci-runner").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)), moved: { self.host("web-1").frame.minY != y0 })
+        shot("\(id)-after")
+        record("\(id): web-1 -> \(groupAt(host("web-1").frame.minY)) (wanted Staging); \(how)")
+    }
+
+    func testA() { control("A"); drags("A") }
+    func testD() { drags("D"); lift("D") }
+    func testE() { drags("E"); lift("E") }
     func testF() { drags("F") }
 }
