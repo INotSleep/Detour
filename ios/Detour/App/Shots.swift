@@ -27,7 +27,10 @@ enum Shots {
             await seed()
         } else if st?.unlocked != true {
             _ = try? await Core.shared.call("vault_unlock", ["masterPassword": password])
+            // Every drag case starts from the same groups.
+            if screen == "drag" { await seed() }
         }
+        log("== case \(dragCase)")
     }
 
     private static func seed() async {
@@ -58,7 +61,28 @@ enum Shots {
         try? await PersonalVault.edit { v in
             v["hosts"] = hosts
             v["snippets"] = snippets
+            if screen == "drag" {
+                // The drag test (UITests/DragTests.swift): empty groups between the others.
+                v["groups"] = ["Empty A", "Production", "Empty B", "Staging", "Empty C", "Lab"].enumerated().map { i, name in
+                    ["id": PersonalVault.newId(), "name": name, "order": Double(i + 1)] as PersonalVault.JSON
+                }
+            }
         }
+    }
+
+    /// The drag test's case (`-dragcase`), for its record.
+    static let dragCase: String = {
+        let a = ProcessInfo.processInfo.arguments
+        guard let i = a.firstIndex(of: "-dragcase"), i + 1 < a.count else { return "" }
+        return a[i + 1]
+    }()
+
+    /// A line in Documents/drag.txt (the drag test reads it back).
+    static func log(_ line: String) {
+        guard screen == "drag", let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        let url = dir.appendingPathComponent("drag.txt")
+        let old = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        try? (old + line + "\n").write(to: url, atomically: true, encoding: .utf8)
     }
 
     /// What the terminal shows: a few everyday commands on the Mac (scripts/screenshots.sh puts

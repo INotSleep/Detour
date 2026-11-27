@@ -7,6 +7,8 @@ import UniformTypeIdentifiers
 struct HostsView: View {
     @EnvironmentObject var app: AppModel
     @State private var query = ""
+    /// Draws the list again from the data, after a row that isn't a host was moved.
+    @State private var listVersion = 0
     @State private var joining = false
     /// The host editor: a host's id, or "" for a new one.
     @State private var editing: EditTarget?
@@ -48,18 +50,22 @@ struct HostsView: View {
         case header(ListedGroup, title: String)
         case host(Host, ListedGroup, first: Bool, last: Bool)
         case empty(ListedGroup)
+        /// A place to drop a host at a group's top or end, too thin to take hold of: the list
+        /// takes no row in the place of one that can't move (a header, the hint).
+        case slot(ListedGroup, end: Bool)
 
         var id: String {
             switch self {
             case .header(let g, _): "head-\(g.key)"
             case .host(let h, _, _, _): h.id
             case .empty(let g): "empty-\(g.key)"
+            case .slot(let g, let end): "slot-\(end ? "end" : "top")-\(g.key)"
             }
         }
 
         var group: ListedGroup {
             switch self {
-            case .header(let g, _), .host(_, let g, _, _), .empty(let g): g
+            case .header(let g, _), .host(_, let g, _, _), .empty(let g), .slot(let g, _): g
             }
         }
     }
@@ -70,10 +76,12 @@ struct HostsView: View {
             if let title = g.name.isEmpty ? (named ? String(localized: "No group") : nil) : g.name {
                 out.append(.header(g, title: title))
             }
+            out.append(.slot(g, end: false))
             if g.hosts.isEmpty { out.append(.empty(g)) }
             for (i, h) in g.hosts.enumerated() {
                 out.append(.host(h, g, first: i == 0, last: i == g.hosts.count - 1))
             }
+            out.append(.slot(g, end: true))
         }
         return out
     }
@@ -123,9 +131,12 @@ struct HostsView: View {
                     Section {
                         ForEach(rows) { row in rowView(row, groups: groups) }
                             .onMove { from, to in moveRows(rows, from: from, to: to, groups: groups) }
+                            .id(listVersion)
                     }
                 }
             }
+            // The drop slots are a point high; every other row is taller by its content.
+            .environment(\.defaultMinListRowHeight, 1)
             .animation(.default, value: app.hostsVault)
             .overlay { empty(groups) }
             .safeAreaInset(edge: .bottom) { bottomBars }
@@ -227,17 +238,26 @@ struct HostsView: View {
                 .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 6, trailing: 8))
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
+                .moveDisabled(true)
+        case .slot:
+            Color.clear
+                .frame(height: 1)
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
         case .host(let h, let g, let first, let last):
             hostRow(h, in: g, groups: groups)
                 .listRowBackground(Self.card(first: first, last: last))
                 .listRowSeparator(.hidden, edges: Self.edges(first: first, last: last))
                 .moveDisabled(!canDrag(h))
         case .empty:
-            // Headers and hints are not kept from moving: the list then takes no host in their
-            // place, and that is where a host goes last in a group or into an empty one. Moving
-            // them does nothing (only hosts move).
+            // Movable, or the list cancels a host let go over it (a row that can't move takes
+            // no drop); its hold is taken first, so the hint itself is never lifted.
             Text("Drag hosts here")
                 .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                .highPriorityGesture(LongPressGesture(minimumDuration: 0.15).onEnded { _ in })
                 .listRowBackground(Self.card(first: true, last: true))
                 .listRowSeparator(.hidden)
         }
@@ -335,9 +355,23 @@ struct HostsView: View {
 
     /// A host dragged to another place of the list: into the group of the row above where it
     /// lands (a header, a host, an empty group's hint), before the host under it in that group.
-    /// The hint itself moved goes nowhere.
+    /// Only hosts move.
     private func moveRows(_ rows: [Row], from: IndexSet, to: Int, groups: [ListedGroup]) {
-        guard let i = from.first, case .host(let h, let fromGroup, _, _) = rows[i] else { return }
+        #if DEBUG
+        Shots.log("onMove from \(Array(from)) to \(to) rows " + rows.enumerated().map { i, r in
+            switch r {
+            case .header(let g, _): "\(i):H[\(g.name)]"
+            case .host(let h, _, _, _): "\(i):\(h.label)"
+            case .empty(let g): "\(i):E[\(g.name)]"
+            case .slot(let g, let end): "\(i):S\(end ? "end" : "top")[\(g.name)]"
+            }
+        }.joined(separator: " "))
+        #endif
+        guard let i = from.first, case .host(let h, let fromGroup, _, _) = rows[i] else {
+            // The list moved it on screen already: back where it is.
+            listVersion += 1
+            return
+        }
         var rest = rows
         rest.remove(at: i)
         let at = to > i ? to - 1 : to
@@ -347,7 +381,13 @@ struct HostsView: View {
             before = g.hosts.first { $0.id != h.id }?.id
         } else if at < rest.count, case .host(let next, let ng, _, _) = rest[at], ng.key == g.key {
             before = next.id
+        } else if at < rest.count, case .slot(let sg, end: false) = rest[at], sg.key == g.key {
+            // Just under the header, over the group's top slot: first in it.
+            before = g.hosts.first { $0.id != h.id }?.id
         }
+        #if DEBUG
+        Shots.log("  -> group \(g.key) before \(before ?? "-")")
+        #endif
         // Back where it was: no move.
         if g.key == fromGroup.key {
             let ids = fromGroup.hosts.map(\.id)

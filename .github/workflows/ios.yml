@@ -22,6 +22,10 @@ on:
         description: "Language of the shots (en, ru, uk, de, es, pt-BR, zh-Hans)"
         type: string
         default: en
+      uitest:
+        description: Drag tests in the simulator
+        type: boolean
+        default: false
 
 concurrency:
   group: ios-${{ github.ref }}
@@ -70,6 +74,17 @@ jobs:
             -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
             -skipPackagePluginValidation -skipMacroValidation \
             CODE_SIGNING_ALLOWED=NO build | xcbeautify --renderer github-actions
+
+      - name: Drag tests
+        if: inputs.uitest
+        run: ios/scripts/uitest.sh
+
+      - uses: actions/upload-artifact@v7
+        if: inputs.uitest
+        with:
+          name: Detour-ios-uitest
+          path: ios/build/uitest/
+          retention-days: 7
 
       - name: App Store screenshots
         if: inputs.screenshots

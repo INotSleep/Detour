@@ -14,11 +14,26 @@ settings:
   base:
     SWIFT_VERSION: "5.0"
     MARKETING_VERSION: "0.6.0"
-    CURRENT_PROJECT_VERSION: "22"
+    CURRENT_PROJECT_VERSION: "24"
 targets:
+  # Drags in the simulator (scripts/uitest.sh); not part of the app.
+  DetourUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: Detour
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.detour.ios.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGNING_ALLOWED: NO
   Detour:
     type: application
     platform: iOS
+    scheme:
+      testTargets: [DetourUITests]
     sources:
       - path: Detour
       - path: Generated
