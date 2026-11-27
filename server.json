@@ -3,7 +3,7 @@
   "name": "io.github.INotSleep/detour",
   "title": "Detour",
   "description": "Work on your SSH servers without seeing passwords or keys: you approve each host and right.",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "websiteUrl": "https://inotsleep.com/projects/detour/wiki/command-line/agents",
   "repository": {
     "url": "https://github.com/INotSleep/Detour",
@@ -12,9 +12,9 @@
   "packages": [
     {
       "registryType": "mcpb",
-      "identifier": "https://github.com/INotSleep/Detour/releases/download/v0.5.0/detour-0.5.0.mcpb",
-      "version": "0.5.0",
-      "fileSha256": "c431d2522967621fc4109482667afdce42a34560935a7918473368190a27d029",
+      "identifier": "https://github.com/INotSleep/Detour/releases/download/v0.6.0/detour-0.6.0.mcpb",
+      "version": "0.6.0",
+      "fileSha256": "75998f65fabb84a08a518533dcd6957b5407fc344df47157a0af5bf17463096e",
       "transport": {
         "type": "stdio"
       }
