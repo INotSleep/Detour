@@ -68,7 +68,9 @@ jobs:
           swiftc -O ios/Detour/Terminal/Highlight.swift ios/Tests/HighlightCheck/main.swift -o "$RUNNER_TEMP/highlight-check"
           "$RUNNER_TEMP/highlight-check"
 
+      # A check that the app builds; an App Store run builds it anyway.
       - name: Simulator build
+        if: ${{ !inputs.appstore }}
         run: |
           xcodebuild -project ios/Detour.xcodeproj -scheme Detour -configuration Debug \
             -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
@@ -102,12 +104,13 @@ jobs:
             ios/build/screenshots/*.txt
           retention-days: 14
 
+      # For installing outside the App Store; an App Store run goes through TestFlight instead.
       - name: Ad hoc build
-        if: env.IOS_PROFILE_BASE64 != ''
+        if: env.IOS_PROFILE_BASE64 != '' && !inputs.appstore
         run: ios/scripts/sign.sh
 
       - uses: actions/upload-artifact@v7
-        if: env.IOS_PROFILE_BASE64 != ''
+        if: env.IOS_PROFILE_BASE64 != '' && !inputs.appstore
         with:
           name: Detour-ios-adhoc
           path: ios/build/export/*.ipa

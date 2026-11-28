@@ -97,7 +97,11 @@ jobs:
         with:
           targets: ${{ matrix.targets }}
 
+      # The cache release-cache.yml keeps on main (a tag's own would serve that tag only).
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - run: npm ci
 
@@ -174,6 +178,9 @@ jobs:
           targets: ${{ matrix.targets }}
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build
         shell: bash

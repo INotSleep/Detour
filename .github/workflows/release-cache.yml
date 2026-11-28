@@ -1,0 +1,86 @@
+# Keeps the release builds' Rust cache on main, where a tag can read it. A tag's own cache
+# is for that tag only, and the installer and command line jobs run on tags alone, so
+# without this every release built everything from nothing (about 30 min instead of 12).
+# Builds as those jobs do (same targets, profile and env, which the cache key hashes) and
+# saves under the same shared key; packages nothing.
+name: Release cache
+
+on:
+  push:
+    branches: [main]
+    paths: ["Cargo.lock", "**/Cargo.toml", ".github/workflows/release-cache.yml"]
+  # GitHub drops a cache not used for 7 days.
+  schedule:
+    - cron: "17 3 * * 1,4"
+  workflow_dispatch:
+
+concurrency:
+  group: release-cache
+  cancel-in-progress: true
+
+# The same as ci.yml's: part of the cache key.
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
+
+jobs:
+  warm:
+    name: Release cache (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The app and its command line, as `Installers` and `Command line` build them.
+          - name: linux-x86_64
+            os: ubuntu-22.04
+            app: true
+          - name: macos
+            os: macos-latest
+            app: true
+            args: --target universal-apple-darwin
+            targets: aarch64-apple-darwin,x86_64-apple-darwin
+          # The command line alone.
+          - name: linux-arm64
+            os: ubuntu-22.04-arm
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Linux packages
+        if: matrix.app && runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libxdo-dev
+
+      - uses: actions/setup-node@v7
+        if: matrix.app
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.targets }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release
+
+      - if: matrix.app
+        run: npm ci
+
+      # The app for each target and, through beforeBuildCommand, its command line.
+      - name: The app
+        if: matrix.app
+        run: npm run tauri -- build --no-bundle ${{ matrix.args }} --config src-tauri/tauri.bundle.conf.json
+
+      # The command line as `Command line` builds it on a Mac: each architecture by its target.
+      - name: The command line
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = macOS ]; then
+            for t in aarch64-apple-darwin x86_64-apple-darwin; do cargo build -p detour-cli --release --locked --target $t; done
+          else
+            cargo build -p detour-cli --release --locked
+          fi
